@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
-import { API_URL } from "../shared/config";
 import { C } from "../shared/theme";
+import { fetchTypeformViaProxy } from "../lib/api";
 import Spinner from "../components/Spinner";
 import TabChat from "../components/TabChat";
 import SurveyChart from "./SurveyChart";
@@ -15,15 +15,7 @@ const SurveyTab=({surveyJson,token,isAdmin,adminJwt,theme})=>{
   //   { type: "choice", counts: {label: n}, total: N }
   //   { type: "matrix", rows: {row: {counts, total}}, total: N }
   // Devolve o objeto cru pro caller decidir como agregar.
-  const fetchTypeformData = async (url) => {
-    const proxy = `${API_URL}?action=typeform_proxy&form_url=${encodeURIComponent(url)}`;
-    const r = await fetch(proxy);
-    const data = await r.json().catch(()=>({}));
-    if (!r.ok) {
-      throw new Error(data?.error || `HTTP ${r.status}`);
-    }
-    return data;
-  };
+  const fetchTypeformData = (url) => fetchTypeformViaProxy(url);
 
   useEffect(()=>{
     let cancelled=false;
