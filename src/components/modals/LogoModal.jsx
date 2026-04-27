@@ -4,7 +4,12 @@ import { saveLogo as saveLogoApi } from "../../lib/api";
 import ModalShell from "./ModalShell";
 
 /**
- * LogoModal — upload de logo PNG/JPG de uma campanha.
+ * LogoModal — upload de logo PNG, JPG ou SVG de uma campanha.
+ *
+ * SVG é preferido porque permite inversão de cor limpa via CSS filter
+ * (invert) entre temas dark/light sem perda de qualidade — útil pra
+ * logos monocromáticos. PNG/JPG continuam suportados pra logos
+ * coloridos onde inversão não faz sentido.
  *
  * Estado de file e preview ficam locais. Ao fechar, tudo é resetado.
  *
@@ -33,6 +38,14 @@ const LogoModal = ({ shortToken, onClose, onSaved, theme }) => {
   const handleFile = (e) => {
     const f = e.target.files?.[0];
     if (!f) return;
+    // Aceita PNG, JPG e SVG. Filtro extra além do `accept` do input pra
+    // pegar arquivos arrastados ou com mime type inconsistente.
+    const allowed = ["image/png", "image/jpeg", "image/jpg", "image/svg+xml"];
+    if (f.type && !allowed.includes(f.type) && !f.name.toLowerCase().endsWith(".svg")) {
+      alert("Formato não suportado. Use PNG, JPG ou SVG.");
+      e.target.value = "";
+      return;
+    }
     setFile(f);
     const reader = new FileReader();
     reader.onload = (ev) => setPreview(ev.target.result);
@@ -61,8 +74,12 @@ const LogoModal = ({ shortToken, onClose, onSaved, theme }) => {
       <h2 style={{ fontSize: 20, fontWeight: 800, marginBottom: 8, color: text }}>
         🖼️ Adicionar Logo
       </h2>
-      <p style={{ color: muted, fontSize: 14, marginBottom: 24 }}>
-        Selecione o logo PNG para <strong>{shortToken}</strong>.
+      <p style={{ color: muted, fontSize: 14, marginBottom: 6 }}>
+        Selecione o logo para <strong>{shortToken}</strong>.
+      </p>
+      <p style={{ color: muted, fontSize: 12, marginBottom: 24, opacity: 0.8 }}>
+        Aceita PNG, JPG ou SVG. SVG é recomendado para logos monocromáticos
+        (melhor adaptação entre tema escuro e claro).
       </p>
       <label
         style={{
@@ -71,7 +88,7 @@ const LogoModal = ({ shortToken, onClose, onSaved, theme }) => {
           borderRadius: 8, padding: "12px 14px", cursor: "pointer", marginBottom: 20,
         }}
       >
-        <input type="file" accept="image/png,image/jpeg" style={{ display: "none" }} onChange={handleFile} />
+        <input type="file" accept="image/png,image/jpeg,image/svg+xml,.svg" style={{ display: "none" }} onChange={handleFile} />
         <span style={{ fontSize: 20 }}>📁</span>
         <span style={{ fontSize: 13, color: muted }}>
           {file ? file.name : "Clique para selecionar imagem"}
