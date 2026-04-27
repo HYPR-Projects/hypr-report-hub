@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { C } from "../../shared/theme";
 import { saveLogo as saveLogoApi } from "../../lib/api";
+import { compressImageFile } from "../../shared/imageCompress";
 import ModalShell from "./ModalShell";
 
 /**
@@ -35,7 +36,7 @@ const LogoModal = ({ shortToken, onClose, onSaved, theme }) => {
     if (onClose) onClose();
   };
 
-  const handleFile = (e) => {
+  const handleFile = async (e) => {
     const f = e.target.files?.[0];
     if (!f) return;
     // Aceita PNG, JPG e SVG. Filtro extra além do `accept` do input pra
@@ -46,10 +47,16 @@ const LogoModal = ({ shortToken, onClose, onSaved, theme }) => {
       e.target.value = "";
       return;
     }
-    setFile(f);
-    const reader = new FileReader();
-    reader.onload = (ev) => setPreview(ev.target.result);
-    reader.readAsDataURL(f);
+    try {
+      // Compressão silenciosa: redimensiona pra max 600px, recusa > 5MB.
+      // SVG passa direto (já é leve).
+      const compressed = await compressImageFile(f, { maxWidth: 600 });
+      setFile(f);
+      setPreview(compressed);
+    } catch (err) {
+      alert(err.message || "Falha ao processar imagem");
+      e.target.value = "";
+    }
   };
 
   const handleSave = async () => {
