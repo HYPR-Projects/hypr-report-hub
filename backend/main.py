@@ -986,7 +986,14 @@ def run_query(sql, token):
 
 
 def query_campaigns_list():
-    sql = f"""
+    # Constrói SQL com ou sem o JOIN de owners.
+    # Hotfix: se as external tables não existirem ainda (setup não rodou)
+    # ou estiverem inacessíveis (Sheets API quota, perda de permissão na SA),
+    # caímos pra versão sem owner em vez de derrubar o menu inteiro.
+    def build_sql(with_owners: bool) -> str:
+        owner_select = "ow.cp_email, ow.cs_email" if with_owners else "NULL AS cp_email, NULL AS cs_email"
+        owner_join   = f"LEFT JOIN ({owners.resolved_owners_subquery()}) ow USING (short_token)" if with_owners else ""
+        return f"""
         WITH checklist AS (
             SELECT
                 short_token,
@@ -1095,19 +1102,27 @@ def query_campaigns_list():
             c.bonus_o2o_video,        c.bonus_ooh_video,
             vu.v_actual_start_date,   vu.v_days_with_delivery,  vu.v_viewable_completions,
             du.d_days_with_delivery,  du.d_viewable_impressions,
-            ow.cp_email,              ow.cs_email
+            {owner_select}
         FROM base b
         LEFT JOIN display         d  USING (short_token)
         LEFT JOIN video           v  USING (short_token)
         LEFT JOIN checklist       c  USING (short_token)
         LEFT JOIN video_unified   vu USING (short_token)
         LEFT JOIN display_unified du USING (short_token)
-        LEFT JOIN ({owners.resolved_owners_subquery()}) ow USING (short_token)
+        {owner_join}
         ORDER BY b.start_date DESC
     """
+
     job_config = bigquery.QueryJobConfig()
-    job  = bq.query(sql, job_config=job_config)
-    rows = list(job.result())
+    try:
+        rows = list(bq.query(build_sql(with_owners=True), job_config=job_config).result())
+    except Exception as e:
+        # Fallback silencioso: se o JOIN com external tables falhar
+        # (setup não rodou, Sheets indisponível, permissão revogada),
+        # devolve a lista de campanhas sem owners. Logamos o motivo
+        # pra investigar depois sem afetar o usuário.
+        print(f"[WARN query_campaigns_list] owners JOIN falhou, fallback sem owners: {e}")
+        rows = list(bq.query(build_sql(with_owners=False), job_config=job_config).result())
 
     result = []
     for r in rows:
