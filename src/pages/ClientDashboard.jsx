@@ -3,6 +3,7 @@ import { C } from "../shared/theme";
 import { getTheme, setTheme } from "../shared/prefs";
 import { gaEvent, gaPageView } from "../shared/analytics";
 import { enrichDetailCosts } from "../shared/enrichDetail";
+import { detectIsColored } from "../shared/imageCompress";
 import {
   readRangeFromUrl,
   writeRangeToUrl,
@@ -41,8 +42,23 @@ const ClientDashboard = ({ token, isAdmin, adminJwt }) => {
   const [editingAfReach,setEditingAfReach]=useState(false);
   const [savingAf,setSavingAf]=useState(false);
   const [isDarkClient,setIsDarkClient]=useState(() => getTheme() === "dark");
+  // Detecta se a logo é colorida (PicPay roxo) ou monocromática (preto/branco).
+  // Coloridos: nunca inverter. Monocromáticos: inverter no light mode pra
+  // contraste. Default true (não inverter) enquanto detecta — safer.
+  const [logoIsColored,setLogoIsColored]=useState(true);
   // Persiste a escolha de tema entre sessões (compartilhada com CampaignMenu).
   useEffect(() => { setTheme(isDarkClient ? "dark" : "light"); }, [isDarkClient]);
+
+  // Roda detecção de cor sempre que o logo da campanha mudar.
+  // Cancela se o componente desmontar antes da Promise resolver.
+  useEffect(() => {
+    if (!data?.logo) { setLogoIsColored(true); return; }
+    let cancelled = false;
+    detectIsColored(data.logo).then(colored => {
+      if (!cancelled) setLogoIsColored(colored);
+    });
+    return () => { cancelled = true; };
+  }, [data?.logo]);
 
   // Filtro de período — compartilhado entre Visão Geral / Display / Video.
   // Lido da URL (?from=&to=) pra ser shareable e sobreviver a refresh.
@@ -293,7 +309,7 @@ const ClientDashboard = ({ token, isAdmin, adminJwt }) => {
         <p style={{color:cmuted,fontSize:14,marginTop:6}}>{camp.start_date} → {camp.end_date} · <span style={{color:C.blue}}>Token: {camp.short_token}</span></p>
       </div>
         {data.logo&&(
-    <img src={data.logo} alt="logo" style={{height:60,objectFit:"contain",maxWidth:220,marginTop:4,filter:isDarkClient?"none":"invert(1)"}}/>
+    <img src={data.logo} alt="logo" style={{height:60,objectFit:"contain",maxWidth:220,marginTop:4,filter:(!isDarkClient && !logoIsColored)?"invert(1)":"none"}}/>
   )}
 </div>
 

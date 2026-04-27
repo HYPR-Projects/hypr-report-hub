@@ -35,6 +35,63 @@ const loadImage = (src) =>
   });
 
 /**
+ * Detecta se uma imagem é colorida ou monocromática (preto/branco/cinza).
+ * Usado pra decidir se aplica filter:invert entre temas dark/light:
+ *  - Monocromática: invert faz sentido (logo branca → preta no light).
+ *  - Colorida: invert destrói as cores (PicPay roxo → amarelo).
+ *
+ * Estratégia: desenha em canvas pequeno, amostra pixels, calcula saturação
+ * via diferença max-min de R/G/B. Threshold conservador pra evitar falsos
+ * positivos com sombras/anti-aliasing.
+ *
+ * Retorna Promise<boolean>:
+ *   true  → imagem tem cor (não inverter)
+ *   false → monocromática (pode inverter)
+ *
+ * Em caso de erro (CORS, imagem inválida), assume colorido (safer default
+ * — não distorce o logo do cliente).
+ */
+export function detectIsColored(src) {
+  return new Promise((resolve) => {
+    if (!src) return resolve(true);
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      try {
+        // Canvas pequeno é suficiente pra amostragem estatística.
+        const w = 64, h = Math.max(1, Math.round(64 * (img.height / img.width)));
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return resolve(true);
+        ctx.drawImage(img, 0, 0, w, h);
+        const { data } = ctx.getImageData(0, 0, w, h);
+        let coloredPixels = 0;
+        let opaquePixels = 0;
+        for (let i = 0; i < data.length; i += 4) {
+          const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
+          if (a < 32) continue; // ignora pixels transparentes
+          opaquePixels++;
+          // Saturação simples: max(r,g,b) - min(r,g,b).
+          // Threshold de 18/255 (~7%) tolera ruído de anti-aliasing
+          // sem deixar passar cores reais.
+          const sat = Math.max(r, g, b) - Math.min(r, g, b);
+          if (sat > 18) coloredPixels++;
+        }
+        if (opaquePixels === 0) return resolve(true);
+        // Se mais de 5% dos pixels opacos têm cor, considera logo colorido.
+        resolve(coloredPixels / opaquePixels > 0.05);
+      } catch {
+        resolve(true);
+      }
+    };
+    img.onerror = () => resolve(true);
+    img.src = src;
+  });
+}
+
+/**
  * Comprime uma imagem (File). SVG passa sem processar.
  * Lança erro com mensagem amigável se o arquivo for inválido.
  *
