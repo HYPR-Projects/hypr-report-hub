@@ -99,6 +99,14 @@ const ClientDashboard = ({ token, isAdmin, adminJwt }) => {
   // então é a fonte de verdade pra recalcular `totals` filtrados. Custos de
   // detail são reproporcionalizados em `enrichDetailCosts` baseado nos novos
   // totals.
+  //
+  // Sobre custo: o backend retorna `effective_total_cost` com SUM em
+  // `query_totals` (correto, soma real), mas com MAX em `query_daily` e
+  // `query_detail` porque a coluna é cumulativa na tabela base. Somar os
+  // valores diários/detail do front infla o custo (somaria cumulativos).
+  // Solução: pra qualquer recálculo de custo filtrado, aplicar PROPORÇÃO
+  // sobre o custo total de `totalsRaw` (que é correto) baseado em delivery
+  // do detail filtrado — exatamente o que `enrichDetailCosts` já faz.
   const aggregates = useMemo(() => {
     if (!data || !data.campaign) return null;
     const noSurvey = r => !/survey/i.test(r.line_name||"");
@@ -110,12 +118,12 @@ const ClientDashboard = ({ token, isAdmin, adminJwt }) => {
     const daily0  = isFiltered ? dailyRaw.filter(r => inRange(r.date, mainRange))   : dailyRaw;
     const detail0 = isFiltered ? detailRaw.filter(r => inRange(r.date, mainRange))  : detailRaw;
 
-    // Quando filtrado, reconstroi `totals` agregando `detail0` por
-    // (media_type, tactic_type). Mantém preços de tabela (deal_cpm/cpcv) do
-    // `totalsRaw` original — esses são fixos da campanha e não dependem de
-    // qual janela está sendo analisada. Custo efetivo é re-somado de detail.
+    // Quando filtrado, reconstroi `totals` agregando delivery do `detail0`
+    // (campos SUM no backend — somar é correto) e aplicando proporção sobre
+    // o custo total de `totalsRaw` (que vem com SUM correto do backend).
     let totals = totalsRaw;
     if (isFiltered) {
+      // 1) Soma delivery do detail filtrado por (media_type, tactic_type)
       const byKey = {};
       detail0.forEach(r => {
         const k = `${r.media_type}|${r.tactic_type}`;
@@ -130,7 +138,6 @@ const ClientDashboard = ({ token, isAdmin, adminJwt }) => {
             video_view_25: 0, video_view_50: 0, video_view_75: 0,
             video_starts: 0,
             completions: 0,
-            effective_total_cost: 0,
             line_name: "TOTAL",
           };
         }
@@ -143,30 +150,52 @@ const ClientDashboard = ({ token, isAdmin, adminJwt }) => {
         g.video_view_50        += r.video_view_50        || 0;
         g.video_view_75        += r.video_view_75        || 0;
         g.video_starts         += r.video_starts         || 0;
-        g.effective_total_cost += r.effective_total_cost || 0;
         g.completions          += r.video_view_100       || 0;
       });
-      // Preserva preços contratados (deal_cpm/cpcv) do `totalsRaw` original
-      // e calcula CPM/CPCV efetivo a partir dos custos somados.
-      totals = Object.values(byKey).map(g => {
-        const orig = totalsRaw.find(t => t.media_type === g.media_type && t.tactic_type === g.tactic_type) || {};
-        const isVideo = g.media_type === "VIDEO";
-        // CPM efetivo: total_cost / (viewable / 1000); CPCV efetivo: total_cost / completions
-        const eff_cpm  = g.viewable_impressions > 0 ? (g.effective_total_cost / g.viewable_impressions) * 1000 : 0;
-        const eff_cpcv = g.completions          > 0 ? (g.effective_total_cost / g.completions)               : 0;
-        const deal_cpm = orig.deal_cpm_amount || 0;
-        const deal_cpcv = orig.deal_cpcv_amount || 0;
-        const cost_with_over = isVideo
-          ? deal_cpcv * g.completions
-          : deal_cpm * g.viewable_impressions / 1000;
+
+      // 2) Pra cada (media_type, tactic_type), aplica proporção sobre o
+      //    custo total CORRETO de totalsRaw. Display usa viewable_impressions
+      //    como denominador, Video usa completions (consistente com CPM/CPCV).
+      totals = totalsRaw.map(orig => {
+        const k = `${orig.media_type}|${orig.tactic_type}`;
+        const g = byKey[k] || {
+          media_type: orig.media_type,
+          tactic_type: orig.tactic_type,
+          impressions: 0, viewable_impressions: 0, clicks: 0,
+          video_view_100: 0, video_view_25: 0, video_view_50: 0, video_view_75: 0,
+          video_starts: 0, completions: 0,
+          line_name: "TOTAL",
+        };
+        const isVideo = orig.media_type === "VIDEO";
+        const denom_filtered = isVideo ? (g.completions || 0)            : (g.viewable_impressions || 0);
+        const denom_total    = isVideo ? (orig.completions || 0)         : (orig.viewable_impressions || 0);
+        const proportion     = denom_total > 0 ? denom_filtered / denom_total : 0;
+
+        const cost_filtered      = (orig.effective_total_cost      || 0) * proportion;
+        const cost_over_filtered = (orig.effective_cost_with_over  || 0) * proportion;
+
+        // CPM/CPCV efetivo derivado dos novos valores
+        const eff_cpm  = g.viewable_impressions > 0 ? (cost_filtered / g.viewable_impressions) * 1000 : 0;
+        const eff_cpcv = g.completions          > 0 ? (cost_filtered / g.completions)                : 0;
+
         return {
           ...g,
-          deal_cpm_amount: deal_cpm,
-          deal_cpcv_amount: deal_cpcv,
-          effective_cpm_amount: Math.round(eff_cpm * 100) / 100,
-          effective_cpcv_amount: Math.round(eff_cpcv * 100) / 100,
-          effective_cost_with_over: Math.round(cost_with_over * 100) / 100,
-          // pacing não faz sentido em janela parcial — deixa null pra UI esconder
+          deal_cpm_amount:           orig.deal_cpm_amount  || 0,
+          deal_cpcv_amount:          orig.deal_cpcv_amount || 0,
+          effective_total_cost:      Math.round(cost_filtered      * 100) / 100,
+          effective_cost_with_over:  Math.round(cost_over_filtered * 100) / 100,
+          effective_cpm_amount:      Math.round(eff_cpm  * 100) / 100,
+          effective_cpcv_amount:     Math.round(eff_cpcv * 100) / 100,
+          // Preserva campos de contratação (usados em pacing display)
+          contracted_o2o_display_impressions: orig.contracted_o2o_display_impressions,
+          contracted_ooh_display_impressions: orig.contracted_ooh_display_impressions,
+          contracted_o2o_video_completions:   orig.contracted_o2o_video_completions,
+          contracted_ooh_video_completions:   orig.contracted_ooh_video_completions,
+          bonus_o2o_display_impressions:      orig.bonus_o2o_display_impressions,
+          bonus_ooh_display_impressions:      orig.bonus_ooh_display_impressions,
+          bonus_o2o_video_completions:        orig.bonus_o2o_video_completions,
+          bonus_ooh_video_completions:        orig.bonus_ooh_video_completions,
+          // pacing não faz sentido em janela parcial — null pra UI esconder
           pacing: null,
         };
       });
