@@ -264,8 +264,8 @@ const ClientDashboard = ({ token, isAdmin, adminJwt }) => {
     };
   }, [data, mainRange]);
 
-  if(loading) return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:C.dark}}><GlobalStyle/><div style={{textAlign:"center"}}><Spinner size={48}/><p style={{marginTop:20,color:C.muted,fontSize:14}}>Carregando dados...</p></div></div>;
-  if(error||!data||!aggregates) return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:C.dark}}><GlobalStyle/><p style={{color:C.red}}>{error||"Campanha não encontrada."}</p></div>;
+  if(loading) return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:cbg,transition:"background 0.3s"}}><GlobalStyle/><div style={{textAlign:"center"}}><Spinner size={48}/><p style={{marginTop:20,color:cmuted,fontSize:14}}>Carregando dados...</p></div></div>;
+  if(error||!data||!aggregates) return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:cbg,transition:"background 0.3s"}}><GlobalStyle/><p style={{color:C.red}}>{error||"Campanha não encontrada."}</p></div>;
 
   const camp   = data.campaign;
   const mainTabs = ["Visão Geral", "Display", "Video", "RMND", "PDOOH", "VIDEO LOOM", "SURVEY"];
