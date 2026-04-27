@@ -325,12 +325,43 @@ def resolve_owners_for_campaigns(campaigns: List[dict]) -> None:
 
 
 # ─── Mutations (admin write) ─────────────────────────────────────────────────
+# Flag de bootstrap: na primeira escrita, garantimos que a tabela de
+# overrides exista. CREATE TABLE IF NOT EXISTS é idempotente e custa ~200ms
+# só na primeira invocação por instância da Cloud Function. Depois, o flag
+# evita a query repetida.
+_overrides_table_ready = False
+
+
+def _ensure_overrides_table() -> None:
+    """Cria a tabela física de overrides se ainda não existe.
+
+    Chamado em lazy init dentro de save_owner_override pra evitar dependência
+    de um setup_schema explícito antes do primeiro save. Idempotente.
+    """
+    global _overrides_table_ready
+    if _overrides_table_ready:
+        return
+    sql = f"""
+        CREATE TABLE IF NOT EXISTS {_full(TABLE_OVERRIDES)} (
+            short_token  STRING NOT NULL,
+            cp_email     STRING,
+            cs_email     STRING,
+            updated_by   STRING,
+            updated_at   TIMESTAMP
+        )
+    """
+    bq.query(sql).result()
+    _overrides_table_ready = True
+
+
 def save_owner_override(short_token: str, cp_email: str, cs_email: str,
                          updated_by: str) -> None:
     """Upsert no override. cp_email ou cs_email vazios são tratados como
     "remover override deste campo" — quando ambos vazios e o registro
     já existe, deletamos a linha pra cair de volta no lookup automático.
     """
+    _ensure_overrides_table()
+
     cp = cp_email.strip().lower() if cp_email else None
     cs = cs_email.strip().lower() if cs_email else None
 
