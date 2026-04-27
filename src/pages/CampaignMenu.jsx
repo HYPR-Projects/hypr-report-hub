@@ -1,7 +1,14 @@
 import { useState, useEffect } from "react";
-import { API_URL } from "../shared/config";
 import { C, CL } from "../shared/theme";
-import { getOrIssueAdminJwt, adminAuthHeaders } from "../shared/auth";
+import {
+  listCampaigns,
+  checkCampaignToken,
+  listTeamMembers,
+  saveReportOwner,
+  saveLogo as saveLogoApi,
+  saveLoom as saveLoomApi,
+  saveSurvey as saveSurveyApi,
+} from "../lib/api";
 import GlobalStyle from "../components/GlobalStyle";
 import Spinner from "../components/Spinner";
 import HyprLogo from "../components/HyprLogo";
@@ -53,16 +60,8 @@ const CampaignMenu = ({ user, onLogout, onOpenReport }) => {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        const jwt = await getOrIssueAdminJwt();
-        if (!jwt) return; // backend pode não estar deployado ainda; falha silenciosa
-        const r = await fetch(`${API_URL}?action=list_team_members`, {
-          headers: { ...adminAuthHeaders(jwt) },
-        });
-        if (!r.ok) return;
-        const d = await r.json();
-        if (!cancelled) setTeamMembers({ cps: d.cps || [], css: d.css || [] });
-      } catch { /* falha silenciosa */ }
+      const members = await listTeamMembers();
+      if (!cancelled) setTeamMembers(members);
     })();
     return () => { cancelled = true; };
   }, []);
@@ -80,17 +79,11 @@ const CampaignMenu = ({ user, onLogout, onOpenReport }) => {
     if (!ownerModal) return;
     setSavingOwner(true);
     try {
-      const jwt = await getOrIssueAdminJwt();
-      const r = await fetch(`${API_URL}?action=save_report_owner`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...adminAuthHeaders(jwt) },
-        body: JSON.stringify({
-          short_token: ownerModal.short_token,
-          cp_email:    ownerModal.cp_email,
-          cs_email:    ownerModal.cs_email,
-        }),
+      await saveReportOwner({
+        short_token: ownerModal.short_token,
+        cp_email:    ownerModal.cp_email,
+        cs_email:    ownerModal.cs_email,
       });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
       // Atualiza a campanha localmente — evita re-fetch da lista inteira
       setCampaigns(prev => prev.map(c =>
         c.short_token === ownerModal.short_token
@@ -108,29 +101,19 @@ const CampaignMenu = ({ user, onLogout, onOpenReport }) => {
   const fetchList = async () => {
     setLoading(true);
     try {
-      const jwt = await getOrIssueAdminJwt();
-      const r = await fetch(`${API_URL}?list=true`, {
-        headers: { ...adminAuthHeaders(jwt) },
-      });
-      const d = await r.json();
-      const raw = d.campaigns || [];
-      const seen = new Set();
-      const deduped = raw.filter(c => {
-        if (seen.has(c.short_token)) return false;
-        seen.add(c.short_token);
-        return true;
-      });
+      const deduped = await listCampaigns();
       setCampaigns(deduped);
-    } catch { setCampaigns([]); }
-    finally { setLoading(false); }
+    } finally {
+      setLoading(false);
+    }
   };
 
   const checkToken = async () => {
     if (!newToken.trim()) return; setChecking(true);
     try {
-      const r = await fetch(`${API_URL}?token=${newToken.trim()}`);
-      const d = await r.json();
-      if (d.campaign) setTokenData(d.campaign); else alert("Token não encontrado.");
+      const d = await checkCampaignToken(newToken.trim());
+      if (d?.campaign) setTokenData(d.campaign);
+      else alert("Token não encontrado.");
     } catch { alert("Erro ao buscar token."); } finally { setChecking(false); }
   };
 
@@ -138,12 +121,7 @@ const CampaignMenu = ({ user, onLogout, onOpenReport }) => {
     if (!tokenData) return;
     if (logoPreview) {
       try {
-        const jwt = await getOrIssueAdminJwt();
-        await fetch(`${API_URL}?action=save_logo`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...adminAuthHeaders(jwt) },
-          body: JSON.stringify({ short_token: tokenData.short_token, logo_base64: logoPreview }),
-        });
+        await saveLogoApi({ short_token: tokenData.short_token, logo_base64: logoPreview });
       } catch (e) { console.warn("Erro ao salvar logo", e); }
     }
     if (!campaigns.find(c => c.short_token === tokenData.short_token)) setCampaigns(p => [tokenData, ...p]);
@@ -161,12 +139,7 @@ const CampaignMenu = ({ user, onLogout, onOpenReport }) => {
     if (!loomUrl.trim()) return;
     setSavingLoom(true);
     try {
-      const jwt = await getOrIssueAdminJwt();
-      await fetch(`${API_URL}?action=save_loom`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...adminAuthHeaders(jwt) },
-        body: JSON.stringify({ short_token: loomModal, loom_url: loomUrl.trim() }),
-      });
+      await saveLoomApi({ short_token: loomModal, loom_url: loomUrl.trim() });
       alert("Loom salvo com sucesso!"); setLoomModal(null); setLoomUrl("");
     } catch { alert("Erro ao salvar Loom."); } finally { setSavingLoom(false); }
   };
@@ -183,12 +156,7 @@ const CampaignMenu = ({ user, onLogout, onOpenReport }) => {
         if (b.focusRow && b.focusRow.trim()) out.focusRow = b.focusRow.trim();
         return out;
       });
-      const jwt = await getOrIssueAdminJwt();
-      await fetch(`${API_URL}?action=save_survey`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...adminAuthHeaders(jwt) },
-        body: JSON.stringify({ short_token: surveyModal, survey_data: JSON.stringify(payload) }),
-      });
+      await saveSurveyApi({ short_token: surveyModal, survey_data: JSON.stringify(payload) });
       alert("Survey salvo com sucesso!"); setSurveyModal(null); setSurveyBlocks([{ nome: "", ctrlUrl: "", expUrl: "", focusRow: "" }]);
     } catch { alert("Erro ao salvar survey."); } finally { setSavingSurvey(false); }
   };
@@ -199,12 +167,7 @@ const CampaignMenu = ({ user, onLogout, onOpenReport }) => {
     if (!logoModalPreview) return;
     setSavingLogoModal(true);
     try {
-      const jwt = await getOrIssueAdminJwt();
-      await fetch(`${API_URL}?action=save_logo`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...adminAuthHeaders(jwt) },
-        body: JSON.stringify({ short_token: logoModal, logo_base64: logoModalPreview }),
-      });
+      await saveLogoApi({ short_token: logoModal, logo_base64: logoModalPreview });
       alert("Logo salvo com sucesso!"); setLogoModal(null); setLogoModalFile(null); setLogoModalPreview(null);
     } catch { alert("Erro ao salvar logo."); } finally { setSavingLogoModal(false); }
   };

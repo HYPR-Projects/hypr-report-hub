@@ -1,11 +1,10 @@
 import { useState, useEffect, useMemo } from "react";
 import { Line } from "recharts";
-import { API_URL } from "../shared/config";
 import { C } from "../shared/theme";
 import { fmt, fmtP, fmtP2, fmtR } from "../shared/format";
 import { gaEvent, gaPageView } from "../shared/analytics";
 import { enrichDetailCosts } from "../shared/enrichDetail";
-import { adminAuthHeaders } from "../shared/auth";
+import { getCampaign, saveAlcanceFrequencia } from "../lib/api";
 import GlobalStyle from "../components/GlobalStyle";
 import Spinner from "../components/Spinner";
 import HyprLogo from "../components/HyprLogo";
@@ -48,10 +47,11 @@ const ClientDashboard = ({ token, isAdmin, adminJwt }) => {
   const saveAf = async () => {
     setSavingAf(true);
     try {
-      await fetch(`${API_URL}?action=save_af`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...adminAuthHeaders(adminJwt) },
-        body: JSON.stringify({ short_token: token, alcance: alcance.trim(), frequencia: frequencia.trim() }),
+      await saveAlcanceFrequencia({
+        short_token: token,
+        alcance: alcance.trim(),
+        frequencia: frequencia.trim(),
+        adminJwt,
       });
       setEditingAfReach(false);
     } catch(e) { alert("Erro ao salvar: " + e.message); }
@@ -61,13 +61,8 @@ const ClientDashboard = ({ token, isAdmin, adminJwt }) => {
   const cardStyle = { background:cbg2, border:`1px solid ${cbdr}`, borderRadius:12, padding:20 };
 
   useEffect(()=>{
-    fetch(`${API_URL}?token=${token}`)
-      .then(r=>{
-        if(!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
+    getCampaign(token)
       .then(d=>{
-        if(!d.campaign) throw new Error("Campanha não encontrada");
         setData(d);setLoading(false);
         if(d.alcance!=null)   setAlcance(String(d.alcance));
         if(d.frequencia!=null) setFrequencia(String(d.frequencia));
