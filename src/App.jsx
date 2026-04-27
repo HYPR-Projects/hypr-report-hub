@@ -19,6 +19,8 @@ const C = {
   darkMuted: "#536872",
   white:     "#FCFEFE",
   green:     "#2ECC71",
+  yellow:    "#F1C40F",
+  red:       "#E74C3C",
 };
 
 const GlobalStyle = () => (
@@ -2398,17 +2400,6 @@ const ClientDashboard = ({ token, isAdmin }) => {
           });
           return Object.values(m).sort((a,b)=>a.date>b.date?1:-1).map(r=>({...r,ctr:r.viewable_impressions>0?r.clicks/r.viewable_impressions*100:0}));
         })();
-      // DEBUG TEMPORÁRIO — remover depois
-      console.log('[DEBUG Display '+dispTab+']', {
-        detail_length: detail.length,
-        detail_first: detail[0],
-        detail_has_date: detail[0]?.date,
-        detail_dates_sample: detail.slice(0,5).map(r=>r.date),
-        daily_aggregated_length: daily.length,
-        daily_first: daily[0],
-        dailyAll_length: dailyAll.length,
-        dailyAll_first: dailyAll[0],
-      });
       // Gráfico por audiência — sempre do total
       const getAudience = (ln) => { const p=(ln||"").split("_"); return p.length>=2?p[p.length-2]:"N/A"; };
       const byAudience=Object.values(detailAll.reduce((acc,r)=>{
@@ -2556,17 +2547,6 @@ const ClientDashboard = ({ token, isAdmin }) => {
           });
           return Object.values(m).sort((a,b)=>a.date>b.date?1:-1).map(r=>({...r,vtr:r.viewable_impressions>0?r.video_view_100/r.viewable_impressions*100:0}));
         })();
-      // DEBUG TEMPORÁRIO — remover depois
-      console.log('[DEBUG Video '+vidTab+']', {
-        detail_length: detail.length,
-        detail_first: detail[0],
-        detail_has_date: detail[0]?.date,
-        detail_dates_sample: detail.slice(0,5).map(r=>r.date),
-        daily_aggregated_length: daily.length,
-        daily_first: daily[0],
-        dailyAllV_length: dailyAllV.length,
-        dailyAllV_first: dailyAllV[0],
-      });
       // Gráfico por audiência — sempre do total
       const getAudienceV = (ln) => { const p=(ln||"").split("_"); return p.length>=2?p[p.length-2]:"N/A"; };
       const byAudience=Object.values(detailAllV.reduce((acc,r)=>{
@@ -2693,7 +2673,6 @@ const ClientDashboard = ({ token, isAdmin }) => {
 
         {mainTab==="RMND"&&<div><UploadTab type="RMND" token={token} serverData={data.rmnd} readOnly={!isAdmin}/><TabChat token={token} tabName="RMND" author={isAdmin?"HYPR":"Cliente"} theme={cTheme}/></div>}
         {mainTab==="PDOOH"&&<div><UploadTab type="PDOOH" token={token} serverData={data.pdooh} readOnly={!isAdmin}/><TabChat token={token} tabName="PDOOH" author={isAdmin?"HYPR":"Cliente"} theme={cTheme}/></div>}
-        {mainTab==="VIDEO LOOM"&&console.log("LOOM DATA:", data.loom)}
         {mainTab==="VIDEO LOOM"&&(
           <div style={{padding:"24px 0"}}>
             {data.loom?(
