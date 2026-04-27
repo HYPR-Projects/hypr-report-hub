@@ -73,6 +73,10 @@ export async function checkCampaignToken(token) {
 /**
  * Lista todas as campanhas (admin only). Faz dedupe por short_token.
  * Em falha, retorna [] — mesmo comportamento defensivo do CampaignMenu.fetchList.
+ *
+ * Se o id_token do Google estiver expirado (TTL ~1h), o backend rejeita
+ * com 401. Nesse caso limpa a sessão e recarrega pra UI mandar o usuário
+ * pra tela de login em vez de mostrar "0 campanhas" silenciosamente.
  */
 export async function listCampaigns() {
   try {
@@ -80,6 +84,12 @@ export async function listCampaigns() {
     const r = await fetch(`${API_URL}?list=true`, {
       headers: { ...adminAuthHeaders(jwt) },
     });
+    if (r.status === 401 || r.status === 403) {
+      // Token expirou no meio da sessão. Limpa e recarrega pra reabrir login.
+      try { localStorage.removeItem("hypr.session"); } catch { /* ignore */ }
+      window.location.reload();
+      return [];
+    }
     const d = await r.json();
     const raw = d.campaigns || [];
     const seen = new Set();

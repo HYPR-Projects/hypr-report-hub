@@ -54,6 +54,12 @@ export function saveSession(user, idToken) {
 /**
  * Retorna { user, idToken } se a sessão está válida (não-expirada),
  * caso contrário null. Limpa automaticamente sessões expiradas.
+ *
+ * Valida duas expirações:
+ *  1) Janela própria de 8h (`expiresAt`) — UX da app.
+ *  2) `exp` do próprio id_token do Google (~1h) — sem isso o backend
+ *     rejeita ações admin (incluindo listar campanhas), gerando UI
+ *     fantasma de "0 campanhas". Se expirou, força relogin.
  */
 export function loadSession() {
   try {
@@ -61,6 +67,13 @@ export function loadSession() {
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!parsed?.expiresAt || Date.now() > parsed.expiresAt) {
+      localStorage.removeItem(LS_SESSION_KEY);
+      return null;
+    }
+    if (parsed.idToken && isJwtExpired(parsed.idToken)) {
+      // id_token do Google venceu (TTL ~1h). Sem ele o backend não
+      // emite JWT admin e qualquer ação retorna 401. Limpa pra
+      // mandar o usuário pra tela de login.
       localStorage.removeItem(LS_SESSION_KEY);
       return null;
     }
