@@ -57,7 +57,10 @@ extract_env() {
     --format=json 2>/dev/null | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
-env = data.get('spec', {}).get('template', {}).get('spec', {}).get('containers', [{}])[0].get('env', [])
+# Estrutura para 'gcloud run revisions describe':
+#   spec.containers[0].env[].{name,value}
+# (diferente de 'gcloud run services describe', que tem spec.template.spec.*)
+env = data.get('spec', {}).get('containers', [{}])[0].get('env', [])
 for e in env:
     if e.get('name') == '$var_name':
         print(e.get('value', ''))
