@@ -284,31 +284,26 @@ def report_data(request):
             print(f"[ERROR save_upload] {e}")
             return (jsonify({"error": "Erro ao salvar upload"}), 500, headers)
 
-    # ── Endpoint: setup das tabelas de owners (admin, idempotente) ────────────
-    # Cria as 2 external tables (lookup + team) apontando para a planilha
-    # de De-Para Comercial e a tabela física de overrides.
+    # ── Endpoint: setup da tabela de overrides (admin, idempotente) ──────────
+    # Cria a tabela física `report_owners_overrides` se não existir e valida
+    # que a planilha de De-Para está acessível via Sheets API.
     #
-    # Por padrão usa "Sheet1!A:F" e "Sheet2!A:D". Se as abas tiverem nomes
-    # diferentes (ex: "Página1" em planilhas PT-BR), passe via query string:
-    #   ?action=setup_owners_schema&lookup_range=Página1!A:F&team_range=Página2!A:D
+    # Resposta inclui os nomes das abas detectados (debug) e contagem de
+    # linhas — útil pra confirmar que a SA da Cloud Function tem acesso.
     if request.method == "POST" and request.args.get("action") == "setup_owners_schema":
         if not authenticate_admin(request):
             return (jsonify({"error": "Não autorizado"}), 401, headers)
         try:
-            lookup_range = request.args.get("lookup_range", "").strip()
-            team_range   = request.args.get("team_range",   "").strip()
-            if lookup_range and team_range:
-                res = owners.setup_schema_with_range(lookup_range, team_range)
-            else:
-                res = owners.setup_schema()
+            res = owners.setup_schema()
             return (jsonify({"ok": True, "tables": res}), 200, headers)
         except Exception as e:
             print(f"[ERROR setup_owners_schema] {e}")
             return (jsonify({"error": str(e)}), 500, headers)
 
     # ── Endpoint: lista de membros HYPR (admin) ───────────────────────────────
-    # Lê a aba Sheet2 da planilha (external table) e devolve os CPs e CSs
-    # disponíveis para popular os dropdowns do modal "Gerenciar Owner".
+    # Lê a segunda aba da planilha via Sheets API (cache TTL 60s) e devolve
+    # os CPs e CSs disponíveis para popular os dropdowns do modal "Gerenciar
+    # Owner".
     if request.method == "GET" and request.args.get("action") == "list_team_members":
         if not authenticate_admin(request):
             return (jsonify({"error": "Não autorizado"}), 401, headers)
@@ -316,9 +311,9 @@ def report_data(request):
             data = owners.list_team_members()
             return (jsonify(data), 200, headers)
         except Exception as e:
-            # Não é erro fatal — se a external table ainda não existe ou o
-            # acesso à planilha falhou, devolvemos listas vazias e logamos.
-            # O frontend continua funcionando (chips/filtro/modal vazios).
+            # Não é erro fatal — se a Sheets API falhou (quota, perda de
+            # acesso da SA), devolvemos listas vazias e logamos. O frontend
+            # continua funcionando (chips/filtro/modal vazios).
             print(f"[WARN list_team_members] {e}")
             return (jsonify({"cps": [], "css": [], "_warning": str(e)}), 200, headers)
 
@@ -996,14 +991,13 @@ def run_query(sql, token):
 
 
 def query_campaigns_list():
-    # Constrói SQL com ou sem o JOIN de owners.
-    # Hotfix: se as external tables não existirem ainda (setup não rodou)
-    # ou estiverem inacessíveis (Sheets API quota, perda de permissão na SA),
-    # caímos pra versão sem owner em vez de derrubar o menu inteiro.
-    def build_sql(with_owners: bool) -> str:
-        owner_select = "ow.cp_email, ow.cs_email" if with_owners else "NULL AS cp_email, NULL AS cs_email"
-        owner_join   = f"LEFT JOIN ({owners.resolved_owners_subquery()}) ow USING (short_token)" if with_owners else ""
-        return f"""
+    # Query principal: agregações de delivery por short_token. Owners NÃO
+    # participam dessa query — o enrichment é feito em Python depois,
+    # lendo a planilha de De-Para via Sheets API + tabela de overrides.
+    # Decisão arquitetural: ~280 entries no lookup cabem em memória e o
+    # merge Python é mais rápido e robusto que JOIN com external table
+    # (que dependia de nome exato da aba e quebrava em runtime).
+    sql = f"""
         WITH checklist AS (
             SELECT
                 short_token,
@@ -1111,28 +1105,18 @@ def query_campaigns_list():
             c.bonus_o2o_display,      c.bonus_ooh_display,
             c.bonus_o2o_video,        c.bonus_ooh_video,
             vu.v_actual_start_date,   vu.v_days_with_delivery,  vu.v_viewable_completions,
-            du.d_days_with_delivery,  du.d_viewable_impressions,
-            {owner_select}
+            du.d_days_with_delivery,  du.d_viewable_impressions
         FROM base b
         LEFT JOIN display         d  USING (short_token)
         LEFT JOIN video           v  USING (short_token)
         LEFT JOIN checklist       c  USING (short_token)
         LEFT JOIN video_unified   vu USING (short_token)
         LEFT JOIN display_unified du USING (short_token)
-        {owner_join}
         ORDER BY b.start_date DESC
     """
 
     job_config = bigquery.QueryJobConfig()
-    try:
-        rows = list(bq.query(build_sql(with_owners=True), job_config=job_config).result())
-    except Exception as e:
-        # Fallback silencioso: se o JOIN com external tables falhar
-        # (setup não rodou, Sheets indisponível, permissão revogada),
-        # devolve a lista de campanhas sem owners. Logamos o motivo
-        # pra investigar depois sem afetar o usuário.
-        print(f"[WARN query_campaigns_list] owners JOIN falhou, fallback sem owners: {e}")
-        rows = list(bq.query(build_sql(with_owners=False), job_config=job_config).result())
+    rows = list(bq.query(sql, job_config=job_config).result())
 
     result = []
     for r in rows:
@@ -1223,8 +1207,6 @@ def query_campaigns_list():
             "start_date":    str(start_date),
             "end_date":      str(end_date),
             "updated_at":    str(r["updated_at"]),
-            "cp_email":      r["cp_email"],
-            "cs_email":      r["cs_email"],
         }
         if display_pacing is not None: entry["display_pacing"] = display_pacing
         if video_pacing   is not None: entry["video_pacing"]   = video_pacing
@@ -1232,6 +1214,18 @@ def query_campaigns_list():
         if video_vtr      is not None: entry["video_vtr"]      = video_vtr
 
         result.append(entry)
+
+    # Enriquece com cp_email/cs_email lendo a planilha (Sheets API com cache)
+    # + tabela de overrides. Falha graciosamente: se a planilha não estiver
+    # acessível, owners ficam None e o menu continua funcionando normal.
+    try:
+        owners.resolve_owners_for_campaigns(result)
+    except Exception as e:
+        print(f"[WARN query_campaigns_list] resolve_owners falhou: {e}")
+        for c in result:
+            c.setdefault("cp_email", None)
+            c.setdefault("cs_email", None)
+
     return result
 def query_upload(short_token, upload_type):
     from google.cloud import bigquery as bq2

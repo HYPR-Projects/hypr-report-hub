@@ -12,17 +12,28 @@ Os owners vêm de duas fontes, na ordem de precedência:
   1. Override manual (tabela `prod_assets.report_owners_overrides`)
      — admin clicou "Gerenciar Owner" no card e definiu manualmente.
 
-  2. Lookup automático (external table `prod_assets.report_owners_lookup`,
-     apontando para a aba "Sheet1" da planilha de De-Para Comercial).
+  2. Lookup automático (primeira aba da planilha de De-Para Comercial,
+     lida via Google Sheets API).
      — match por `client_name` (case-insensitive). Se houver múltiplos
      registros para o mesmo cliente (mesma cliente atendida por agências
      diferentes), o lookup retorna os emails apenas se forem TODOS iguais
      entre as linhas; do contrário, retorna NULL e cabe ao admin definir
      manualmente o override.
 
-A tabela `prod_assets.team_members_lookup` (aba "Sheet2" da planilha)
-expõe a lista oficial de membros HYPR (CPs e CSs com emails) para
-popular dropdowns no frontend.
+A segunda aba da planilha expõe a lista oficial de membros HYPR (CPs e
+CSs com emails) para popular dropdowns no frontend.
+
+Decisão de arquitetura
+----------------------
+Usamos Google Sheets API direto em vez de BigQuery external tables porque:
+  • External tables exigem nome exato da aba (range "Sheet1!A:F"). A
+    planilha está em PT-BR e usa "Página1"/"Página2" — nome que muda se
+    alguém criar nova aba ou traduzir.
+  • A Sheets API permite ler aba por ÍNDICE (primeira, segunda) — robusto
+    contra rename. Pegamos os nomes das abas via spreadsheets.get e usamos
+    pra montar os ranges.
+  • Latência: ~150ms por request, mitigada por cache TTL de 60s.
+  • Volume: ~280 linhas no lookup, ~11 no team. Cabe em memória.
 
 Privacidade
 -----------
@@ -32,16 +43,23 @@ admin `?list=true` (já protegido por JWT) traz essa informação.
 """
 
 import os
+import time
+from typing import Dict, List, Optional, Tuple
 from google.cloud import bigquery
+from google.auth import default as google_auth_default
+from googleapiclient.discovery import build as build_google_api
+
 
 PROJECT_ID = os.environ.get("GCP_PROJECT", "site-hypr")
 DATASET    = "prod_assets"
 SHEET_ID   = "1nd6UtJJ5fA81D9VZRiH2ZJGHYsiiv28LPzXhNRtd2aM"
 
-# Nomes das tabelas no BQ
-TABLE_LOOKUP    = "report_owners_lookup"        # external — Sheet1
-TABLE_TEAM      = "team_members_lookup"          # external — Sheet2
-TABLE_OVERRIDES = "report_owners_overrides"      # física
+# Tabela física de overrides — única que usamos no BigQuery agora
+TABLE_OVERRIDES = "report_owners_overrides"
+
+# Cache global da planilha — invalida a cada CACHE_TTL segundos
+CACHE_TTL = 60  # segundos
+_sheet_cache: Dict[str, object] = {"data": None, "ts": 0.0}
 
 bq = bigquery.Client()
 
@@ -50,69 +68,92 @@ def _full(table_name: str) -> str:
     return f"`{PROJECT_ID}.{DATASET}.{table_name}`"
 
 
-# ─── Setup de schema (idempotente) ───────────────────────────────────────────
+def _sheets_client():
+    """Cliente da Sheets API autenticado via Application Default Credentials.
+
+    Na Cloud Function, ADC é a service account de runtime
+    (453955675457-compute@developer.gserviceaccount.com), que já tem a
+    planilha compartilhada. Não precisamos de JSON key.
+    """
+    creds, _ = google_auth_default(
+        scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
+    )
+    return build_google_api("sheets", "v4", credentials=creds, cache_discovery=False)
+
+
+def _load_sheet_data() -> dict:
+    """Lê as duas primeiras abas da planilha (por ÍNDICE, não por nome).
+
+    Retorna dict com:
+      - "lookup_rows": lista de listas (linhas da aba 1, sem header)
+      - "team_rows":   lista de listas (linhas da aba 2, sem header)
+      - "sheet_names": [nome_aba1, nome_aba2] (debug/log)
+
+    Cache em memória por CACHE_TTL segundos. Cloud Functions de 2ª geração
+    mantêm processo entre invocações, então o cache persiste entre requests
+    da mesma instância — múltiplos admins consultando o menu não disparam
+    leituras repetidas da Sheets API.
+    """
+    now = time.time()
+    cached = _sheet_cache.get("data")
+    if cached and (now - _sheet_cache["ts"]) < CACHE_TTL:
+        return cached  # type: ignore
+
+    svc = _sheets_client().spreadsheets()
+
+    # 1) Descobre os nomes das abas pra montar ranges robustos
+    meta = svc.get(spreadsheetId=SHEET_ID, fields="sheets.properties.title").execute()
+    sheets = meta.get("sheets", [])
+    if len(sheets) < 2:
+        raise RuntimeError(
+            f"Planilha precisa ter pelo menos 2 abas (lookup + team), "
+            f"encontradas: {len(sheets)}"
+        )
+    name_lookup = sheets[0]["properties"]["title"]
+    name_team   = sheets[1]["properties"]["title"]
+
+    # 2) Lê os ranges. Usamos ranges generosos (A:F / A:D) — o Sheets corta
+    #    automaticamente nas linhas com dado.
+    resp = svc.values().batchGet(
+        spreadsheetId=SHEET_ID,
+        ranges=[f"'{name_lookup}'!A:F", f"'{name_team}'!A:D"],
+        valueRenderOption="UNFORMATTED_VALUE",
+    ).execute()
+
+    value_ranges = resp.get("valueRanges", [])
+    lookup_raw = value_ranges[0].get("values", []) if len(value_ranges) > 0 else []
+    team_raw   = value_ranges[1].get("values", []) if len(value_ranges) > 1 else []
+
+    # Pula header (primeira linha)
+    lookup_rows = lookup_raw[1:] if lookup_raw else []
+    team_rows   = team_raw[1:]   if team_raw   else []
+
+    data = {
+        "lookup_rows": lookup_rows,
+        "team_rows":   team_rows,
+        "sheet_names": [name_lookup, name_team],
+    }
+    _sheet_cache["data"] = data
+    _sheet_cache["ts"]   = now
+    return data
+
+
+def invalidate_cache() -> None:
+    """Força a próxima leitura a ir até a planilha. Útil pra testes ou se
+    o admin quer garantir dado fresco depois de editar o Sheet."""
+    _sheet_cache["data"] = None
+    _sheet_cache["ts"]   = 0.0
+
+
+# ─── Setup de schema (apenas tabela física de overrides) ─────────────────────
 def setup_schema() -> dict:
-    """Cria/atualiza as 3 tabelas necessárias.
+    """Cria a tabela física de overrides se não existir.
 
-    External tables (lookup, team) são CREATE OR REPLACE — sempre redefinem
-    o schema apontado para a planilha. Ajustes nas colunas da planilha
-    exigem nova chamada de setup.
-
-    A tabela física de overrides é CREATE IF NOT EXISTS para preservar
-    dados existentes entre setups.
-
-    Erros em uma tabela não derrubam as outras — cada step retorna
-    "ok" ou a string do erro. Isso ajuda a diagnosticar problemas de
-    nome de aba/permissão/range sem precisar adivinhar qual falhou.
+    Não há mais external tables — a leitura da planilha é feita via Sheets
+    API direto em runtime. Mantemos esse endpoint só pra inicializar o BQ
+    quando o backend é deployado pela primeira vez num projeto novo.
     """
-    sheets_uri = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}"
-    results = {}
-
-    # 1) Sheet1 → report_owners_lookup
-    sql_lookup = f"""
-        CREATE OR REPLACE EXTERNAL TABLE {_full(TABLE_LOOKUP)} (
-            agency      STRING,
-            client      STRING,
-            cp_name     STRING,
-            cp_email    STRING,
-            cs_name     STRING,
-            cs_email    STRING
-        )
-        OPTIONS (
-            format = 'GOOGLE_SHEETS',
-            uris   = ['{sheets_uri}'],
-            sheet_range = 'Sheet1!A:F',
-            skip_leading_rows = 1
-        )
-    """
-    try:
-        bq.query(sql_lookup).result()
-        results["lookup"] = "ok"
-    except Exception as e:
-        results["lookup"] = f"erro: {e}"
-
-    # 2) Sheet2 → team_members_lookup
-    sql_team = f"""
-        CREATE OR REPLACE EXTERNAL TABLE {_full(TABLE_TEAM)} (
-            cp_name   STRING,
-            cp_email  STRING,
-            cs_name   STRING,
-            cs_email  STRING
-        )
-        OPTIONS (
-            format = 'GOOGLE_SHEETS',
-            uris   = ['{sheets_uri}'],
-            sheet_range = 'Sheet2!A:D',
-            skip_leading_rows = 1
-        )
-    """
-    try:
-        bq.query(sql_team).result()
-        results["team"] = "ok"
-    except Exception as e:
-        results["team"] = f"erro: {e}"
-
-    # 3) Tabela física de overrides — preserva dados existentes
+    results: dict = {}
     sql_overrides = f"""
         CREATE TABLE IF NOT EXISTS {_full(TABLE_OVERRIDES)} (
             short_token  STRING NOT NULL,
@@ -128,82 +169,25 @@ def setup_schema() -> dict:
     except Exception as e:
         results["overrides"] = f"erro: {e}"
 
-    return results
-
-
-def setup_schema_with_range(lookup_range: str, team_range: str) -> dict:
-    """Variante de setup_schema que recebe os ranges de aba customizados.
-
-    Útil quando as abas não se chamam "Sheet1"/"Sheet2" (planilhas em PT-BR
-    usam "Página1", planilhas existentes podem ter nomes custom).
-    Exemplo: setup_schema_with_range("Página1!A:F", "Página2!A:D")
-    """
-    sheets_uri = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}"
-    results = {}
-
-    sql_lookup = f"""
-        CREATE OR REPLACE EXTERNAL TABLE {_full(TABLE_LOOKUP)} (
-            agency      STRING,
-            client      STRING,
-            cp_name     STRING,
-            cp_email    STRING,
-            cs_name     STRING,
-            cs_email    STRING
-        )
-        OPTIONS (
-            format = 'GOOGLE_SHEETS',
-            uris   = ['{sheets_uri}'],
-            sheet_range = '{lookup_range}',
-            skip_leading_rows = 1
-        )
-    """
+    # Aproveita pra validar que a planilha está acessível e devolver os
+    # nomes das abas detectados (debug).
     try:
-        bq.query(sql_lookup).result()
-        results["lookup"] = f"ok ({lookup_range})"
+        data = _load_sheet_data()
+        results["sheet_access"] = "ok"
+        results["sheet_names"]  = data["sheet_names"]
+        results["lookup_rows"]  = len(data["lookup_rows"])
+        results["team_rows"]    = len(data["team_rows"])
     except Exception as e:
-        results["lookup"] = f"erro: {e}"
-
-    sql_team = f"""
-        CREATE OR REPLACE EXTERNAL TABLE {_full(TABLE_TEAM)} (
-            cp_name   STRING,
-            cp_email  STRING,
-            cs_name   STRING,
-            cs_email  STRING
-        )
-        OPTIONS (
-            format = 'GOOGLE_SHEETS',
-            uris   = ['{sheets_uri}'],
-            sheet_range = '{team_range}',
-            skip_leading_rows = 1
-        )
-    """
-    try:
-        bq.query(sql_team).result()
-        results["team"] = f"ok ({team_range})"
-    except Exception as e:
-        results["team"] = f"erro: {e}"
-
-    sql_overrides = f"""
-        CREATE TABLE IF NOT EXISTS {_full(TABLE_OVERRIDES)} (
-            short_token  STRING NOT NULL,
-            cp_email     STRING,
-            cs_email     STRING,
-            updated_by   STRING,
-            updated_at   TIMESTAMP
-        )
-    """
-    try:
-        bq.query(sql_overrides).result()
-        results["overrides"] = "ok"
-    except Exception as e:
-        results["overrides"] = f"erro: {e}"
+        results["sheet_access"] = f"erro: {e}"
 
     return results
 
 
 # ─── Queries de leitura ──────────────────────────────────────────────────────
 def list_team_members() -> dict:
-    """Lê a aba Sheet2 e devolve as listas únicas de CPs e CSs.
+    """Lê a segunda aba da planilha e devolve as listas únicas de CPs e CSs.
+
+    Estrutura da aba: CP | Email CP | CS | Email CS
 
     Linhas inválidas (sem email, "Greenfield", "#N/A") são filtradas — não
     fazem sentido como atribuíveis. Greenfield é registrado como conta sem
@@ -211,70 +195,133 @@ def list_team_members() -> dict:
 
     Retorna: {"cps": [{name, email}], "css": [{name, email}]}
     """
-    sql = f"""
-        WITH cps AS (
-            SELECT DISTINCT cp_name AS name, LOWER(cp_email) AS email
-            FROM {_full(TABLE_TEAM)}
-            WHERE cp_email IS NOT NULL
-              AND cp_email LIKE '%@hypr.mobi'
-        ),
-        css AS (
-            SELECT DISTINCT cs_name AS name, LOWER(cs_email) AS email
-            FROM {_full(TABLE_TEAM)}
-            WHERE cs_email IS NOT NULL
-              AND cs_email LIKE '%@hypr.mobi'
-        )
-        SELECT 'cp' AS role, name, email FROM cps
-        UNION ALL
-        SELECT 'cs' AS role, name, email FROM css
-        ORDER BY role, name
-    """
-    rows = list(bq.query(sql).result())
-    cps = [{"name": r["name"], "email": r["email"]}
-           for r in rows if r["role"] == "cp"]
-    css = [{"name": r["name"], "email": r["email"]}
-           for r in rows if r["role"] == "cs"]
+    data = _load_sheet_data()
+    rows = data["team_rows"]
+
+    cps_seen: Dict[str, str] = {}  # email_lower → name
+    css_seen: Dict[str, str] = {}
+
+    for row in rows:
+        # Garante 4 colunas
+        cells = (list(row) + ["", "", "", ""])[:4]
+        cp_name, cp_email, cs_name, cs_email = (str(c).strip() for c in cells)
+
+        if cp_email and cp_email.lower().endswith("@hypr.mobi"):
+            key = cp_email.lower()
+            if key not in cps_seen:
+                cps_seen[key] = cp_name or cp_email.split("@")[0]
+
+        if cs_email and cs_email.lower().endswith("@hypr.mobi"):
+            key = cs_email.lower()
+            if key not in css_seen:
+                css_seen[key] = cs_name or cs_email.split("@")[0]
+
+    cps = sorted(
+        [{"name": n, "email": e} for e, n in cps_seen.items()],
+        key=lambda x: x["name"].lower(),
+    )
+    css = sorted(
+        [{"name": n, "email": e} for e, n in css_seen.items()],
+        key=lambda x: x["name"].lower(),
+    )
     return {"cps": cps, "css": css}
 
 
-def resolved_owners_subquery() -> str:
-    """SQL subquery que devolve (short_token, cp_email, cs_email) já
-    com override aplicado em cima do lookup.
+def get_owners_lookup_dict() -> Dict[str, Tuple[Optional[str], Optional[str]]]:
+    """Lê a primeira aba e monta dict de lookup por client_name (lowercase).
 
-    Lógica do match no lookup:
-      - Match por LOWER(client_name) entre `campaign_results` e a aba Sheet1.
-      - Se múltiplos registros (mesmo cliente em agências diferentes),
-        agregamos com ANY_VALUE só quando todos os emails forem iguais.
-        Quando há divergência, retornamos NULL — o admin precisa definir
-        o override manualmente. Isso evita atribuir owner errado.
+    Estrutura da aba: Agência | Cliente | CP ATUAL | Email CP | CS Atual | Email CS
 
-    Pode ser embutida em outras queries via WITH owners AS (...).
+    Lógica de agregação quando o mesmo cliente aparece em múltiplas linhas
+    (atendido por agências diferentes): só retornamos email se todas as
+    linhas concordarem. Se houver divergência, retornamos None — o admin
+    precisa criar override manual. Isso evita atribuir owner errado.
+
+    Retorna: {client_name_lower: (cp_email_or_none, cs_email_or_none)}
     """
-    return f"""
-        SELECT
-            base.short_token,
-            COALESCE(ov.cp_email, lk.cp_email) AS cp_email,
-            COALESCE(ov.cs_email, lk.cs_email) AS cs_email
-        FROM (
-            SELECT DISTINCT short_token, LOWER(client_name) AS client_lc
-            FROM `{PROJECT_ID}.prod_prod_hypr_reporthub.campaign_results`
-        ) base
-        LEFT JOIN (
-            -- Lookup agregado: só usa email se todas as linhas do cliente
-            -- concordarem. Senão, deixa NULL pro admin decidir.
-            SELECT
-                LOWER(client) AS client_lc,
-                CASE WHEN COUNT(DISTINCT cp_email) = 1
-                     THEN ANY_VALUE(cp_email) END AS cp_email,
-                CASE WHEN COUNT(DISTINCT cs_email) = 1
-                     THEN ANY_VALUE(cs_email) END AS cs_email
-            FROM {_full(TABLE_LOOKUP)}
-            WHERE client IS NOT NULL
-              AND cp_email LIKE '%@hypr.mobi'
-            GROUP BY client_lc
-        ) lk USING (client_lc)
-        LEFT JOIN {_full(TABLE_OVERRIDES)} ov USING (short_token)
+    data = _load_sheet_data()
+    rows = data["lookup_rows"]
+
+    # Agrega CPs e CSs por cliente
+    by_client: Dict[str, Dict[str, set]] = {}
+    for row in rows:
+        cells = (list(row) + ["", "", "", "", "", ""])[:6]
+        _agency, client, _cp_name, cp_email, _cs_name, cs_email = (str(c).strip() for c in cells)
+
+        if not client:
+            continue
+        key = client.lower()
+        bucket = by_client.setdefault(key, {"cp": set(), "cs": set()})
+
+        cp_lower = cp_email.lower() if cp_email else ""
+        if cp_lower.endswith("@hypr.mobi"):
+            bucket["cp"].add(cp_lower)
+
+        cs_lower = cs_email.lower() if cs_email else ""
+        if cs_lower.endswith("@hypr.mobi"):
+            bucket["cs"].add(cs_lower)
+
+    # Resolve: só atribui se houver consenso (1 email único)
+    result: Dict[str, Tuple[Optional[str], Optional[str]]] = {}
+    for client_lc, bucket in by_client.items():
+        cp = next(iter(bucket["cp"])) if len(bucket["cp"]) == 1 else None
+        cs = next(iter(bucket["cs"])) if len(bucket["cs"]) == 1 else None
+        result[client_lc] = (cp, cs)
+    return result
+
+
+def get_overrides_dict() -> Dict[str, Tuple[Optional[str], Optional[str]]]:
+    """Lê a tabela física de overrides e devolve dict por short_token.
+
+    Retorna: {short_token: (cp_email_or_none, cs_email_or_none)}
+
+    Resiliente: se a tabela ainda não existe (primeiro deploy, antes do
+    setup_schema), retorna dict vazio em vez de levantar.
     """
+    sql = f"""
+        SELECT short_token, cp_email, cs_email
+        FROM {_full(TABLE_OVERRIDES)}
+    """
+    try:
+        rows = list(bq.query(sql).result())
+    except Exception as e:
+        # Tabela não existe ainda? Loga e segue.
+        print(f"[WARN get_overrides_dict] {e}")
+        return {}
+
+    return {
+        r["short_token"]: (r.get("cp_email"), r.get("cs_email"))
+        for r in rows
+    }
+
+
+def resolve_owners_for_campaigns(campaigns: List[dict]) -> None:
+    """Mutação in-place: enriquece cada campaign dict com cp_email/cs_email.
+
+    Faz uma única leitura da planilha e uma única leitura da tabela de
+    overrides, depois aplica o merge em Python. Muito mais rápido que
+    JOIN no BigQuery quando temos só ~280 entries no lookup.
+
+    Override sempre vence lookup. Se nenhum dos dois tem dado, deixa None.
+    Cada campaign dict precisa ter `short_token` e `client_name`.
+    """
+    try:
+        lookup = get_owners_lookup_dict()
+    except Exception as e:
+        print(f"[WARN resolve_owners] lookup falhou, sem auto-attrib: {e}")
+        lookup = {}
+
+    overrides = get_overrides_dict()
+
+    for c in campaigns:
+        token = c.get("short_token")
+        client_lc = (c.get("client_name") or "").strip().lower()
+
+        ov_cp, ov_cs = overrides.get(token, (None, None))
+        lk_cp, lk_cs = lookup.get(client_lc, (None, None))
+
+        c["cp_email"] = ov_cp or lk_cp
+        c["cs_email"] = ov_cs or lk_cs
 
 
 # ─── Mutations (admin write) ─────────────────────────────────────────────────
