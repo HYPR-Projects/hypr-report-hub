@@ -3,10 +3,12 @@
  *
  * Three jobs:
  *
- *  1. Persist the Google id_token across the menu → report navigation.
- *     The id_token is what the backend uses to mint our short-lived
- *     custom admin JWT. It lives in sessionStorage so it dies with the
- *     tab and is never sent to a third party.
+ *  1. Persist the admin session (user + Google id_token) across page
+ *     refreshes and tab restarts. Lives in localStorage with an 8h TTL
+ *     so a refresh doesn't kick the user back to the login screen.
+ *     The Google id_token itself expires in 1h (per its `exp` claim),
+ *     so admin write actions may fail before the 8h are up — at which
+ *     point the user is asked to log in again.
  *
  *  2. Trade the id_token for a short-lived admin JWT via the backend
  *     endpoint `?action=issue_admin_token`. The custom JWT (5min TTL)
@@ -22,23 +24,115 @@
 
 import { API_URL } from "./config";
 
-const SS_GOOGLE_ID_TOKEN = "hypr.googleIdToken";
+// Sessão persiste 8h (jornada de trabalho) em localStorage para sobreviver
+// a refreshes e fechamentos de aba. O id_token do Google em si expira em 1h
+// (controlado pelo `exp` do JWT), então ações admin podem falhar antes das
+// 8h — nesse caso o backend rejeita e o usuário precisa relogar para
+// emitir novos JWTs admin.
+const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+const LS_SESSION_KEY = "hypr.session";
+const LS_CLIENT_UNLOCK_PREFIX = "hypr.clientUnlock.";
 
-// ─── Google id_token persistence (sessionStorage) ────────────────────────────
-export function setGoogleIdToken(token) {
+// ─── Admin session persistence (localStorage, 8h TTL) ────────────────────────
+/**
+ * Persiste user + Google id_token com TTL de 8h. Substitui o antigo
+ * sessionStorage que morria com a aba.
+ */
+export function saveSession(user, idToken) {
   try {
-    if (token) sessionStorage.setItem(SS_GOOGLE_ID_TOKEN, token);
-    else sessionStorage.removeItem(SS_GOOGLE_ID_TOKEN);
+    const payload = {
+      user,
+      idToken,
+      expiresAt: Date.now() + SESSION_TTL_MS,
+    };
+    localStorage.setItem(LS_SESSION_KEY, JSON.stringify(payload));
   } catch {
-    /* sessionStorage may be blocked (private mode, etc) — ignore */
+    /* localStorage may be blocked — ignore */
   }
 }
 
-export function getGoogleIdToken() {
+/**
+ * Retorna { user, idToken } se a sessão está válida (não-expirada),
+ * caso contrário null. Limpa automaticamente sessões expiradas.
+ */
+export function loadSession() {
   try {
-    return sessionStorage.getItem(SS_GOOGLE_ID_TOKEN) || null;
+    const raw = localStorage.getItem(LS_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.expiresAt || Date.now() > parsed.expiresAt) {
+      localStorage.removeItem(LS_SESSION_KEY);
+      return null;
+    }
+    return { user: parsed.user || null, idToken: parsed.idToken || null };
   } catch {
     return null;
+  }
+}
+
+export function clearSession() {
+  try {
+    localStorage.removeItem(LS_SESSION_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+// ─── Google id_token getters/setters (delegam para a sessão) ─────────────────
+// Mantidos para compatibilidade com chamadas existentes em outros componentes.
+export function setGoogleIdToken(token) {
+  if (!token) {
+    clearSession();
+    return;
+  }
+  // Atualiza apenas o idToken preservando o user existente.
+  const current = loadSession();
+  saveSession(current?.user || null, token);
+}
+
+export function getGoogleIdToken() {
+  return loadSession()?.idToken || null;
+}
+
+// ─── Client password unlock (per-token, localStorage, 8h TTL) ────────────────
+/**
+ * Marca o token de campanha como desbloqueado para a aba/dispositivo atual,
+ * com TTL de 8h. Cada campanha tem sua própria chave.
+ */
+export function markClientUnlocked(token) {
+  if (!token) return;
+  try {
+    const key = LS_CLIENT_UNLOCK_PREFIX + token.toUpperCase();
+    const payload = { expiresAt: Date.now() + SESSION_TTL_MS };
+    localStorage.setItem(key, JSON.stringify(payload));
+  } catch {
+    /* ignore */
+  }
+}
+
+export function isClientUnlocked(token) {
+  if (!token) return false;
+  try {
+    const key = LS_CLIENT_UNLOCK_PREFIX + token.toUpperCase();
+    const raw = localStorage.getItem(key);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.expiresAt || Date.now() > parsed.expiresAt) {
+      localStorage.removeItem(key);
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function clearClientUnlock(token) {
+  if (!token) return;
+  try {
+    localStorage.removeItem(LS_CLIENT_UNLOCK_PREFIX + token.toUpperCase());
+  } catch {
+    /* ignore */
   }
 }
 

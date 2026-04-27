@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { GOOGLE_CLIENT_ID } from "../shared/config";
 import { C } from "../shared/theme";
-import { setGoogleIdToken } from "../shared/auth";
+import { saveSession } from "../shared/auth";
 import GlobalStyle from "../components/GlobalStyle";
 import HyprLogo from "../components/HyprLogo";
 
@@ -14,10 +14,11 @@ const LoginScreen = ({ onLogin }) => {
         callback:(res)=>{
           const p=JSON.parse(atob(res.credential.split(".")[1]));
           if(p.email?.endsWith("@hypr.mobi")) {
-            // Persiste o id_token na sessão para que o menu possa trocá-lo
-            // por um JWT admin curto via backend antes de abrir reports.
-            setGoogleIdToken(res.credential);
-            onLogin({name:p.name,email:p.email,picture:p.picture});
+            const user = {name:p.name,email:p.email,picture:p.picture};
+            // Persiste user + id_token com TTL de 8h em localStorage para
+            // sobreviver a refreshes e fechamentos de aba.
+            saveSession(user, res.credential);
+            onLogin(user);
           }
           else alert("Acesso restrito a emails @hypr.mobi");
         },

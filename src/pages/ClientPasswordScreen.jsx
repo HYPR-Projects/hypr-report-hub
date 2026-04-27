@@ -1,11 +1,20 @@
 import { useState } from "react";
 import { C } from "../shared/theme";
+import { markClientUnlocked } from "../shared/auth";
 import GlobalStyle from "../components/GlobalStyle";
 import HyprLogo from "../components/HyprLogo";
 
 const ClientPasswordScreen = ({ token, onUnlock }) => {
   const [pw,setPw]=useState(""); const [err,setErr]=useState(false);
-  const submit=()=>{ if(pw.trim().toUpperCase()===token.toUpperCase())onUnlock(); else{setErr(true);setTimeout(()=>setErr(false),2000);} };
+  const submit=()=>{
+    if(pw.trim().toUpperCase()===token.toUpperCase()){
+      // Persiste o unlock por 8h para que refreshes não peçam senha de novo.
+      markClientUnlocked(token);
+      onUnlock();
+    } else {
+      setErr(true);setTimeout(()=>setErr(false),2000);
+    }
+  };
   return (
     <div style={{minHeight:"100vh",width:"100%",display:"flex",alignItems:"center",justifyContent:"center",padding:24,position:"relative",overflow:"hidden",background:C.dark}}>
       <GlobalStyle/>

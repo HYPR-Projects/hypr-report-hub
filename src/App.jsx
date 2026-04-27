@@ -8,16 +8,22 @@ import {
   isJwtExpired,
   getGoogleIdToken,
   issueAdminJwt,
-  setGoogleIdToken,
   clearCachedAdminJwt,
+  loadSession,
+  clearSession,
+  isClientUnlocked,
 } from "./shared/auth";
 
 export default function App() {
-  const [user, setUser] = useState(null);
-  const [unlocked, setUnlocked] = useState(false);
+  // Restaura sessão admin (8h TTL) e unlock de cliente direto do localStorage
+  // para que um refresh não derrube o login.
+  const [user, setUser] = useState(() => loadSession()?.user || null);
   const path = window.location.pathname;
   const isClient = path.startsWith("/report/");
   const clientToken = isClient ? path.replace("/report/", "") : null;
+  const [unlocked, setUnlocked] = useState(() =>
+    clientToken ? isClientUnlocked(clientToken) : false
+  );
 
   if (isClient && clientToken) {
     // Modo admin determinado por (em ordem):
@@ -57,7 +63,7 @@ export default function App() {
   };
 
   const onLogout = () => {
-    setGoogleIdToken(null);
+    clearSession();
     clearCachedAdminJwt();
     setUser(null);
   };
