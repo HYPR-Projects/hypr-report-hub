@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useLayoutEffect } from "react";
+import { createPortal } from "react-dom";
 import { DayPicker } from "react-day-picker";
 import { ptBR } from "date-fns/locale";
 import "react-day-picker/style.css";
@@ -8,47 +9,166 @@ import {
   matchesPreset,
   formatRangeShort,
   daysInRange,
+  ymd,
+  parseYmd,
 } from "../shared/dateFilter";
 
 /**
- * DateRangeFilter — chip clicável que abre popover com presets +
- * calendário de range.
+ * DateRangeFilter — chip + popover compacto com presets + calendar de range.
+ *
+ * O popover é renderizado via Portal no body com position fixed e backdrop
+ * sutil — assim flutua acima de toda a UI sem sobrepor o layout do
+ * dashboard ou ser limitado por stacking contexts.
  *
  * Props
  *  - value: { from: Date, to: Date } | null
  *  - onChange: (range | null) => void
- *  - minDate / maxDate: limites do calendar (geralmente start/end da campanha)
+ *  - minDate / maxDate: limites brutos (geralmente start/end da campanha).
+ *    Internamente clampa com `today` e `availableDates` pra não permitir
+ *    selecionar dias futuros ou sem dados.
+ *  - availableDates: string[] de YYYY-MM-DD onde houve entrega/dado.
+ *    Quando fornecido, datas fora dessa lista ficam riscadas e desabilitadas.
  *  - isDark: tema atual (controla cores)
- *  - align: "left" | "right" (lado de abertura do popover, default right)
  */
-const DateRangeFilter = ({ value, onChange, minDate, maxDate, isDark = true, align = "right" }) => {
+const DateRangeFilter = ({
+  value,
+  onChange,
+  minDate,
+  maxDate,
+  availableDates,
+  isDark = true,
+}) => {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(value);
   const wrapRef = useRef(null);
+  const triggerRef = useRef(null);
+  const popoverRef = useRef(null);
+  const [popPos, setPopPos] = useState({ top: 0, left: 0 });
 
   useEffect(() => { setDraft(value); }, [value]);
 
-  // Fechar ao clicar fora
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+  // Recalcula posição do popover baseado no trigger e no viewport.
+  // Renderizado em Portal (body) com position fixed, então não causa
+  // sobreposição via stacking context — flutua acima de tudo, com backdrop
+  // sutil pra deixar claro que é modal.
+  useLayoutEffect(() => {
+    if (!open || !triggerRef.current || !popoverRef.current) return;
+    const recalc = () => {
+      const trig = triggerRef.current?.getBoundingClientRect();
+      const pop = popoverRef.current?.getBoundingClientRect();
+      if (!trig || !pop) return;
+      const margin = 8;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+
+      // Horizontal: alinha à direita do trigger por padrão. Se passar do
+      // viewport pela esquerda, alinha à esquerda do trigger.
+      let left = trig.right - pop.width;
+      if (left < margin) left = margin;
+      if (left + pop.width > vw - margin) left = vw - pop.width - margin;
+
+      // Vertical: por padrão abaixo do trigger. Se não couber abaixo, abre
+      // acima.
+      let top = trig.bottom + 6;
+      if (top + pop.height > vh - margin) {
+        const above = trig.top - pop.height - 6;
+        if (above >= margin) top = above;
+        else top = Math.max(margin, vh - pop.height - margin);
+      }
+      setPopPos({ top, left });
     };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    recalc();
+    window.addEventListener("resize", recalc);
+    window.addEventListener("scroll", recalc, true);
+    return () => {
+      window.removeEventListener("resize", recalc);
+      window.removeEventListener("scroll", recalc, true);
+    };
   }, [open]);
 
-  // Refresh today às 00:00 do user — refToday é hoje, mas clampa em maxDate.
-  const refToday = useMemo(() => {
-    const today = new Date();
-    if (maxDate && today > maxDate) return maxDate;
-    return today;
-  }, [maxDate]);
+  // Fechar ao clicar fora (trigger ou popover) ou apertar Esc
+  useEffect(() => {
+    if (!open) return;
+    const click = (e) => {
+      const inTrig = triggerRef.current?.contains(e.target);
+      const inPop = popoverRef.current?.contains(e.target);
+      if (!inTrig && !inPop) setOpen(false);
+    };
+    const esc = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", click);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("mousedown", click);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [open]);
+
+  // Limites efetivos: nunca passa de `today`, nunca passa do `maxDate`,
+  // e quando há `availableDates` clampa pelo último dia com dado.
+  const today = useMemo(() => {
+    const t = new Date();
+    return new Date(t.getFullYear(), t.getMonth(), t.getDate());
+  }, []);
+
+  const availableSet = useMemo(
+    () => (availableDates ? new Set(availableDates) : null),
+    [availableDates]
+  );
+
+  const lastDataDate = useMemo(() => {
+    if (!availableDates || availableDates.length === 0) return null;
+    return parseYmd([...availableDates].sort().pop());
+  }, [availableDates]);
+
+  const firstDataDate = useMemo(() => {
+    if (!availableDates || availableDates.length === 0) return null;
+    return parseYmd([...availableDates].sort().shift());
+  }, [availableDates]);
+
+  // Min efetivo: max entre minDate (campanha) e firstDataDate
+  const effectiveMin = useMemo(() => {
+    const candidates = [minDate, firstDataDate].filter(Boolean);
+    if (candidates.length === 0) return null;
+    return new Date(Math.max(...candidates.map(d => d.getTime())));
+  }, [minDate, firstDataDate]);
+
+  // Max efetivo: min entre maxDate (campanha), today e lastDataDate
+  const effectiveMax = useMemo(() => {
+    const candidates = [maxDate, today, lastDataDate].filter(Boolean);
+    if (candidates.length === 0) return today;
+    return new Date(Math.min(...candidates.map(d => d.getTime())));
+  }, [maxDate, today, lastDataDate]);
 
   const presets = useMemo(
-    () => buildPresets(refToday, minDate ? minDate.toISOString().slice(0, 10) : null, maxDate ? maxDate.toISOString().slice(0, 10) : null),
-    [refToday, minDate, maxDate]
+    () => buildPresets(
+      effectiveMax,
+      effectiveMin ? ymd(effectiveMin) : null,
+      effectiveMax ? ymd(effectiveMax) : null
+    ),
+    [effectiveMin, effectiveMax]
   );
+
+  // Se há availableDates, filtra presets que caiam fora delas.
+  const presetsClamped = useMemo(() => {
+    if (!availableSet) return presets;
+    return presets.map(p => {
+      if (!p.range) return p;
+      // Reduz o range ao subset que tem dados disponíveis
+      let f = p.range.from, t = p.range.to;
+      // Encontra primeiro dia com dado dentro do range
+      const dates = availableDates
+        .filter(d => {
+          const dt = parseYmd(d);
+          return dt >= f && dt <= t;
+        })
+        .sort();
+      if (dates.length === 0) return { ...p, range: null };
+      return {
+        ...p,
+        range: { from: parseYmd(dates[0]), to: parseYmd(dates[dates.length - 1]) },
+      };
+    });
+  }, [presets, availableSet, availableDates]);
 
   // Visual tokens
   const bg     = isDark ? C.dark2 : "#FFFFFF";
@@ -63,7 +183,7 @@ const DateRangeFilter = ({ value, onChange, minDate, maxDate, isDark = true, ali
 
   const triggerLabel = isActive
     ? `${formatRangeShort(value)} · ${days}d`
-    : "Todo o período";
+    : "Período";
 
   const apply = (range) => {
     onChange(range);
@@ -71,10 +191,22 @@ const DateRangeFilter = ({ value, onChange, minDate, maxDate, isDark = true, ali
     setOpen(false);
   };
 
+  // Disabled matcher pro DayPicker — bloqueia datas fora do range válido
+  // OU sem dados disponíveis.
+  const disabledMatcher = useMemo(() => {
+    const matchers = [];
+    if (effectiveMin) matchers.push({ before: effectiveMin });
+    if (effectiveMax) matchers.push({ after: effectiveMax });
+    if (availableSet) {
+      matchers.push((day) => !availableSet.has(ymd(day)));
+    }
+    return matchers;
+  }, [effectiveMin, effectiveMax, availableSet]);
+
   return (
     <div ref={wrapRef} style={{ position: "relative", display: "inline-block" }}>
       {/* Trigger chip */}
-      <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+      <div ref={triggerRef} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
         <button
           type="button"
           onClick={() => setOpen(v => !v)}
@@ -127,105 +259,198 @@ const DateRangeFilter = ({ value, onChange, minDate, maxDate, isDark = true, ali
               lineHeight: 1,
               transition: "all 0.15s",
             }}
-            onMouseEnter={e => { e.currentTarget.style.color = C.red || "#E74C3C"; e.currentTarget.style.borderColor = `${C.red || "#E74C3C"}80`; }}
+            onMouseEnter={e => { e.currentTarget.style.color = "#E74C3C"; e.currentTarget.style.borderColor = "#E74C3C80"; }}
             onMouseLeave={e => { e.currentTarget.style.color = muted; e.currentTarget.style.borderColor = border; }}
           >×</button>
         )}
       </div>
 
-      {/* Popover */}
-      {open && (
-        <div
-          style={{
-            position: "absolute",
-            top: "calc(100% + 8px)",
-            [align]: 0,
-            zIndex: 1000,
-            background: bg,
-            border: `1px solid ${border}`,
-            borderRadius: 16,
-            boxShadow: isDark
-              ? "0 24px 64px rgba(0,0,0,0.55), 0 4px 12px rgba(0,0,0,0.4)"
-              : "0 24px 64px rgba(15,30,55,0.18), 0 4px 12px rgba(15,30,55,0.08)",
-            padding: 0,
-            display: "flex",
-            minWidth: 580,
-            maxWidth: "calc(100vw - 32px)",
-            overflow: "hidden",
-            animation: "drpFadeIn 0.15s ease-out",
-          }}
-        >
-          {/* Estilos do react-day-picker — temáticos */}
+      {/* Popover renderizado via Portal no body — flutua sobre toda a UI
+          sem ser limitado por stacking context do dashboard. */}
+      {open && createPortal(
+        <>
+          {/* Backdrop sutil pra dar contexto modal sem escurecer demais */}
+          <div
+            onClick={() => setOpen(false)}
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: isDark ? "rgba(0,0,0,0.35)" : "rgba(15,30,55,0.18)",
+              backdropFilter: "blur(2px)",
+              WebkitBackdropFilter: "blur(2px)",
+              zIndex: 9998,
+              animation: "drpBackdropFade 0.14s ease-out",
+            }}
+          />
+          <div
+            ref={popoverRef}
+            style={{
+              position: "fixed",
+              top: popPos.top,
+              left: popPos.left,
+              zIndex: 9999,
+              background: bg,
+              border: `1px solid ${border}`,
+              borderRadius: 14,
+              boxShadow: isDark
+                ? "0 16px 48px rgba(0,0,0,0.6), 0 2px 8px rgba(0,0,0,0.4)"
+                : "0 16px 48px rgba(15,30,55,0.16), 0 2px 8px rgba(15,30,55,0.08)",
+              display: "flex",
+              flexDirection: "row",
+              width: 460,
+              maxWidth: "calc(100vw - 32px)",
+              overflow: "hidden",
+              animation: "drpFadeIn 0.14s ease-out",
+            }}
+          >
+          {/* Estilos do react-day-picker — temáticos e compactos */}
           <style>{`
             @keyframes drpFadeIn {
-              from { opacity: 0; transform: translateY(-4px); }
-              to   { opacity: 1; transform: translateY(0); }
+              from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+              to   { opacity: 1; transform: translateY(0) scale(1); }
+            }
+            @keyframes drpBackdropFade {
+              from { opacity: 0; }
+              to   { opacity: 1; }
             }
             .drp-presets {
               display: flex;
               flex-direction: column;
               gap: 2px;
-              padding: 12px 8px;
+              padding: 10px 6px;
               background: ${bg2};
               border-right: 1px solid ${border};
-              min-width: 180px;
+              min-width: 138px;
             }
             .drp-presets button {
               text-align: left;
               background: transparent;
               border: none;
               color: ${text};
-              padding: 9px 14px;
-              border-radius: 8px;
+              padding: 8px 12px;
+              border-radius: 7px;
               cursor: pointer;
-              font-size: 13px;
+              font-size: 12.5px;
               font-weight: 500;
               transition: all 0.12s;
               white-space: nowrap;
             }
-            .drp-presets button:hover { background: ${isDark ? "rgba(51,151,185,0.12)" : "rgba(51,151,185,0.08)"}; color: ${accent}; }
+            .drp-presets button:hover:not(:disabled) {
+              background: ${isDark ? "rgba(51,151,185,0.14)" : "rgba(51,151,185,0.10)"};
+              color: ${accent};
+            }
             .drp-presets button.active { background: ${accent}; color: white; }
             .drp-presets button.active:hover { background: ${accent}; color: white; }
-            .drp-cal {
-              padding: 14px 16px 12px;
-              flex: 1;
-            }
+            .drp-presets button:disabled { opacity: 0.35; cursor: not-allowed; }
+
+            .drp-right { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+            .drp-cal { padding: 10px 12px 6px; }
+
+            /* Reset/override do react-day-picker pra respeitar tema */
             .drp-cal .rdp-root {
               --rdp-accent-color: ${accent};
-              --rdp-accent-background-color: ${accent}25;
-              --rdp-day-height: 36px;
-              --rdp-day-width: 36px;
-              --rdp-day_button-height: 32px;
-              --rdp-day_button-width: 32px;
-              --rdp-day_button-border-radius: 8px;
+              --rdp-accent-background-color: ${accent}22;
+              --rdp-day-height: 32px;
+              --rdp-day-width: 32px;
+              --rdp-day_button-height: 28px;
+              --rdp-day_button-width: 28px;
+              --rdp-day_button-border-radius: 6px;
               --rdp-selected-border: 2px solid ${accent};
               --rdp-range_middle-color: ${text};
-              --rdp-range_middle-background-color: ${accent}20;
+              --rdp-range_middle-background-color: ${accent}1f;
+              --rdp-range_start-color: white;
+              --rdp-range_start-background: ${accent};
+              --rdp-range_end-color: white;
+              --rdp-range_end-background: ${accent};
+              --rdp-today-color: ${accent};
+              --rdp-disabled-opacity: 0.28;
               color: ${text};
-              font-size: 13px;
+              font-size: 12.5px;
               margin: 0;
+              background: transparent;
             }
-            .drp-cal .rdp-month_caption { font-weight: 600; font-size: 14px; color: ${text}; }
-            .drp-cal .rdp-weekday { color: ${muted}; font-weight: 600; font-size: 11px; text-transform: uppercase; }
-            .drp-cal .rdp-day { color: ${text}; }
-            .drp-cal .rdp-day.rdp-disabled { color: ${muted}55; }
+            .drp-cal .rdp-months { background: transparent; }
+            .drp-cal .rdp-month_caption {
+              font-weight: 600;
+              font-size: 13px;
+              color: ${text};
+              text-transform: capitalize;
+              padding: 4px 0 6px;
+              background: transparent;
+            }
+            .drp-cal .rdp-weekdays { background: transparent; }
+            .drp-cal .rdp-weekday {
+              color: ${muted};
+              font-weight: 600;
+              font-size: 10.5px;
+              text-transform: uppercase;
+              background: transparent;
+              padding: 4px 0;
+            }
+            .drp-cal .rdp-day { color: ${text}; background: transparent; }
+            .drp-cal .rdp-day_button {
+              color: ${text};
+              background: transparent;
+              border: none;
+              font-size: 12.5px;
+            }
+            .drp-cal .rdp-day_button:hover:not([disabled]) {
+              background: ${isDark ? "rgba(255,255,255,0.07)" : "rgba(15,30,55,0.06)"};
+            }
+            .drp-cal .rdp-day.rdp-disabled,
+            .drp-cal .rdp-day.rdp-disabled .rdp-day_button {
+              color: ${muted};
+              opacity: 0.32;
+              cursor: not-allowed;
+              text-decoration: line-through;
+              text-decoration-thickness: 1px;
+              text-decoration-color: ${muted}50;
+            }
             .drp-cal .rdp-day.rdp-outside { color: ${muted}80; }
-            .drp-cal .rdp-day_button:hover:not([disabled]) { background: ${isDark ? "rgba(255,255,255,0.06)" : "rgba(15,30,55,0.06)"}; }
-            .drp-cal .rdp-chevron { fill: ${text}; }
+            .drp-cal .rdp-day.rdp-outside .rdp-day_button { color: ${muted}80; }
+            .drp-cal .rdp-day.rdp-today .rdp-day_button {
+              font-weight: 700;
+              color: ${accent};
+            }
+            .drp-cal .rdp-chevron {
+              fill: ${text};
+              opacity: 0.7;
+            }
+            .drp-cal .rdp-button_previous, .drp-cal .rdp-button_next {
+              color: ${text};
+              background: transparent;
+              border: none;
+              padding: 4px;
+              border-radius: 6px;
+            }
+            .drp-cal .rdp-button_previous:hover, .drp-cal .rdp-button_next:hover {
+              background: ${isDark ? "rgba(255,255,255,0.07)" : "rgba(15,30,55,0.06)"};
+            }
+            .drp-cal .rdp-nav { padding: 0 4px; }
+
             .drp-footer {
               display: flex;
               justify-content: space-between;
               align-items: center;
-              padding: 10px 16px 12px;
+              padding: 8px 12px 10px;
               border-top: 1px solid ${border};
-              gap: 12px;
+              gap: 8px;
+              background: ${bg};
             }
-            .drp-footer .drp-info { font-size: 12px; color: ${muted}; }
-            .drp-footer .drp-actions { display: flex; gap: 8px; }
+            .drp-footer .drp-info {
+              font-size: 11px;
+              color: ${muted};
+              flex: 1;
+              min-width: 0;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              white-space: nowrap;
+            }
+            .drp-footer .drp-actions { display: flex; gap: 6px; flex-shrink: 0; }
             .drp-footer button {
-              padding: 8px 14px;
-              border-radius: 8px;
-              font-size: 13px;
+              padding: 6px 12px;
+              border-radius: 7px;
+              font-size: 12px;
               font-weight: 600;
               cursor: pointer;
               border: 1px solid ${border};
@@ -240,11 +465,23 @@ const DateRangeFilter = ({ value, onChange, minDate, maxDate, isDark = true, ali
             }
             .drp-footer button.primary:disabled { opacity: 0.4; cursor: not-allowed; }
             .drp-footer button:hover:not(:disabled) { transform: translateY(-1px); }
+
+            @media (max-width: 520px) {
+              .drp-presets {
+                flex-direction: row;
+                overflow-x: auto;
+                min-width: 0;
+                border-right: none;
+                border-bottom: 1px solid ${border};
+                padding: 6px;
+              }
+              .drp-presets button { white-space: nowrap; font-size: 12px; padding: 6px 10px; }
+            }
           `}</style>
 
           {/* Presets */}
           <div className="drp-presets">
-            {presets.map(p => (
+            {presetsClamped.map(p => (
               <button
                 key={p.id}
                 className={matchesPreset(value, p) ? "active" : ""}
@@ -256,29 +493,28 @@ const DateRangeFilter = ({ value, onChange, minDate, maxDate, isDark = true, ali
             ))}
           </div>
 
-          {/* Calendar */}
-          <div style={{ display: "flex", flexDirection: "column", flex: 1 }}>
+          {/* Calendar + footer */}
+          <div className="drp-right">
             <div className="drp-cal">
               <DayPicker
                 mode="range"
                 locale={ptBR}
-                numberOfMonths={2}
+                numberOfMonths={1}
                 pagedNavigation
                 selected={draft || undefined}
                 onSelect={setDraft}
-                disabled={[
-                  ...(minDate ? [{ before: minDate }] : []),
-                  ...(maxDate ? [{ after: maxDate }] : []),
-                ]}
-                defaultMonth={draft?.from || maxDate || new Date()}
+                disabled={disabledMatcher}
+                defaultMonth={draft?.from || effectiveMax || new Date()}
                 weekStartsOn={0}
               />
             </div>
             <div className="drp-footer">
               <div className="drp-info">
                 {draft?.from && draft?.to
-                  ? `${formatRangeShort(draft)} · ${daysInRange(draft)} dia${daysInRange(draft) > 1 ? "s" : ""}`
-                  : "Selecione duas datas no calendário"}
+                  ? `${formatRangeShort(draft)} · ${daysInRange(draft)}d`
+                  : draft?.from
+                    ? "Selecione data final"
+                    : "Selecione duas datas"}
               </div>
               <div className="drp-actions">
                 <button onClick={() => { setDraft(value); setOpen(false); }}>Cancelar</button>
@@ -291,6 +527,8 @@ const DateRangeFilter = ({ value, onChange, minDate, maxDate, isDark = true, ali
             </div>
           </div>
         </div>
+        </>,
+        document.body
       )}
     </div>
   );

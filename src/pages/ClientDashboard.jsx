@@ -213,6 +213,12 @@ const ClientDashboard = ({ token, isAdmin, adminJwt }) => {
       ? Math.round(budgetTotal * (filterDays / campaignDays) * 100) / 100
       : budgetTotal;
 
+    // Datas com entrega real (extraídas do daily bruto, antes do filtro).
+    // Usado pro DateRangeFilter desabilitar dias sem dado.
+    const availableDates = Array.from(
+      new Set(dailyRaw.map(r => r.date).filter(Boolean))
+    ).sort();
+
     return {
       totals, daily0, detail0, detail,
       chartDisplay, chartVideo,
@@ -225,6 +231,7 @@ const ClientDashboard = ({ token, isAdmin, adminJwt }) => {
       campaignDays,
       budgetTotal,
       budgetProRata,
+      availableDates,
     };
   }, [data, mainRange]);
 
@@ -290,6 +297,7 @@ const ClientDashboard = ({ token, isAdmin, adminJwt }) => {
               onChange={setMainRange}
               minDate={parseYmd(camp.start_date)}
               maxDate={parseYmd(camp.end_date)}
+              availableDates={aggregates.availableDates}
               isDark={isDarkClient}
             />
           </div>

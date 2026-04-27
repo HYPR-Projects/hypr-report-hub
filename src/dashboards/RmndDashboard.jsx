@@ -16,18 +16,18 @@ import DateRangeFilter from "../components/DateRangeFilter";
 const RmndDashboard = ({ data, onClear, isDark = true }) => {
   const allRows = data.rows;
 
-  // Min/max derivados das próprias rows (não há campaign info aqui)
-  const dateBounds = useMemo(() => {
-    let min = null, max = null;
+  // Min/max + lista completa de datas com dados nas rows
+  const dateInfo = useMemo(() => {
+    const dates = new Set();
     allRows.forEach(r => {
       const d = getRowDate(r, ["Date", "DATE", "date"]);
-      if (!d) return;
-      if (!min || d < min) min = d;
-      if (!max || d > max) max = d;
+      if (d) dates.add(d);
     });
+    const sorted = [...dates].sort();
     return {
-      min: min ? parseYmd(min) : null,
-      max: max ? parseYmd(max) : null,
+      available: sorted,
+      min: sorted.length ? parseYmd(sorted[0]) : null,
+      max: sorted.length ? parseYmd(sorted[sorted.length - 1]) : null,
     };
   }, [allRows]);
 
@@ -86,8 +86,9 @@ const RmndDashboard = ({ data, onClear, isDark = true }) => {
           <DateRangeFilter
             value={range}
             onChange={setRange}
-            minDate={dateBounds.min}
-            maxDate={dateBounds.max}
+            minDate={dateInfo.min}
+            maxDate={dateInfo.max}
+            availableDates={dateInfo.available}
             isDark={isDark}
           />
           {onClear && (
