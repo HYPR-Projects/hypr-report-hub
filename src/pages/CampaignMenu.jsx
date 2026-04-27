@@ -1,40 +1,29 @@
 import { useState, useEffect } from "react";
 import { C, CL } from "../shared/theme";
-import {
-  listCampaigns,
-  checkCampaignToken,
-  listTeamMembers,
-  saveReportOwner,
-  saveLogo as saveLogoApi,
-  saveLoom as saveLoomApi,
-  saveSurvey as saveSurveyApi,
-} from "../lib/api";
+import { listCampaigns, listTeamMembers } from "../lib/api";
 import GlobalStyle from "../components/GlobalStyle";
 import Spinner from "../components/Spinner";
 import HyprLogo from "../components/HyprLogo";
 import MonthGroup from "../components/MonthGroup";
+import NewCampaignModal from "../components/modals/NewCampaignModal";
+import LoomModal from "../components/modals/LoomModal";
+import SurveyModal from "../components/modals/SurveyModal";
+import LogoModal from "../components/modals/LogoModal";
+import OwnerModal from "../components/modals/OwnerModal";
 
 const CampaignMenu = ({ user, onLogout, onOpenReport }) => {
   const [campaigns,     setCampaigns]     = useState([]);
   const [loading,       setLoading]       = useState(true);
   const [search,        setSearch]        = useState("");
-  const [showModal,     setShowModal]     = useState(false);
-  const [newToken,      setNewToken]      = useState("");
-  const [tokenData,     setTokenData]     = useState(null);
-  const [logoFile,      setLogoFile]      = useState(null);
-  const [logoPreview,   setLogoPreview]   = useState(null);
-  const [checking,      setChecking]      = useState(false);
   const [copied,        setCopied]        = useState(null);
-  const [loomModal,     setLoomModal]     = useState(null);
-  const [loomUrl,       setLoomUrl]       = useState("");
-  const [savingLoom,    setSavingLoom]    = useState(false);
-  const [surveyModal,   setSurveyModal]   = useState(null);
-  const [savingSurvey,  setSavingSurvey]  = useState(false);
-  const [surveyBlocks,  setSurveyBlocks]  = useState([{ nome: "", ctrlUrl: "", expUrl: "", focusRow: "" }]);
-  const [logoModal,     setLogoModal]     = useState(null);
-  const [logoModalFile, setLogoModalFile] = useState(null);
-  const [logoModalPreview, setLogoModalPreview] = useState(null);
-  const [savingLogoModal,  setSavingLogoModal]  = useState(false);
+
+  // Modais — cada um aberto/fechado via flag aqui no pai. State interno
+  // (URL, blocks, file, etc.) vive dentro do próprio modal.
+  const [showNewCampaign, setShowNewCampaign] = useState(false);
+  const [loomModal,       setLoomModal]       = useState(null); // shortToken | null
+  const [surveyModal,     setSurveyModal]     = useState(null); // shortToken | null
+  const [logoModal,       setLogoModal]       = useState(null); // shortToken | null
+  const [ownerModal,      setOwnerModal]      = useState(null); // { short_token, client_name, cp_email, cs_email } | null
 
   // New UI state
   const [isDark,       setIsDark]       = useState(true);
@@ -45,8 +34,6 @@ const CampaignMenu = ({ user, onLogout, onOpenReport }) => {
   // Owners — admin only
   const [teamMembers, setTeamMembers] = useState({ cps: [], css: [] });
   const [ownerFilter, setOwnerFilter] = useState("");          // email selecionado, "" = todos
-  const [ownerModal,  setOwnerModal]  = useState(null);        // { short_token, client_name, cp_email, cs_email }
-  const [savingOwner, setSavingOwner] = useState(false);
 
   // teamMap: email → display name (usado pelo CampaignCard pra mostrar nome curto nos chips)
   const teamMap = {};
@@ -75,27 +62,17 @@ const CampaignMenu = ({ user, onLogout, onOpenReport }) => {
     });
   };
 
-  const saveOwner = async () => {
-    if (!ownerModal) return;
-    setSavingOwner(true);
-    try {
-      await saveReportOwner({
-        short_token: ownerModal.short_token,
-        cp_email:    ownerModal.cp_email,
-        cs_email:    ownerModal.cs_email,
-      });
-      // Atualiza a campanha localmente — evita re-fetch da lista inteira
-      setCampaigns(prev => prev.map(c =>
-        c.short_token === ownerModal.short_token
-          ? { ...c, cp_email: ownerModal.cp_email || null, cs_email: ownerModal.cs_email || null }
-          : c
-      ));
-      setOwnerModal(null);
-    } catch (e) {
-      alert("Erro ao salvar owner: " + e.message);
-    } finally {
-      setSavingOwner(false);
-    }
+  /**
+   * Após save bem-sucedido do OwnerModal, atualiza a campanha localmente
+   * pra evitar re-fetch da lista inteira.
+   */
+  const handleOwnerSaved = (updated) => {
+    setCampaigns(prev => prev.map(c =>
+      c.short_token === updated.short_token
+        ? { ...c, cp_email: updated.cp_email, cs_email: updated.cs_email }
+        : c
+    ));
+    setOwnerModal(null);
   };
 
   const fetchList = async () => {
@@ -108,24 +85,15 @@ const CampaignMenu = ({ user, onLogout, onOpenReport }) => {
     }
   };
 
-  const checkToken = async () => {
-    if (!newToken.trim()) return; setChecking(true);
-    try {
-      const d = await checkCampaignToken(newToken.trim());
-      if (d?.campaign) setTokenData(d.campaign);
-      else alert("Token não encontrado.");
-    } catch { alert("Erro ao buscar token."); } finally { setChecking(false); }
-  };
-
-  const confirm = async () => {
-    if (!tokenData) return;
-    if (logoPreview) {
-      try {
-        await saveLogoApi({ short_token: tokenData.short_token, logo_base64: logoPreview });
-      } catch (e) { console.warn("Erro ao salvar logo", e); }
+  /**
+   * Após confirm bem-sucedido do NewCampaignModal, insere a campanha no topo
+   * da lista local (se ainda não estiver). Modal já tratou save do logo.
+   */
+  const handleNewCampaignConfirm = (tokenData) => {
+    if (!campaigns.find(c => c.short_token === tokenData.short_token)) {
+      setCampaigns(p => [tokenData, ...p]);
     }
-    if (!campaigns.find(c => c.short_token === tokenData.short_token)) setCampaigns(p => [tokenData, ...p]);
-    setShowModal(false); setNewToken(""); setTokenData(null); setLogoFile(null); setLogoPreview(null);
+    setShowNewCampaign(false);
   };
 
   const copyLink = (token) => {
@@ -133,44 +101,8 @@ const CampaignMenu = ({ user, onLogout, onOpenReport }) => {
     setCopied(token); setTimeout(() => setCopied(null), 2000);
   };
 
-  const openLoomModal = (token) => { setLoomModal(token); setLoomUrl(""); };
-
-  const saveLoom = async () => {
-    if (!loomUrl.trim()) return;
-    setSavingLoom(true);
-    try {
-      await saveLoomApi({ short_token: loomModal, loom_url: loomUrl.trim() });
-      alert("Loom salvo com sucesso!"); setLoomModal(null); setLoomUrl("");
-    } catch { alert("Erro ao salvar Loom."); } finally { setSavingLoom(false); }
-  };
-
-  const saveSurvey = async () => {
-    setSavingSurvey(true);
-    try {
-      for (const b of surveyBlocks) {
-        if (!b.ctrlUrl.trim() || !b.expUrl.trim()) { alert("Preencha os dois links em todas as perguntas."); setSavingSurvey(false); return; }
-        if (!b.nome.trim()) { alert("Preencha o nome de todas as perguntas."); setSavingSurvey(false); return; }
-      }
-      const payload = surveyBlocks.map(b => {
-        const out = { nome: b.nome.trim(), ctrlUrl: b.ctrlUrl.trim(), expUrl: b.expUrl.trim() };
-        if (b.focusRow && b.focusRow.trim()) out.focusRow = b.focusRow.trim();
-        return out;
-      });
-      await saveSurveyApi({ short_token: surveyModal, survey_data: JSON.stringify(payload) });
-      alert("Survey salvo com sucesso!"); setSurveyModal(null); setSurveyBlocks([{ nome: "", ctrlUrl: "", expUrl: "", focusRow: "" }]);
-    } catch { alert("Erro ao salvar survey."); } finally { setSavingSurvey(false); }
-  };
-
-  const openLogoModal = (token) => { setLogoModal(token); setLogoModalFile(null); setLogoModalPreview(null); };
-
-  const saveLogoModal = async () => {
-    if (!logoModalPreview) return;
-    setSavingLogoModal(true);
-    try {
-      await saveLogoApi({ short_token: logoModal, logo_base64: logoModalPreview });
-      alert("Logo salvo com sucesso!"); setLogoModal(null); setLogoModalFile(null); setLogoModalPreview(null);
-    } catch { alert("Erro ao salvar logo."); } finally { setSavingLogoModal(false); }
-  };
+  const openLoomModal  = (token) => setLoomModal(token);
+  const openLogoModal  = (token) => setLogoModal(token);
 
   // ── Theme vars ──
   const bg     = isDark ? C.dark  : CL.bg;
@@ -237,10 +169,13 @@ const CampaignMenu = ({ user, onLogout, onOpenReport }) => {
     teamMap,
   };
 
-  // Modal style helper
+  // Modal style helper — agrupa as cores que os modais consomem em um objeto
+  // único pra reduzir prop drilling. Os modais usam estes nomes literais
+  // (modalBg, modalBdr, inputBg, text, muted) — não renomear sem ajustar lá.
   const modalBg  = isDark ? C.dark2 : CL.bg2;
   const modalBdr = isDark ? C.dark3 : CL.border;
   const inputBg  = isDark ? C.dark3 : CL.bg3;
+  const modalTheme = { modalBg, modalBdr, inputBg, text, muted };
 
   return (
     <div style={{ minHeight: "100vh", width: "100%", background: bg, transition: "background 0.3s" }}>
@@ -308,7 +243,7 @@ const CampaignMenu = ({ user, onLogout, onOpenReport }) => {
             <h1 style={{ fontSize: 26, fontWeight: 800, color: text }}>Reports de Campanhas</h1>
             <p style={{ color: muted, fontSize: 13, marginTop: 4 }}>{campaigns.length} campanhas em 2026</p>
           </div>
-          <button onClick={() => setShowModal(true)} style={{
+          <button onClick={() => setShowNewCampaign(true)} style={{
             background: C.blue,
             color: "#fff",
             border: "none",
@@ -523,260 +458,53 @@ const CampaignMenu = ({ user, onLogout, onOpenReport }) => {
       </div>
 
       {/* ══ MODALS ══════════════════════════════════════════════════════════ */}
+      {/* Cada modal é um componente separado em src/components/modals/.
+          O CampaignMenu só sabe se está aberto/fechado; state interno
+          (URL digitada, blocks de survey, file selecionado) vive lá dentro. */}
 
-      {/* New Report modal */}
-      {showModal && (
-        <div style={{ position: "fixed", inset: 0, background: "#00000080", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 24 }}
-          onClick={e => { if (e.target === e.currentTarget) { setShowModal(false); setNewToken(""); setTokenData(null); } }}>
-          <div className="fade-in" style={{ background: modalBg, border: `1px solid ${modalBdr}`, borderRadius: 16, padding: 40, width: "100%", maxWidth: 480 }}>
-            <h2 style={{ fontSize: 20, fontWeight: 800, marginBottom: 8, color: text }}>Novo Report</h2>
-            <p style={{ color: muted, fontSize: 14, marginBottom: 28 }}>Digite o short_token da campanha para gerar o link de acesso do cliente.</p>
-            {!tokenData ? (
-              <>
-                <label style={{ fontSize: 12, color: muted, textTransform: "uppercase", letterSpacing: 1 }}>Short Token</label>
-                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                  <input value={newToken} onChange={e => setNewToken(e.target.value.toUpperCase())} onKeyDown={e => e.key === "Enter" && checkToken()} placeholder="ex: GEE-MAR26"
-                    style={{ flex: 1, background: inputBg, border: `1px solid ${modalBdr}`, borderRadius: 8, padding: "12px 14px", color: text, fontSize: 15, fontWeight: 700, letterSpacing: 1, outline: "none" }}/>
-                  <button onClick={checkToken} disabled={checking || !newToken.trim()} style={{ background: C.blue, color: C.white, border: "none", padding: "12px 20px", borderRadius: 8, cursor: "pointer", fontSize: 14, fontWeight: 700, minWidth: 80, opacity: !newToken.trim() ? 0.5 : 1 }}>
-                    {checking ? <Spinner size={16} color={C.white}/> : "Buscar"}
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <div style={{ background: `${C.blue}15`, border: `1px solid ${C.blue}30`, borderRadius: 10, padding: 20, marginBottom: 24 }}>
-                  <div style={{ fontSize: 12, color: C.blue, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>Campanha encontrada</div>
-                  <div style={{ fontSize: 18, fontWeight: 800, color: text }}>{tokenData.client_name}</div>
-                  <div style={{ fontSize: 14, color: muted, marginTop: 4 }}>{tokenData.campaign_name}</div>
-                  <div style={{ marginTop: 12, display: "flex", gap: 16 }}>
-                    <div><div style={{ fontSize: 11, color: muted }}>Início</div><div style={{ fontSize: 13, fontWeight: 600, color: text }}>{tokenData.start_date}</div></div>
-                    <div><div style={{ fontSize: 11, color: muted }}>Fim</div><div style={{ fontSize: 13, fontWeight: 600, color: text }}>{tokenData.end_date}</div></div>
-                    <div><div style={{ fontSize: 11, color: muted }}>Token</div><div style={{ fontSize: 13, fontWeight: 700, color: C.blue }}>{tokenData.short_token}</div></div>
-                  </div>
-                </div>
-                <div style={{ marginBottom: 20 }}>
-                  <div style={{ fontSize: 12, color: muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>Logo do Cliente (PNG sem fundo)</div>
-                  {logoPreview ? (
-                    <div style={{ display: "flex", alignItems: "center", gap: 12, background: inputBg, borderRadius: 8, padding: 12 }}>
-                      <img src={logoPreview} style={{ height: 40, objectFit: "contain", maxWidth: 120 }}/>
-                      <span style={{ fontSize: 12, color: muted, flex: 1 }}>Logo carregado</span>
-                      <button onClick={() => { setLogoFile(null); setLogoPreview(null); }} style={{ background: "none", border: "none", color: muted, cursor: "pointer", fontSize: 18, lineHeight: 1 }}>×</button>
-                    </div>
-                  ) : (
-                    <label style={{ display: "flex", alignItems: "center", gap: 10, background: inputBg, border: `1px dashed ${modalBdr}`, borderRadius: 8, padding: 12, cursor: "pointer" }}>
-                      <input type="file" accept="image/png" style={{ display: "none" }} onChange={e => {
-                        const file = e.target.files?.[0]; if (!file) return;
-                        setLogoFile(file);
-                        const reader = new FileReader(); reader.onload = ev => setLogoPreview(ev.target.result); reader.readAsDataURL(file);
-                      }}/>
-                      <span style={{ fontSize: 20 }}>🖼️</span>
-                      <span style={{ fontSize: 13, color: muted }}>Clique para inserir logo PNG</span>
-                    </label>
-                  )}
-                </div>
-                <div style={{ background: inputBg, borderRadius: 8, padding: 12, marginBottom: 20 }}>
-                  <div style={{ fontSize: 11, color: muted, marginBottom: 4 }}>Link do cliente (senha = short token)</div>
-                  <div style={{ fontSize: 13, color: C.blue, wordBreak: "break-all" }}>{window.location.origin}/report/{tokenData.short_token}</div>
-                </div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button onClick={() => { setTokenData(null); setNewToken(""); }} style={{ flex: 1, background: inputBg, color: muted, border: `1px solid ${modalBdr}`, padding: 12, borderRadius: 8, cursor: "pointer", fontSize: 14 }}>Voltar</button>
-                  <button onClick={confirm} style={{ flex: 2, background: C.blue, color: C.white, border: "none", padding: 12, borderRadius: 8, cursor: "pointer", fontSize: 14, fontWeight: 700 }}>✓ Confirmar e Adicionar</button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
+      {showNewCampaign && (
+        <NewCampaignModal
+          theme={modalTheme}
+          onClose={() => setShowNewCampaign(false)}
+          onConfirm={handleNewCampaignConfirm}
+        />
       )}
 
-      {/* Loom modal */}
       {loomModal && (
-        <div style={{ position: "fixed", inset: 0, background: "#00000080", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 24 }}
-          onClick={e => { if (e.target === e.currentTarget) { setLoomModal(null); setLoomUrl(""); } }}>
-          <div className="fade-in" style={{ background: modalBg, border: `1px solid ${modalBdr}`, borderRadius: 16, padding: 40, width: "100%", maxWidth: 480 }}>
-            <h2 style={{ fontSize: 20, fontWeight: 800, marginBottom: 8, color: text }}>🎥 Adicionar Loom</h2>
-            <p style={{ color: muted, fontSize: 14, marginBottom: 24 }}>Cole o link do Loom para <strong>{loomModal}</strong>.</p>
-            <input value={loomUrl} onChange={e => setLoomUrl(e.target.value)} placeholder="https://www.loom.com/share/..."
-              style={{ width: "100%", background: inputBg, border: `1px solid ${modalBdr}`, borderRadius: 8, padding: "12px 14px", color: text, fontSize: 14, outline: "none", marginBottom: 20 }}/>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={() => { setLoomModal(null); setLoomUrl(""); }} style={{ flex: 1, background: inputBg, color: muted, border: `1px solid ${modalBdr}`, padding: 12, borderRadius: 8, cursor: "pointer", fontSize: 14 }}>Cancelar</button>
-              <button onClick={saveLoom} disabled={savingLoom || !loomUrl.trim()} style={{ flex: 2, background: C.blue, color: C.white, border: "none", padding: 12, borderRadius: 8, cursor: "pointer", fontSize: 14, fontWeight: 700, opacity: !loomUrl.trim() ? 0.5 : 1 }}>
-                {savingLoom ? "Salvando..." : "✓ Salvar Loom"}
-              </button>
-            </div>
-          </div>
-        </div>
+        <LoomModal
+          shortToken={loomModal}
+          theme={modalTheme}
+          onClose={() => setLoomModal(null)}
+          onSaved={() => setLoomModal(null)}
+        />
       )}
 
-      {/* Survey modal */}
       {surveyModal && (
-        <div style={{ position: "fixed", inset: 0, background: "#00000080", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 24 }}
-          onClick={e => { if (e.target === e.currentTarget) { setSurveyModal(null); setSurveyBlocks([{ nome: "", ctrlUrl: "", expUrl: "", focusRow: "" }]); } }}>
-          <div className="fade-in" style={{ background: modalBg, border: `1px solid ${modalBdr}`, borderRadius: 16, padding: 32, width: "100%", maxWidth: 540, maxHeight: "90vh", overflowY: "auto" }}>
-            <h2 style={{ fontSize: 20, fontWeight: 800, marginBottom: 4, color: text }}>📋 Configurar Survey</h2>
-            <p style={{ color: muted, fontSize: 14, marginBottom: 6 }}>Links públicos do Typeform para <strong>{surveyModal}</strong>.</p>
-            <p style={{ color: muted, fontSize: 12, marginBottom: 20, lineHeight: 1.6 }}>
-              Cole a URL pública de cada form do Typeform (uma para o grupo controle, outra para o exposto).<br/>
-              No Typeform: <span style={{ color: C.blue }}>Share → Copiar link público</span>. As respostas atualizam automaticamente.
-            </p>
-            {surveyBlocks.map((block, idx) => (
-              <div key={idx} style={{ border: `1px solid ${modalBdr}`, borderRadius: 10, padding: 16, marginBottom: 12 }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: C.blue, textTransform: "uppercase", letterSpacing: 1 }}>Pergunta {idx + 1}</div>
-                  {surveyBlocks.length > 1 && (
-                    <button onClick={() => setSurveyBlocks(b => b.filter((_, i) => i !== idx))}
-                      style={{ background: "none", border: "none", color: muted, cursor: "pointer", fontSize: 18, lineHeight: 1, padding: 0 }}>×</button>
-                  )}
-                </div>
-                <div style={{ marginBottom: 10 }}>
-                  <div style={{ fontSize: 12, color: muted, marginBottom: 4 }}>Nome da pergunta</div>
-                  <input
-                    value={block.nome}
-                    onChange={e => setSurveyBlocks(b => b.map((bl, i) => i === idx ? { ...bl, nome: e.target.value } : bl))}
-                    placeholder="Ex: Ad Recall, Awareness — SP..."
-                    style={{ width: "100%", background: inputBg, border: `1px solid ${modalBdr}`, borderRadius: 7, padding: "9px 12px", color: text, fontSize: 13, outline: "none" }}
-                  />
-                </div>
-                <div style={{ marginBottom: 10 }}>
-                  <div style={{ fontSize: 12, color: muted, marginBottom: 4 }}>Link Typeform — Grupo Controle</div>
-                  <input
-                    value={block.ctrlUrl}
-                    onChange={e => setSurveyBlocks(b => b.map((bl, i) => i === idx ? { ...bl, ctrlUrl: e.target.value } : bl))}
-                    placeholder="https://hypr-mobi.typeform.com/to/..."
-                    style={{ width: "100%", background: inputBg, border: `1px solid ${block.ctrlUrl ? C.blue+"60" : modalBdr}`, borderRadius: 7, padding: "9px 12px", color: text, fontSize: 12, outline: "none", fontFamily: "monospace" }}
-                  />
-                </div>
-                <div>
-                  <div style={{ fontSize: 12, color: muted, marginBottom: 4 }}>Link Typeform — Grupo Exposto</div>
-                  <input
-                    value={block.expUrl}
-                    onChange={e => setSurveyBlocks(b => b.map((bl, i) => i === idx ? { ...bl, expUrl: e.target.value } : bl))}
-                    placeholder="https://hypr-mobi.typeform.com/to/..."
-                    style={{ width: "100%", background: inputBg, border: `1px solid ${block.expUrl ? C.blue+"60" : modalBdr}`, borderRadius: 7, padding: "9px 12px", color: text, fontSize: 12, outline: "none", fontFamily: "monospace" }}
-                  />
-                </div>
-                <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px dashed ${modalBdr}` }}>
-                  <div style={{ fontSize: 12, color: muted, marginBottom: 4 }}>
-                    Marca-foco para destaque <span style={{ opacity: 0.6 }}>(opcional)</span>
-                  </div>
-                  <input
-                    value={block.focusRow || ""}
-                    onChange={e => setSurveyBlocks(b => b.map((bl, i) => i === idx ? { ...bl, focusRow: e.target.value } : bl))}
-                    placeholder="Ex: Heineken — destaca essa linha visualmente"
-                    style={{ width: "100%", background: inputBg, border: `1px solid ${block.focusRow ? C.blue+"60" : modalBdr}`, borderRadius: 7, padding: "9px 12px", color: text, fontSize: 13, outline: "none" }}
-                  />
-                  <div style={{ fontSize: 11, color: muted, marginTop: 6, lineHeight: 1.5, opacity: 0.85 }}>
-                    O tipo da pergunta (choice ou matrix) é detectado automaticamente pela API do Typeform. Se for matrix, a marca digitada acima fica em destaque visual no relatório.
-                  </div>
-                </div>
-              </div>
-            ))}
-            <button onClick={() => setSurveyBlocks(b => [...b, { nome: "", ctrlUrl: "", expUrl: "", focusRow: "" }])}
-              style={{ width: "100%", background: "none", border: `1px dashed ${modalBdr}`, color: C.blue, borderRadius: 8, padding: "10px 0", cursor: "pointer", fontSize: 13, fontWeight: 600, marginBottom: 16 }}>
-              + Adicionar pergunta
-            </button>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={() => { setSurveyModal(null); setSurveyBlocks([{ nome: "", ctrlUrl: "", expUrl: "", focusRow: "" }]); }}
-                style={{ flex: 1, background: inputBg, color: muted, border: `1px solid ${modalBdr}`, padding: 12, borderRadius: 8, cursor: "pointer", fontSize: 14 }}>Cancelar</button>
-              <button disabled={savingSurvey} onClick={saveSurvey}
-                style={{ flex: 2, background: C.blue, color: C.white, border: "none", padding: 12, borderRadius: 8, cursor: "pointer", fontSize: 14, fontWeight: 700, opacity: savingSurvey ? 0.5 : 1 }}>
-                {savingSurvey ? "Salvando..." : `✓ Salvar ${surveyBlocks.length > 1 ? surveyBlocks.length + " perguntas" : "Survey"}`}
-              </button>
-            </div>
-          </div>
-        </div>
+        <SurveyModal
+          shortToken={surveyModal}
+          theme={modalTheme}
+          onClose={() => setSurveyModal(null)}
+          onSaved={() => setSurveyModal(null)}
+        />
       )}
 
-      {/* Logo modal */}
       {logoModal && (
-        <div style={{ position: "fixed", inset: 0, background: "#00000080", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 24 }}
-          onClick={e => { if (e.target === e.currentTarget) { setLogoModal(null); setLogoModalPreview(null); } }}>
-          <div className="fade-in" style={{ background: modalBg, border: `1px solid ${modalBdr}`, borderRadius: 16, padding: 40, width: "100%", maxWidth: 480 }}>
-            <h2 style={{ fontSize: 20, fontWeight: 800, marginBottom: 8, color: text }}>🖼️ Adicionar Logo</h2>
-            <p style={{ color: muted, fontSize: 14, marginBottom: 24 }}>Selecione o logo PNG para <strong>{logoModal}</strong>.</p>
-            <label style={{ display: "flex", alignItems: "center", gap: 10, background: inputBg, border: `1px solid ${modalBdr}`, borderRadius: 8, padding: "12px 14px", cursor: "pointer", marginBottom: 20 }}>
-              <input type="file" accept="image/png,image/jpeg" style={{ display: "none" }} onChange={e => {
-                const file = e.target.files?.[0]; if (!file) return;
-                setLogoModalFile(file);
-                const reader = new FileReader(); reader.onload = ev => setLogoModalPreview(ev.target.result); reader.readAsDataURL(file);
-              }}/>
-              <span style={{ fontSize: 20 }}>📁</span>
-              <span style={{ fontSize: 13, color: muted }}>{logoModalFile ? logoModalFile.name : "Clique para selecionar imagem"}</span>
-            </label>
-            {logoModalPreview && <img src={logoModalPreview} style={{ width: "100%", maxHeight: 120, objectFit: "contain", marginBottom: 20, borderRadius: 8 }}/>}
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={() => { setLogoModal(null); setLogoModalPreview(null); }} style={{ flex: 1, background: inputBg, color: muted, border: `1px solid ${modalBdr}`, padding: 12, borderRadius: 8, cursor: "pointer", fontSize: 14 }}>Cancelar</button>
-              <button onClick={saveLogoModal} disabled={savingLogoModal || !logoModalPreview} style={{ flex: 2, background: C.blue, color: C.white, border: "none", padding: 12, borderRadius: 8, cursor: "pointer", fontSize: 14, fontWeight: 700, opacity: !logoModalPreview ? 0.5 : 1 }}>
-                {savingLogoModal ? "Salvando..." : "✓ Salvar Logo"}
-              </button>
-            </div>
-          </div>
-        </div>
+        <LogoModal
+          shortToken={logoModal}
+          theme={modalTheme}
+          onClose={() => setLogoModal(null)}
+          onSaved={() => setLogoModal(null)}
+        />
       )}
-      {/* Owner modal — admin define quem é dono do report */}
+
       {ownerModal && (
-        <div style={{ position: "fixed", inset: 0, background: "#00000080", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 24 }}
-          onClick={e => { if (e.target === e.currentTarget) setOwnerModal(null); }}>
-          <div className="fade-in" style={{ background: modalBg, border: `1px solid ${modalBdr}`, borderRadius: 16, padding: 40, width: "100%", maxWidth: 520 }}>
-            <h2 style={{ fontSize: 20, fontWeight: 800, marginBottom: 4, color: text }}>👤 Gerenciar Owner</h2>
-            <p style={{ color: muted, fontSize: 13, marginBottom: 22 }}>
-              <strong>{ownerModal.client_name}</strong>
-              <span style={{ marginLeft: 8, fontFamily: "monospace", fontSize: 11, color: C.blue }}>{ownerModal.short_token}</span>
-            </p>
-
-            <p style={{ fontSize: 12, color: muted, marginBottom: 20, lineHeight: 1.5 }}>
-              Por padrão, o owner vem do <strong>De-Para Comercial</strong> (planilha). Esta tela permite sobrescrever manualmente. Deixe ambos em branco para voltar ao padrão automático.
-            </p>
-
-            {/* CP select */}
-            <label style={{ display: "block", fontSize: 11, color: muted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>
-              CP — Comercial
-            </label>
-            <select
-              value={ownerModal.cp_email}
-              onChange={e => setOwnerModal({ ...ownerModal, cp_email: e.target.value })}
-              style={{
-                width: "100%", background: inputBg, border: `1px solid ${modalBdr}`,
-                borderRadius: 8, padding: "10px 12px", color: text, fontSize: 14,
-                outline: "none", marginBottom: 16, appearance: "auto",
-              }}
-            >
-              <option value="">— sem CP atribuído —</option>
-              {teamMembers.cps.map(p => (
-                <option key={p.email} value={p.email}>{p.name} ({p.email})</option>
-              ))}
-            </select>
-
-            {/* CS select */}
-            <label style={{ display: "block", fontSize: 11, color: muted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>
-              CS — Customer Success
-            </label>
-            <select
-              value={ownerModal.cs_email}
-              onChange={e => setOwnerModal({ ...ownerModal, cs_email: e.target.value })}
-              style={{
-                width: "100%", background: inputBg, border: `1px solid ${modalBdr}`,
-                borderRadius: 8, padding: "10px 12px", color: text, fontSize: 14,
-                outline: "none", marginBottom: 24, appearance: "auto",
-              }}
-            >
-              <option value="">— sem CS atribuído —</option>
-              {teamMembers.css.map(p => (
-                <option key={p.email} value={p.email}>{p.name} ({p.email})</option>
-              ))}
-            </select>
-
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={() => setOwnerModal(null)}
-                style={{ flex: 1, background: inputBg, color: muted, border: `1px solid ${modalBdr}`, padding: 12, borderRadius: 8, cursor: "pointer", fontSize: 14 }}>
-                Cancelar
-              </button>
-              <button onClick={saveOwner} disabled={savingOwner}
-                style={{ flex: 2, background: C.blue, color: C.white, border: "none", padding: 12, borderRadius: 8, cursor: "pointer", fontSize: 14, fontWeight: 700, opacity: savingOwner ? 0.6 : 1 }}>
-                {savingOwner ? "Salvando..." : "✓ Salvar Owner"}
-              </button>
-            </div>
-          </div>
-        </div>
+        <OwnerModal
+          campaign={ownerModal}
+          teamMembers={teamMembers}
+          theme={modalTheme}
+          onClose={() => setOwnerModal(null)}
+          onSaved={handleOwnerSaved}
+        />
       )}
     </div>
   );
