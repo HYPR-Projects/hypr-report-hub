@@ -445,10 +445,10 @@ const CampaignMenu = ({ user, onLogout, onOpenReport }) => {
             onChange={e => setOwnerFilter(e.target.value)}
             title="Filtrar por owner HYPR"
             style={{
-              background: ownerFilter ? `${C.blue}18` : bg2,
+              backgroundColor: ownerFilter ? `${C.blue}18` : bg2,
               color:      ownerFilter ? C.blue : text,
               border:     `1px solid ${ownerFilter ? C.blue + "40" : border}`,
-              padding:    "10px 14px",
+              padding:    "10px 32px 10px 14px",
               borderRadius: 10,
               cursor:     "pointer",
               fontSize:   13,
@@ -456,10 +456,15 @@ const CampaignMenu = ({ user, onLogout, onOpenReport }) => {
               minWidth:   170,
               outline:    "none",
               appearance: "none",
+              WebkitAppearance: "none",
+              MozAppearance: "none",
+              // Setinha SVG. Usamos longhand backgroundImage/Repeat/Position/Size
+              // pra evitar conflito com o shorthand `background` que resetaria
+              // tudo e faria o SVG repetir como pattern (triângulos preenchendo).
               backgroundImage: `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path fill='${encodeURIComponent(ownerFilter ? C.blue : muted)}' d='M0 0l5 6 5-6z'/></svg>")`,
               backgroundRepeat: "no-repeat",
               backgroundPosition: "right 12px center",
-              paddingRight: 32,
+              backgroundSize: "10px 6px",
             }}
           >
             <option value="">👤 Todos os owners</option>
