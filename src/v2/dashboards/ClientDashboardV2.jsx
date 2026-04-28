@@ -46,10 +46,14 @@ import { DateRangeFilterV2 } from "../components/DateRangeFilterV2";
 import OverviewV2 from "./OverviewV2";
 import DisplayV2 from "./DisplayV2";
 import VideoV2 from "./VideoV2";
+import RmndV2 from "./RmndV2";
+import PdoohV2 from "./PdoohV2";
+import LoomV2 from "./LoomV2";
+import SurveyV2 from "./SurveyV2";
 
 // ─── Helpers de URL ────────────────────────────────────────────────────
 
-const VALID_TABS = ["overview", "display", "video"];
+const VALID_TABS = ["overview", "display", "video", "rmnd", "pdooh", "loom", "survey"];
 const VALID_TACTICS = ["O2O", "OOH"];
 
 function readTabFromUrl() {
@@ -236,6 +240,18 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
                 <TabsTrigger value="video" iconLeft={<VideoIcon />}>
                   Video
                 </TabsTrigger>
+                <TabsTrigger value="rmnd" iconLeft={<ShoppingCartIcon />}>
+                  RMND
+                </TabsTrigger>
+                <TabsTrigger value="pdooh" iconLeft={<MapPinIcon />}>
+                  PDOOH
+                </TabsTrigger>
+                <TabsTrigger value="loom" iconLeft={<FilmIcon />}>
+                  Video Loom
+                </TabsTrigger>
+                <TabsTrigger value="survey" iconLeft={<ClipboardIcon />}>
+                  Survey
+                </TabsTrigger>
               </TabsList>
 
               {/* Filtro de período compacto */}
@@ -279,6 +295,37 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
                 setTactic={setVideoTactic}
                 lines={videoLines}
                 setLines={setVideoLines}
+              />
+            </TabsContent>
+
+            <TabsContent value="rmnd">
+              <RmndV2
+                token={token}
+                data={data}
+                isAdmin={isAdmin}
+                adminJwt={adminJwt}
+              />
+            </TabsContent>
+
+            <TabsContent value="pdooh">
+              <PdoohV2
+                token={token}
+                data={data}
+                isAdmin={isAdmin}
+                adminJwt={adminJwt}
+              />
+            </TabsContent>
+
+            <TabsContent value="loom">
+              <LoomV2 loomUrl={data.loom} />
+            </TabsContent>
+
+            <TabsContent value="survey">
+              <SurveyV2
+                token={token}
+                data={data}
+                isAdmin={isAdmin}
+                adminJwt={adminJwt}
               />
             </TabsContent>
           </Tabs>
@@ -368,6 +415,83 @@ function VideoIcon() {
     >
       <polygon points="23 7 16 12 23 17 23 7" />
       <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+    </svg>
+  );
+}
+
+function ShoppingCartIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="9" cy="21" r="1" />
+      <circle cx="20" cy="21" r="1" />
+      <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6" />
+    </svg>
+  );
+}
+
+function MapPinIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
+      <circle cx="12" cy="10" r="3" />
+    </svg>
+  );
+}
+
+function FilmIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18" />
+      <line x1="7" y1="2" x2="7" y2="22" />
+      <line x1="17" y1="2" x2="17" y2="22" />
+      <line x1="2" y1="12" x2="22" y2="12" />
+      <line x1="2" y1="7" x2="7" y2="7" />
+      <line x1="2" y1="17" x2="7" y2="17" />
+      <line x1="17" y1="17" x2="22" y2="17" />
+      <line x1="17" y1="7" x2="22" y2="7" />
+    </svg>
+  );
+}
+
+function ClipboardIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
+      <rect x="9" y="3" width="6" height="4" rx="1" ry="1" />
+      <line x1="9" y1="12" x2="15" y2="12" />
+      <line x1="9" y1="16" x2="13" y2="16" />
     </svg>
   );
 }
