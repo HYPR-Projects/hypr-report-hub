@@ -1,37 +1,36 @@
 // src/v2/dashboards/OverviewV2.jsx
 //
-// Visão Geral V2.
+// Visão Geral V2 — redesenhada em PR-13 pra implementar fielmente o
+// mockup definido na auditoria visual ("hypr_report_redesign_v2.html").
 //
-// LAYOUT, NA ORDEM
-//   1. KpiCardV2 grid — 7 indicadores principais
-//   2. PacingBarV2 (Display + Video) — escondido com filtro ativo
-//   3. MediaSummaryV2 — Negociado vs Efetivo destacado (diferencial do ADR)
-//   4. DualChartV2 — séries diárias Display (Imp.Visíveis × CTR) e Video
-//      (Views 100% × VTR)
-//   5. CollapsibleSectionV2 + DataTableV2 — tabela detalhada com filtro
-//      de mídia e download CSV
-//   6. AlcanceFrequenciaV2 — bloco editável admin
+// LAYOUT, NA ORDEM (top → bottom)
+//   1. InsightBannerV2 (1-N) — callouts auto-gerados de pacing/economia
+//   2. Hero KPI (Custo Efetivo) + grid de 4 KPIs auxiliares com sparklines
+//   3. ComparisonRow — 2 cards "Negociado vs Efetivo" (CPM Display + CPCV Video)
+//   4. Pacing Display + Pacing Video lado a lado, com marker "esperado hoje"
+//   5. Sumário por mídia (DISPLAY + VIDEO) — 2 cards lado a lado
+//   6. Charts diários (Display Imp×CTR + Video Views×VTR)
+//   7. DailyAggregateTableV2 — tabela "Entrega Agregada por Dia" (collapsible, aberto)
+//   8. CollapsibleSection + DataTable — "Detalhamento por Linha" (collapsible, fechado)
+//   9. AlcanceFrequenciaV2 — admin edita, cliente vê read-only
 //
-// HISTÓRICO
-//   PRs 06–09 (Fase 2) introduziram este dashboard como filho único do
-//   ClientDashboardV2. Na PR-10 (commit 3) o shell ganhou Tabs Radix e
-//   passou a hospedar mais de uma tab — wrapper visual (canvas, max-w),
-//   CampaignHeader, filtro de período e o useMemo de aggregates SUBIRAM
-//   pro shell. Este componente passou a receber `aggregates` por prop.
-//
-// CONTRATO COM ClientDashboardV2
-//   Recebe `data`, `aggregates` (já calculado para mainRange atual),
-//   token, isAdmin, adminJwt. Não faz fetch nem gerencia período —
-//   tudo isso é responsabilidade do shell.
+// Quando há filtro de período ativo, Pacing some (não faz sentido em
+// janela parcial). Insights podem se ajustar no texto (verbo passado vs
+// presente) — TODO Fase 4.
 
 import { fmt, fmtR } from "../../shared/format";
 
 import { KpiCardV2 } from "../components/KpiCardV2";
+import { HeroKpiCardV2 } from "../components/HeroKpiCardV2";
+import { SparklineV2 } from "../components/SparklineV2";
+import { InsightBannerV2, buildInsights } from "../components/InsightBannerV2";
+import { ComparisonCardV2 } from "../components/ComparisonCardV2";
 import { PacingBarV2 } from "../components/PacingBarV2";
 import { MediaSummaryV2 } from "../components/MediaSummaryV2";
 import { DualChartV2 } from "../components/DualChartV2";
 import { CollapsibleSectionV2 } from "../components/CollapsibleSectionV2";
 import { DataTableV2 } from "../components/DataTableV2";
+import { DailyAggregateTableV2 } from "../components/DailyAggregateTableV2";
 import { AlcanceFrequenciaV2 } from "../components/AlcanceFrequenciaV2";
 
 export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt }) {
@@ -40,86 +39,186 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt 
     totalImpressions, totalCusto, totalCustoOver,
     display, video, totals,
     isFiltered, budgetProRata, budgetTotal,
-    chartDisplay, chartVideo, detail,
+    chartDisplay, chartVideo, detail, daily0,
   } = aggregates;
 
   const hasDisplay = display.length > 0;
   const hasVideo = video.length > 0;
   const totalViews100 = totals.reduce((s, t) => s + (t.completions || 0), 0);
 
+  // Insights gerados a partir de pacing + economia.
+  const insights = buildInsights({
+    display,
+    video,
+    totals,
+    isFiltered,
+    isClosedPeriod: false, // TODO: derivar de camp.end_date < today
+  });
+
+  // Sparklines: pegamos os últimos N pontos da série diária.
+  const impSparklineValues = chartDisplay
+    .slice(-14)
+    .map((d) => d.viewable_impressions || 0);
+  const viewsSparklineValues = chartVideo
+    .slice(-14)
+    .map((d) => d.video_view_100 || 0);
+  const costSparklineValues = (chartDisplay.length || chartVideo.length)
+    ? mergeCostSeries(chartDisplay, chartVideo).slice(-14).map((d) => d.cost)
+    : [];
+
+  // Pacing helpers.
+  const pacingDisplay = computeDisplayPacing(display, camp);
+  const pacingVideo = video[0]?.pacing || 0;
+  const expectedToday = computeExpectedTodayPct(camp);
+
+  // CPM/CPCV Negociado vs Efetivo (pra ComparisonCard).
+  const cpmNegociado = camp.cpm_negociado || display[0]?.deal_cpm_amount || 0;
+  const cpmEfetivo = aggregateEffectiveCpm(display);
+  const cpcvNegociado = camp.cpcv_negociado || video[0]?.deal_cpcv_amount || 0;
+  const cpcvEfetivo = aggregateEffectiveCpcv(video);
+
+  // Pacing Geral % — média ponderada por budget de Display + Video.
+  const pacingGeral = computePacingGeral(display, video, camp);
+
+  // Custo formatado pra hero (separa centavos pra estilo do mockup).
+  const { main: custoMain, cents: custoCents } = splitCents(totalCusto);
+
   return (
     <div className="space-y-6">
-      {/* KPI grid */}
-      <section>
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-fg-subtle mb-3">
-          Indicadores
-        </h2>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-          <KpiCardV2
-            label={isFiltered ? "Budget (período)" : "Budget Total"}
-            value={fmtR(isFiltered ? budgetProRata : budgetTotal)}
-            hint={
-              isFiltered
-                ? "Budget contratado proporcionalizado pelo período do filtro (linear, dias/dias-totais)."
-                : "Budget contratado total da campanha."
-            }
-          />
+      {/* ─── 1. Insights ─────────────────────────────────────────────── */}
+      {insights.length > 0 && (
+        <div className="space-y-2">
+          {insights.map((ins, i) => (
+            <InsightBannerV2 key={i} variant={ins.variant} title={ins.title}>
+              {ins.body}
+            </InsightBannerV2>
+          ))}
+        </div>
+      )}
 
-          {hasDisplay && (
-            <KpiCardV2
-              label="CPM Negociado"
-              value={fmtR(camp.cpm_negociado)}
-              hint="CPM acordado em contrato — aplicado às mídias Display."
-            />
-          )}
-
-          {hasVideo && (
-            <KpiCardV2
-              label="CPCV Negociado"
-              value={fmtR(camp.cpcv_negociado)}
-              hint="Custo por completion negociado — aplicado às mídias Video."
-            />
-          )}
-
-          <KpiCardV2
-            label="Imp. Visíveis"
-            value={fmt(totalImpressions)}
-            hint="Soma de viewable impressions no período selecionado."
-          />
-
-          {hasVideo && (
-            <KpiCardV2
-              label="Views 100%"
-              value={fmt(totalViews100)}
-              hint="Completions de vídeo (visualizações até 100%)."
-            />
-          )}
-
-          <KpiCardV2
-            label="Custo Efetivo"
-            value={fmtR(totalCusto)}
-            accent
-            hint="Custo real entregue no período — derivado do delivery × CPM/CPCV efetivo."
-          />
-
-          <KpiCardV2
-            label="Custo Efetivo + Over"
-            value={fmtR(totalCustoOver)}
-            accent
-            hint="Inclui valor da over-delivery (entrega acima do contratado)."
+      {/* ─── 2. Hero KPI + auxiliares ────────────────────────────────── */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
+        {/* Hero ocupa 2 colunas em xl */}
+        <div className="md:col-span-2 xl:col-span-2">
+          <HeroKpiCardV2
+            icon={<DollarIcon />}
+            label="Custo Efetivo · Total"
+            value={custoMain}
+            cents={custoCents}
+            sparklineValues={costSparklineValues}
+            // deltaPercent é null por enquanto — backend ainda não expõe
+            // "vs período anterior". TODO Fase 4: query comparativa.
           />
         </div>
-      </section>
 
-      {/* Pacing — escondido quando há filtro de período (não faz sentido
-          em janela parcial). Display calcula no front (backend não expõe
-          pacing display agregado). Video tem pacing já no row[0] do backend. */}
+        <KpiCardV2
+          label="Budget"
+          value={fmtR(isFiltered ? budgetProRata : budgetTotal)}
+          hint={
+            isFiltered
+              ? "Budget contratado proporcionalizado pelo período do filtro."
+              : "Budget contratado total da campanha."
+          }
+        />
+
+        <KpiCardV2
+          label="Imp. Visíveis"
+          value={fmt(totalImpressions)}
+          hint="Soma de viewable impressions no período."
+          sparkline={
+            impSparklineValues.length >= 2 ? (
+              <SparklineV2
+                values={impSparklineValues}
+                stroke="var(--color-signature-light)"
+                strokeWidth={1.5}
+                width={100}
+                height={20}
+                className="opacity-70"
+              />
+            ) : null
+          }
+        />
+
+        {hasVideo ? (
+          <KpiCardV2
+            label="Views 100%"
+            value={fmt(totalViews100)}
+            hint="Completions de vídeo (visualizações até 100%)."
+            sparkline={
+              viewsSparklineValues.length >= 2 ? (
+                <SparklineV2
+                  values={viewsSparklineValues}
+                  stroke="var(--color-signature-light)"
+                  strokeWidth={1.5}
+                  width={100}
+                  height={20}
+                  className="opacity-70"
+                />
+              ) : null
+            }
+          />
+        ) : (
+          <KpiCardV2
+            label="Custo + Over"
+            value={fmtR(totalCustoOver)}
+            accent
+            hint="Inclui valor da over-delivery."
+          />
+        )}
+      </div>
+
+      {/* Pacing Geral pill — abaixo dos hero cards quando faz sentido */}
+      {!isFiltered && (hasDisplay || hasVideo) && pacingGeral > 0 && (
+        <div className="flex items-center gap-3 -mt-2">
+          <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-surface border border-border text-xs font-semibold text-fg-muted">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-fg-subtle">
+              Pacing Geral
+            </span>
+            <span
+              className="tabular-nums font-bold"
+              style={{ color: pacingColor(pacingGeral) }}
+            >
+              {fmt(pacingGeral, 1)}%
+            </span>
+            {pacingGeral >= 90 && pacingGeral <= 110 && (
+              <span className="inline-flex items-center gap-1 text-success text-[10px]">
+                <CheckIcon className="size-2.5" /> no esperado
+              </span>
+            )}
+          </span>
+        </div>
+      )}
+
+      {/* ─── 3. Comparison Row (Negociado vs Efetivo) ────────────────── */}
+      {(hasDisplay || hasVideo) && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          {hasDisplay && (
+            <ComparisonCardV2
+              title="CPM Display · Negociado vs Efetivo"
+              negociado={cpmNegociado}
+              efetivo={cpmEfetivo}
+              formatValue={(v) => fmtR(v)}
+            />
+          )}
+          {hasVideo && (
+            <ComparisonCardV2
+              title="CPCV Video · Negociado vs Efetivo"
+              negociado={cpcvNegociado}
+              efetivo={cpcvEfetivo}
+              formatValue={(v) => `R$ ${v.toFixed(3).replace(".", ",")}`}
+            />
+          )}
+        </div>
+      )}
+
+      {/* ─── 4. Pacing Display + Video ───────────────────────────────── */}
       {!isFiltered && (hasDisplay || hasVideo) && (
-        <section className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {hasDisplay && (
             <PacingBarV2
               label="Pacing Display"
-              pacing={computeDisplayPacing(display, camp)}
+              pacing={pacingDisplay}
+              expectedPct={expectedToday}
               budget={display.reduce(
                 (s, r) => s + (r.o2o_display_budget || 0) + (r.ooh_display_budget || 0),
                 0,
@@ -130,7 +229,8 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt 
           {hasVideo && (
             <PacingBarV2
               label="Pacing Video"
-              pacing={video[0]?.pacing || 0}
+              pacing={pacingVideo}
+              expectedPct={expectedToday}
               budget={video.reduce(
                 (s, r) => s + (r.o2o_video_budget || 0) + (r.ooh_video_budget || 0),
                 0,
@@ -138,10 +238,10 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt 
               cost={video.reduce((s, r) => s + (r.effective_total_cost || 0), 0)}
             />
           )}
-        </section>
+        </div>
       )}
 
-      {/* Resumo por mídia: Negociado vs Efetivo (diferencial citado no ADR) */}
+      {/* ─── 5. Resumo por mídia ─────────────────────────────────────── */}
       {(hasDisplay || hasVideo) && (
         <section>
           <h2 className="text-xs font-semibold uppercase tracking-wider text-fg-subtle mb-3">
@@ -154,13 +254,13 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt 
         </section>
       )}
 
-      {/* Charts diários — só se tiver dados */}
+      {/* ─── 6. Charts diários ───────────────────────────────────────── */}
       {(chartDisplay.length > 0 || chartVideo.length > 0) && (
         <section>
           <h2 className="text-xs font-semibold uppercase tracking-wider text-fg-subtle mb-3">
             Performance diária
           </h2>
-          <div className="space-y-3">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
             {chartDisplay.length > 0 && (
               <div className="rounded-xl border border-border bg-surface p-5">
                 <div className="text-[11px] font-bold uppercase tracking-widest text-signature mb-3">
@@ -195,37 +295,51 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt 
         </section>
       )}
 
-      {/* Tabela detalhada (colapsável) */}
-      {detail.length > 0 && (
-        <section>
-          <CollapsibleSectionV2 title="Tabela Consolidada">
-            <DataTableV2 detail={detail} campaignName={camp.campaign_name} />
-          </CollapsibleSectionV2>
-        </section>
+      {/* ─── 7. Tabela Entrega Agregada por Dia ─────────────────────── */}
+      {daily0 && daily0.length > 0 && (
+        <CollapsibleSectionV2 title="Entrega Agregada por Dia" defaultOpen>
+          <DailyAggregateTableV2
+            daily={daily0}
+            campaignName={camp.campaign_name}
+          />
+        </CollapsibleSectionV2>
       )}
 
-      {/* Alcance & Frequência */}
-      <section>
-        <AlcanceFrequenciaV2
-          token={token}
-          isAdmin={isAdmin}
-          adminJwt={adminJwt}
-          initialAlcance={data.alcance}
-          initialFrequencia={data.frequencia}
-        />
-      </section>
+      {/* ─── 8. Detalhamento granular por linha ─────────────────────── */}
+      {detail.length > 0 && (
+        <CollapsibleSectionV2 title="Detalhamento por Linha">
+          <DataTableV2 detail={detail} campaignName={camp.campaign_name} />
+        </CollapsibleSectionV2>
+      )}
+
+      {/* ─── 9. Alcance & Frequência ────────────────────────────────── */}
+      <AlcanceFrequenciaV2
+        token={token}
+        isAdmin={isAdmin}
+        adminJwt={adminJwt}
+        initialAlcance={data.alcance}
+        initialFrequencia={data.frequencia}
+      />
     </div>
   );
 }
 
-// ─── Helpers locais ──────────────────────────────────────────────────────
-//
-// Pacing Display calculado no front (backend só calcula Video). Lógica
-// idêntica à inline do Legacy em components/dashboard-tabs/OverviewTab.jsx
-// — replicada aqui pra não obrigar refactor do Legacy nessa PR.
-//
-// Quando o Legacy for removido (pós-Fase 7), essa função pode ser
-// movida pra shared/aggregations.js ou ficar como é.
+// ─── Helpers locais ───────────────────────────────────────────────────
+
+function splitCents(value) {
+  // R$ 184220.40 → { main: "R$ 184.220", cents: ",40" }
+  if (value == null || Number.isNaN(value)) return { main: "—", cents: "" };
+  const formatted = fmtR(value);
+  // fmtR retorna algo como "R$ 184.220,40"
+  const idx = formatted.lastIndexOf(",");
+  if (idx < 0) return { main: formatted, cents: "" };
+  return {
+    main: formatted.slice(0, idx),
+    cents: formatted.slice(idx),
+  };
+}
+
+// Pacing display lógica idêntica à OverviewV2 anterior.
 function computeDisplayPacing(displayRows, camp) {
   if (!displayRows.length || !camp.start_date || !camp.end_date) return 0;
 
@@ -263,4 +377,116 @@ function computeDisplayPacing(displayRows, camp) {
   const elapsed = now < start ? 0 : Math.floor((now - start) / 864e5);
   const expected = totalNeg * (elapsed / total);
   return expected > 0 ? (delivered / expected) * 100 : 0;
+}
+
+// Pacing geral % = média ponderada por budget contratado de Display + Video.
+function computePacingGeral(display, video, camp) {
+  const dpacing = computeDisplayPacing(display, camp);
+  const vpacing = video[0]?.pacing || 0;
+
+  const dbudget = display.reduce(
+    (s, r) => s + (r.o2o_display_budget || 0) + (r.ooh_display_budget || 0),
+    0,
+  );
+  const vbudget = video.reduce(
+    (s, r) => s + (r.o2o_video_budget || 0) + (r.ooh_video_budget || 0),
+    0,
+  );
+  const total = dbudget + vbudget;
+  if (!total) return 0;
+
+  return (dpacing * dbudget + vpacing * vbudget) / total;
+}
+
+// % do tempo decorrido da campanha — onde o pacing "deveria estar" hoje
+// (linear). Retorna 0 antes do início, 100 após o fim.
+function computeExpectedTodayPct(camp) {
+  if (!camp.start_date || !camp.end_date) return 0;
+  const [sy, sm, sd] = camp.start_date.split("-").map(Number);
+  const [ey, em, ed] = camp.end_date.split("-").map(Number);
+  const start = new Date(sy, sm - 1, sd);
+  const end = new Date(ey, em - 1, ed);
+  const now = new Date();
+  if (now < start) return 0;
+  if (now > end) return 100;
+  const total = (end - start) / 864e5 + 1;
+  const elapsed = (now - start) / 864e5 + 1;
+  return (elapsed / total) * 100;
+}
+
+// CPM efetivo agregado = sum(cost) / sum(impressions) * 1000.
+function aggregateEffectiveCpm(displayRows) {
+  if (!displayRows.length) return 0;
+  const cost = displayRows.reduce(
+    (s, r) => s + (r.effective_total_cost || 0),
+    0,
+  );
+  const imp = displayRows.reduce(
+    (s, r) => s + (r.viewable_impressions || 0),
+    0,
+  );
+  return imp > 0 ? (cost / imp) * 1000 : 0;
+}
+
+// CPCV efetivo agregado = sum(cost) / sum(views100).
+function aggregateEffectiveCpcv(videoRows) {
+  if (!videoRows.length) return 0;
+  // videoRows são totals[] já agregados — usar effective_cpcv_amount
+  // do primeiro registro (backend já calcula).
+  return videoRows[0]?.effective_cpcv_amount || 0;
+}
+
+// Para a sparkline de custo do hero — combina display+video por data.
+function mergeCostSeries(chartDisplay, chartVideo) {
+  const map = {};
+  for (const r of chartDisplay) {
+    map[r.date] = (map[r.date] || 0) + (r.effective_total_cost || 0);
+  }
+  for (const r of chartVideo) {
+    map[r.date] = (map[r.date] || 0) + (r.effective_total_cost || 0);
+  }
+  return Object.entries(map)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, cost]) => ({ date, cost }));
+}
+
+function pacingColor(pct) {
+  if (pct >= 90 && pct <= 110) return "var(--color-success)";
+  if (pct >= 70) return "var(--color-warning)";
+  return "var(--color-danger)";
+}
+
+// ─── Ícones ──────────────────────────────────────────────────────────
+function DollarIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <line x1="12" y1="1" x2="12" y2="23" />
+      <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+    </svg>
+  );
+}
+
+function CheckIcon({ className }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  );
 }

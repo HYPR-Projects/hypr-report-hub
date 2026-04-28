@@ -1,51 +1,25 @@
 // src/v2/dashboards/ClientDashboardV2.jsx
 //
-// Shell do dashboard V2.
+// Shell do dashboard V2 — redesenhado em PR-13 pra bater com o mockup.
 //
-// RESPONSABILIDADES
-//   - Buscar dados da campanha via getCampaign(token)
-//   - Gerenciar state global do dashboard:
-//       • mainRange (filtro de período)         → ?from=&to=
-//       • tab ativa (overview|display|video)    → ?tab=
-//       • tactic do Display (O2O|OOH)           → ?display_tactic=
-//       • tactic do Video (O2O|OOH)             → ?video_tactic=
-//   - Sincronizar com botão voltar/avançar do navegador (popstate)
+// LAYOUT (top → bottom):
+//   1. TopBarV2 — branding "Report Hub" + share + voltar à versão atual
+//   2. CampaignHeaderV2 — hero card com gradient + nome campanha + token badge
+//   3. Filtro de período (compacto, alinhado à direita)
+//   4. Tabs Radix com ícones: Visão Geral / Display / Video
+//      (no Legacy tem RMND, PDOOH, VIDEO LOOM, SURVEY também — virão em PR-17+)
+//   5. TabsContent — OverviewV2 / DisplayV2 / VideoV2
+//
+// RESPONSABILIDADES (mantidas da PR-10):
+//   - Buscar dados via getCampaign(token)
+//   - Gerenciar state global (mainRange, tab ativa, tactic Display, tactic Video)
+//   - Sincronizar com URL (popstate)
 //   - Renderizar loading state (Skeleton) e error state
-//   - Renderizar layout master: CampaignHeader, filtro de período,
-//     Tabs Radix com painéis Visão Geral, Display e Video
-//
-// POR QUE STATE GLOBAL VIVE NO SHELL
-//   Período é compartilhado entre as tabs — trocar a janela e mudar
-//   de tab tem que preservar o filtro. Tab/tactics também ficam aqui
-//   pra que o popstate listener seja único e reaja a TODAS as
-//   mudanças de URL ao mesmo tempo.
-//
-//   Quando outras tabs (RMND, PDOOH, etc) entrarem, basta adicionar
-//   um <TabsTrigger> e <TabsContent>, sem mudar nada na arquitetura.
-//
-// POR QUE TACTICS DISPLAY E VIDEO SÃO INDEPENDENTES
-//   Um cliente pode ter Display rodando só em O2O e Video só em OOH
-//   (ou qualquer combinação). Acumular num \`tactic\` global daria UX
-//   confusa — usuário trocaria entre tabs e veria O2O/OOH alternando
-//   sem motivo aparente. O Legacy mantém \`dispTab\` e \`vidTab\`
-//   separados pelo mesmo motivo.
-//
-// FILTRO DE AUDIÊNCIA (lines) é state local POR TAB
-//   \`displayLines\` e \`videoLines\` — efêmeros, UX-only, e a string
-//   ficaria gigante na URL. Resetam ao trocar tactic dentro da
-//   respectiva tab.
-//
-// PERSISTÊNCIA DE URL
-//   Tudo via history.replaceState (não pushState) — não polui o
-//   histórico do navegador. O usuário pode voltar/avançar entre
-//   páginas/tokens sem ficar pulando entre estados intermediários
-//   do mesmo dashboard. popstate só dispara quando alguém faz
-//   navegação real (back/forward, click em link externo).
 
 import { useEffect, useMemo, useState } from "react";
 
-import "../v2.css";              // entry CSS do V2
-import "../../ui/typography";    // carrega Urbanist (efeito colateral)
+import "../v2.css";
+import "../../ui/typography";
 
 import { getCampaign } from "../../lib/api";
 import { setReportVersion } from "../../shared/version";
@@ -56,7 +30,6 @@ import {
   writeRangeToUrl,
 } from "../../shared/dateFilter";
 
-import { Button } from "../../ui/Button";
 import { Skeleton } from "../../ui/Skeleton";
 import { TooltipProvider } from "../../ui/Tooltip";
 import {
@@ -66,6 +39,7 @@ import {
   TabsContent,
 } from "../../ui/Tabs";
 
+import { TopBarV2 } from "../components/TopBarV2";
 import { CampaignHeaderV2 } from "../components/CampaignHeaderV2";
 import { DateRangeFilterV2 } from "../components/DateRangeFilterV2";
 
@@ -74,9 +48,6 @@ import DisplayV2 from "./DisplayV2";
 import VideoV2 from "./VideoV2";
 
 // ─── Helpers de URL ────────────────────────────────────────────────────
-//
-// Inline porque são consumidos só aqui. Quando aparecer terceira tab
-// ou outro state URL-persistido, vale extrair pra src/shared/urlState.js.
 
 const VALID_TABS = ["overview", "display", "video"];
 const VALID_TACTICS = ["O2O", "OOH"];
@@ -98,12 +69,11 @@ function writeTabToUrl(tab) {
     if (tab === "overview") url.searchParams.delete("tab");
     else url.searchParams.set("tab", tab);
     window.history.replaceState({}, "", url.toString());
-  } catch { /* noop */ }
+  } catch {
+    /* noop */
+  }
 }
 
-// Tactic helpers parametrizados — Display e Video têm tactics
-// independentes (um cliente pode ter Display só em O2O e Video só em
-// OOH). Param key configurável: "display_tactic" ou "video_tactic".
 function readTacticFromUrl(paramKey) {
   if (typeof window === "undefined") return "O2O";
   try {
@@ -121,7 +91,9 @@ function writeTacticToUrl(paramKey, tactic) {
     if (tactic === "O2O") url.searchParams.delete(paramKey);
     else url.searchParams.set(paramKey, tactic);
     window.history.replaceState({}, "", url.toString());
-  } catch { /* noop */ }
+  } catch {
+    /* noop */
+  }
 }
 
 // ─── Componente principal ──────────────────────────────────────────────
@@ -130,7 +102,6 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
 
-  // State global do dashboard
   const [mainRange, setMainRangeState] = useState(() => readRangeFromUrl());
   const [tab, setTabState] = useState(() => readTabFromUrl());
   const [displayTactic, setDisplayTacticState] = useState(() =>
@@ -140,14 +111,9 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
     readTacticFromUrl("video_tactic"),
   );
 
-  // Filtro de audiência por tab — state local ao shell por simetria,
-  // mas NÃO persiste em URL (UX efêmero, string ficaria gigante).
-  // Resetado ao trocar tactic dentro de cada tab (Display/Video
-  // recebem setLines como prop).
   const [displayLines, setDisplayLines] = useState([]);
   const [videoLines, setVideoLines] = useState([]);
 
-  // Setters que sincronizam com URL
   const setMainRange = (r) => {
     setMainRangeState(r);
     writeRangeToUrl(r);
@@ -165,11 +131,9 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
     writeTacticToUrl("video_tactic", t);
   };
 
-  // Fetch da campanha
   useEffect(() => {
     if (!token) return;
     let cancelled = false;
-
     getCampaign(token)
       .then((d) => {
         if (cancelled) return;
@@ -180,14 +144,11 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
         if (cancelled) return;
         setError(e?.message || "Erro ao carregar dados");
       });
-
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [token]);
 
-  // popstate listener único — ressincroniza TUDO que vive na URL
-  // quando o usuário usa botão voltar/avançar do navegador. replaceState
-  // não dispara popstate, então isso aqui só reage a navegação real
-  // (ex: usuário cola URL com ?tab=display em outra aba).
   useEffect(() => {
     const onPop = () => {
       setMainRangeState(readRangeFromUrl());
@@ -199,19 +160,23 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
     return () => window.removeEventListener("popstate", onPop);
   }, []);
 
-  // aggregates é computado uma vez por (data, mainRange) e passado
-  // pra Overview e Display — ambas as tabs leem do MESMO snapshot.
   const aggregates = useMemo(
     () => (data ? computeAggregates(data, mainRange) : null),
     [data, mainRange],
   );
 
-  // Voltar pro Legacy
   const goLegacy = () => {
     setReportVersion("legacy");
     const url = new URL(window.location.href);
     url.searchParams.delete("v");
     window.location.replace(url.toString());
+  };
+
+  const handleShare = () => {
+    if (typeof navigator === "undefined" || !navigator.clipboard) return;
+    navigator.clipboard.writeText(window.location.href).catch(() => {
+      /* silently fail */
+    });
   };
 
   if (error) {
@@ -243,46 +208,46 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
   return (
     <TooltipProvider delayDuration={200}>
       <div className="min-h-screen bg-canvas text-fg font-sans">
-        <div className="mx-auto max-w-7xl px-4 md:px-6 lg:px-8 py-6 md:py-10">
+        <TopBarV2
+          updatedAtLabel="Atualizado agora"
+          onShare={handleShare}
+          onBackToLegacy={goLegacy}
+        />
 
+        <div className="mx-auto max-w-[1440px] px-4 md:px-6 lg:px-8 py-6 md:py-8 space-y-6">
           <CampaignHeaderV2
             campaignName={camp.campaign_name}
             clientName={camp.client_name}
             startDate={camp.start_date}
             endDate={camp.end_date}
-            rangeLabel={aggregates.rangeLabel}
-            actions={
-              <Button variant="ghost" size="sm" onClick={goLegacy}>
-                Voltar à versão atual
-              </Button>
-            }
+            shortToken={camp.short_token || token}
           />
 
-          {/* Filtro global de período — afeta todas as tabs */}
-          <section className="mt-6">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-fg-subtle mb-3">
-              Período
-            </h2>
-            <DateRangeFilterV2
-              value={mainRange}
-              campaignStart={camp.start_date}
-              campaignEnd={camp.end_date}
-              availableDates={aggregates.availableDates}
-              onChange={setMainRange}
-            />
-          </section>
-
-          {/* Tabs Radix — navegação principal */}
-          <Tabs value={tab} onValueChange={setTab} className="mt-8">
-            {/* TabsList scrolla horizontal em mobile se overflow.
-                Sem scrollbar visível (overflow-x-auto sem scroll-smooth).
-                Não é sticky por decisão (ver plano da PR-10). */}
-            <div className="overflow-x-auto -mx-4 md:mx-0 px-4 md:px-0 pb-1">
-              <TabsList>
-                <TabsTrigger value="overview">Visão Geral</TabsTrigger>
-                <TabsTrigger value="display">Display</TabsTrigger>
-                <TabsTrigger value="video">Video</TabsTrigger>
+          {/* Tabs com filtro de período alinhado à direita */}
+          <Tabs value={tab} onValueChange={setTab}>
+            <div className="flex items-end justify-between gap-4 flex-wrap border-b border-border">
+              <TabsList variant="underline" className="border-b-0">
+                <TabsTrigger value="overview" iconLeft={<GridIcon />}>
+                  Visão Geral
+                </TabsTrigger>
+                <TabsTrigger value="display" iconLeft={<MonitorIcon />}>
+                  Display
+                </TabsTrigger>
+                <TabsTrigger value="video" iconLeft={<VideoIcon />}>
+                  Video
+                </TabsTrigger>
               </TabsList>
+
+              {/* Filtro de período compacto */}
+              <div className="pb-2">
+                <DateRangeFilterV2
+                  value={mainRange}
+                  campaignStart={camp.start_date}
+                  campaignEnd={camp.end_date}
+                  availableDates={aggregates.availableDates}
+                  onChange={setMainRange}
+                />
+              </div>
             </div>
 
             <TabsContent value="overview">
@@ -317,7 +282,6 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
               />
             </TabsContent>
           </Tabs>
-
         </div>
       </div>
     </TooltipProvider>
@@ -325,42 +289,24 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
 }
 
 // ─── Loading state ────────────────────────────────────────────────────
-// Skeleton que imita o shape do shell — header + filtro + tabs + grid
-// de KPIs. Reduz layout shift quando dados chegam.
 function DashboardSkeleton({ onBackToLegacy }) {
   return (
     <div className="min-h-screen bg-canvas text-fg font-sans">
-      <div className="mx-auto max-w-7xl px-4 md:px-6 lg:px-8 py-6 md:py-10">
-        <header className="flex flex-col md:flex-row md:items-start md:justify-between gap-4 pb-6 border-b border-border">
-          <div className="flex-1 space-y-3">
-            <Skeleton className="h-5 w-20 rounded-full" />
-            <Skeleton className="h-8 w-72" />
-            <Skeleton className="h-4 w-56" />
-          </div>
-          <button
-            type="button"
-            onClick={onBackToLegacy}
-            className="text-xs font-semibold text-fg-subtle hover:text-fg transition-colors cursor-pointer self-start"
-          >
-            Voltar à versão atual
-          </button>
-        </header>
-
-        <div className="mt-6 flex gap-2">
+      <TopBarV2 updatedAtLabel="Carregando..." onBackToLegacy={onBackToLegacy} />
+      <div className="mx-auto max-w-[1440px] px-4 md:px-6 lg:px-8 py-6 md:py-8 space-y-6">
+        <div className="rounded-2xl border border-border-strong bg-surface-2 p-8 space-y-3">
+          <Skeleton className="h-3 w-24" />
+          <Skeleton className="h-9 w-96" />
+          <Skeleton className="h-4 w-64" />
+        </div>
+        <div className="border-b border-border flex gap-2">
+          <Skeleton className="h-10 w-32" />
+          <Skeleton className="h-10 w-24" />
+          <Skeleton className="h-10 w-24" />
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
           {Array.from({ length: 5 }).map((_, i) => (
-            <Skeleton key={i} className="h-8 w-24 rounded-full" />
-          ))}
-        </div>
-
-        <div className="mt-8 flex gap-1 p-1 rounded-lg bg-surface-strong border border-border w-fit">
-          <Skeleton className="h-9 w-28 rounded-md" />
-          <Skeleton className="h-9 w-24 rounded-md" />
-          <Skeleton className="h-9 w-20 rounded-md" />
-        </div>
-
-        <div className="mt-6 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-          {Array.from({ length: 7 }).map((_, i) => (
-            <div key={i} className="rounded-xl border border-border bg-surface p-4">
+            <div key={i} className="rounded-xl border border-border bg-surface-2 p-4">
               <Skeleton className="h-3 w-20 mb-3" />
               <Skeleton className="h-7 w-28" />
             </div>
@@ -368,5 +314,60 @@ function DashboardSkeleton({ onBackToLegacy }) {
         </div>
       </div>
     </div>
+  );
+}
+
+// ─── Ícones para os tabs ──────────────────────────────────────────────
+function GridIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="3" y="3" width="7" height="7" />
+      <rect x="14" y="3" width="7" height="7" />
+      <rect x="14" y="14" width="7" height="7" />
+      <rect x="3" y="14" width="7" height="7" />
+    </svg>
+  );
+}
+
+function MonitorIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+      <line x1="8" y1="21" x2="16" y2="21" />
+      <line x1="12" y1="17" x2="12" y2="21" />
+    </svg>
+  );
+}
+
+function VideoIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <polygon points="23 7 16 12 23 17 23 7" />
+      <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+    </svg>
   );
 }

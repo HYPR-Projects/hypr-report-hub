@@ -41,6 +41,8 @@
   --color-signature: #3397B9;
   --color-signature-hover: #246C84;      /* hover/active do signature */
   --color-signature-soft: rgba(51, 151, 185, 0.15);   /* fundo de pill/badge */
+  --color-signature-light: #C5EAF6;      /* azul-claro: sparklines secundárias, glow detail */
+  --color-signature-glow: rgba(51, 151, 185, 0.18);   /* glow radial em hero/cards de destaque */
 
   /* Semânticas (avisos, sucesso, erro) */
   --color-warning: #EDD900;              /* atenção, pacing, alertas leves */
@@ -80,6 +82,18 @@
    */
   --color-surface: rgba(245, 247, 250, 0.06);   /* surface sutil */
   --color-surface-strong: rgba(245, 247, 250, 0.10); /* surface ativa/hover */
+
+  /* Surface sólidos (não translúcidos) — usados em cards de destaque
+   * onde a hierarquia visual depende de contornos nítidos contra
+   * canvas. Adicionados em PR-13 (redesign do mockup). Quando um card
+   * "hero" empilha conteúdo crítico, surface translúcido some demais
+   * e perde a hierarquia. Esses sólidos ficam um nível mais claros
+   * que canvas, criando elevação clara.
+   *   surface-2: #232F3A — base de cards normais (hero header, KPI cards)
+   *   surface-3: #2D3D4F — emphasis (comparison cards, hero KPI)
+   */
+  --color-surface-2: #232F3A;            /* card sólido nível 1 */
+  --color-surface-3: #2D3D4F;            /* card sólido nível 2 (emphasis) */
 
   /* ═══════════════ TIPOGRAFIA ═══════════════ */
 
