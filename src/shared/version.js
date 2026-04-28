@@ -3,21 +3,15 @@
 // Toggle de versão Legacy ↔ V2 do HYPR Report Hub.
 //
 // ──────────────────────────────────────────────────────────────────────
-// COMPORTAMENTO NESTA PR (Fase 0, PR-01)
+// COMPORTAMENTO ATUAL (Fase 0, PR-03 em diante)
 // ──────────────────────────────────────────────────────────────────────
-// useReportVersion() SEMPRE retorna 'legacy'.
-//
-// A leitura do query param `?v=` e do localStorage `hypr_report_version`
-// está implementada e instrumentada, mas o resultado é descartado e o
-// hook força 'legacy'. Isso é proposital: queremos que a infraestrutura
-// de toggle exista no codebase, sem afetar nenhum cliente em produção.
-//
-// A ativação real do toggle acontece na Fase 0, PR-03 (App.jsx passa a
-// rotear entre ClientDashboard legacy e ClientDashboardV2 com base no
-// retorno deste hook).
+// useReportVersion() está ATIVO e respeita a prioridade abaixo. O default
+// continua sendo 'legacy' até a Fase 7 — o V2 só aparece quando o
+// cliente trouxer ?v=v2 na URL ou já tiver `hypr_report_version=v2`
+// persistido no localStorage de uma sessão anterior.
 //
 // ──────────────────────────────────────────────────────────────────────
-// PRIORIDADE DE RESOLUÇÃO (quando ativo, a partir da PR-03)
+// PRIORIDADE DE RESOLUÇÃO
 // ──────────────────────────────────────────────────────────────────────
 // 1. Query param  ?v=v2   → força V2 (e persiste no localStorage)
 //    Query param  ?v=legacy → força Legacy (e persiste no localStorage)
@@ -75,9 +69,6 @@ export function setReportVersion(version) {
 // Resolve a versão segundo a regra de prioridade documentada acima.
 // Exportado para chamadas síncronas fora de componentes React.
 export function resolveReportVersion() {
-  // Instrumentação: leituras são feitas mas o resultado é descartado nesta PR.
-  // Mantemos as chamadas para validar que não quebram nada e para que o code
-  // path esteja exercitado quando a PR-03 ativar o roteamento.
   const fromUrl = readFromUrl();
   const fromStorage = readFromStorage();
 
@@ -85,13 +76,10 @@ export function resolveReportVersion() {
   // Mantido aqui (não no hook) para que chamadas síncronas também persistam.
   if (fromUrl) setReportVersion(fromUrl);
 
-  // Resolução real, comentada para a PR-03 ativar:
-  //   return fromUrl || fromStorage || "legacy";
-
-  // Comportamento desta PR: ignorar tudo e forçar legacy.
-  void fromUrl;
-  void fromStorage;
-  return "legacy";
+  // Prioridade: URL > localStorage > fallback.
+  // Fallback é 'legacy' até a Fase 7 (default seguro). Quando a Fase 7
+  // for executada, este fallback vira 'v2', mantendo opt-out via ?v=legacy.
+  return fromUrl || fromStorage || "legacy";
 }
 
 // Hook React. Retorna a versão atual ('legacy' | 'v2').

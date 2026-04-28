@@ -84,7 +84,9 @@ Vantagem: histórico preservado, diff auditável, não invalida outras branches.
 
 ## 3. Rollback parcial via toggle (sem deploy)
 
-A partir da Fase 0, PR-03, o app respeita um toggle de versão. Se o V2 estiver causando problema mas o Legacy continuar saudável, o cliente pode forçar Legacy **sem precisar de redeploy**:
+**Status:** ✅ Ativo desde a PR-03 da Fase 0.
+
+O app respeita um toggle de versão. Se o V2 estiver causando problema mas o Legacy continuar saudável, o cliente pode forçar Legacy **sem precisar de redeploy**:
 
 ### 3.1. Para um cliente específico
 
@@ -94,7 +96,7 @@ Envie ao cliente o link com query param de fallback:
 https://report.hypr.mobi/report/<token>?v=legacy
 ```
 
-A escolha persiste em `localStorage` (chave `hypr_report_version`) e sobrevive a recarregamentos.
+A escolha persiste em `localStorage` (chave `hypr_report_version`) e sobrevive a recarregamentos. Funciona mesmo enquanto o default global ainda for Legacy — neste caso, o param vira no-op (cliente já estava no Legacy).
 
 ### 3.2. Para todos os clientes (kill switch)
 

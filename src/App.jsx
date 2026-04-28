@@ -3,6 +3,9 @@ import LoginScreen from "./pages/LoginScreen";
 import ClientPasswordScreen from "./pages/ClientPasswordScreen";
 import CampaignMenu from "./pages/CampaignMenu";
 import ClientDashboard from "./pages/ClientDashboard";
+import ClientDashboardV2 from "./v2/dashboards/ClientDashboardV2";
+import V2ErrorBoundary from "./v2/components/ErrorBoundary";
+import { useReportVersion } from "./shared/version";
 import {
   getAdminJwtFromUrl,
   isJwtExpired,
@@ -24,6 +27,11 @@ export default function App() {
   const [unlocked, setUnlocked] = useState(() =>
     clientToken ? isClientUnlocked(clientToken) : false
   );
+  // Resolução do toggle Legacy ↔ V2. Chamado no topo do componente para
+  // respeitar a regra de hooks do React (mesmo que useReportVersion seja
+  // hoje uma função pura, manter como hook prepara o terreno se um dia
+  // precisar de useSyncExternalStore para reatividade ao localStorage).
+  const reportVersion = useReportVersion();
 
   if (isClient && clientToken) {
     // Modo admin determinado por (em ordem):
@@ -37,7 +45,26 @@ export default function App() {
     const hasLegacyAk = new URLSearchParams(window.location.search).get("ak") === "hypr2026";
     const _isAdmin = !!user || hasValidAdminJwt || hasLegacyAk;
     if (!_isAdmin && !unlocked) return <ClientPasswordScreen token={clientToken} onUnlock={() => setUnlocked(true)} />;
-    return <ClientDashboard token={clientToken} isAdmin={_isAdmin} adminJwt={hasValidAdminJwt ? adminJwt : null} />;
+
+    // Roteamento Legacy ↔ V2 controlado por src/shared/version.js.
+    // Default permanece 'legacy' até a Fase 7. O cliente só vê o V2 se
+    // chegar com ?v=v2 na URL ou já tiver feito opt-in numa sessão
+    // anterior. O ErrorBoundary do V2 captura crashes, registra no
+    // GA via gaEvent('v2_crash'), força localStorage='legacy' e
+    // recarrega — cliente nunca vê tela branca.
+    const dashboardProps = {
+      token: clientToken,
+      isAdmin: _isAdmin,
+      adminJwt: hasValidAdminJwt ? adminJwt : null,
+    };
+    if (reportVersion === "v2") {
+      return (
+        <V2ErrorBoundary>
+          <ClientDashboardV2 {...dashboardProps} />
+        </V2ErrorBoundary>
+      );
+    }
+    return <ClientDashboard {...dashboardProps} />;
   }
 
   if (!user) return <LoginScreen onLogin={setUser} />;
