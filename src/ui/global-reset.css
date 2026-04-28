@@ -1,132 +1,78 @@
 /* src/ui/global-reset.css
  * ──────────────────────────────────────────────────────────────────────
- * Reset CSS moderno do HYPR Report Hub V2.
+ * Estilos extras do V2 (em cima do Tailwind preflight).
  *
- * COMPORTAMENTO NESTA PR (Fase 0, PR-02)
+ * Tailwind v4 já vem com seu próprio reset (preflight): box-sizing,
+ * margens default removidas, mídia responsiva, forms herdando
+ * tipografia, etc. Este arquivo é a CAMADA EXTRA de opiniões que o
+ * Tailwind não cobre — recursos modernos de CSS (text-wrap, focus-visible
+ * customizado) e respeito a preferências de acessibilidade do OS.
+ *
+ * COMPATIBILIDADE COM TAILWIND
  * ──────────────────────────────────────────────────────────────────────
- * Este arquivo NÃO É IMPORTADO em lugar nenhum nesta PR. Vive aqui
- * como referência e fica disponível para o V2 importar quando começar
- * a ser construído (Fase 1).
- *
- * O reset inline atual no index.html (box-sizing, margem/padding zero,
- * width 100% no #root) permanece intacto e continua sendo o único
- * reset ativo em produção.
- *
- * BASE
- * ──────────────────────────────────────────────────────────────────────
- * Inspirado nos resets modernos consensuais de 2024-2026:
- *   • Josh Comeau's Custom CSS Reset
- *   • Andy Bell's Modern CSS Reset
- *   • Eliminação de quirks históricos sem regredir acessibilidade
- *
- * O reset trata cinco problemas comuns que o Legacy hoje resolve em
- * componentes individuais (com estilo redundante), e que o V2 pode
- * resolver no nível do documento:
- *   1. Box-sizing previsível
- *   2. Margens default removidas (parágrafos, headings, listas)
- *   3. Imagens responsivas por default
- *   4. Forms herdam tipografia do parent
- *   5. Acessibilidade: respeito a prefers-reduced-motion
- *
- * NOTAS DE COMPATIBILIDADE
- * ──────────────────────────────────────────────────────────────────────
- * • Não toca `html` ou `body` — o index.html já define width/min-height
- * • Não impõe color/background — fica para tokens.js (Fase 1) decidir
- * • Não mexe em font-family — typography.js é quem aplica
- * • Headings ficam sem font-size própria (fica para tokens definir
- *   a escala tipográfica do V2)
+ * Estilos abaixo ficam em @layer base para que utilitárias do Tailwind
+ * (ex: line-height-1.5 via leading-relaxed) sempre vençam por
+ * especificidade. Em CSS puro: ordem importa, e Tailwind é importado
+ * antes deste arquivo (ver src/v2/v2.css).
  */
 
-/* ---------- 1. Box-sizing previsível ---------- */
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-}
-
-/* ---------- 2. Reset de margens default ---------- */
-body,
-h1, h2, h3, h4, h5, h6,
-p,
-figure,
-blockquote,
-dl,
-dd {
-  margin: 0;
-}
-
-/* Listas usadas em UI (com classe explícita) perdem o estilo default.
- * Listas em prosa (sem classe) preservam comportamento de browser. */
-ul[role="list"],
-ol[role="list"] {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-}
-
-/* ---------- 3. Mídia responsiva por default ---------- */
-img,
-picture,
-video,
-canvas,
-svg {
-  display: block;
-  max-width: 100%;
-}
-
-/* ---------- 4. Forms herdam tipografia ---------- */
-input,
-button,
-textarea,
-select {
-  font: inherit;
-  color: inherit;
-}
-
-/* Botão com aparência neutra por default — V2 sempre estiliza por cima */
-button {
-  background: none;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-}
-
-/* ---------- 5. Tipografia base sensata ---------- */
-body {
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  text-rendering: optimizeLegibility;
-  line-height: 1.5;
-}
-
-/* Headings com line-height mais apertada (anti-padrão do default 1.5) */
-h1, h2, h3, h4, h5, h6 {
-  line-height: 1.2;
-  text-wrap: balance;  /* CSS moderno: distribui melhor o texto em múltiplas linhas */
-}
-
-/* Parágrafos longos com max-width pra legibilidade */
-p {
-  text-wrap: pretty;  /* Evita órfãos no fim do parágrafo */
-}
-
-/* ---------- 6. Acessibilidade: motion reduzido ---------- */
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
+@layer base {
+  /* ---------- Tipografia: text-wrap moderno ---------- */
+  /* CSS moderno (Chrome 114+, Safari 17.5+): distribui melhor texto
+   * em múltiplas linhas. Em headings evita "viúvas" (palavra solta
+   * na última linha). Em parágrafos evita "órfãs" (linha curta no
+   * fim). */
+  h1, h2, h3, h4, h5, h6 {
+    text-wrap: balance;
   }
-}
+  p {
+    text-wrap: pretty;
+  }
 
-/* ---------- 7. Foco visível por default ---------- */
-/* :focus-visible mostra outline apenas em navegação por teclado.
- * Mouse click não dispara o estilo, evitando "outline horroroso ao
- * clicar" sem sacrificar acessibilidade de quem usa Tab. */
-:focus-visible {
-  outline: 2px solid currentColor;
-  outline-offset: 2px;
+  /* ---------- Acessibilidade: motion reduzido ---------- */
+  /* Usuários que ativaram "Reduzir movimento" no SO (macOS, iOS,
+   * Windows, Android) não devem ver animações longas. Tailwind tem
+   * `motion-reduce:` modifier mas precisa ser aplicado caso a caso —
+   * esta regra é defesa em profundidade que cobre componentes
+   * legados/terceiros. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
+  /* ---------- Foco visível por default ---------- */
+  /* :focus-visible mostra outline apenas em navegação por teclado.
+   * Mouse click não dispara o estilo, evitando "outline horroroso ao
+   * clicar" sem sacrificar acessibilidade de quem usa Tab.
+   *
+   * Cor: signature HYPR. Offset 2px deixa o ring claramente separado
+   * do elemento (compatível com bordas arredondadas dos primitives). */
+  :focus-visible {
+    outline: 2px solid var(--color-signature);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  /* Remove outline default em navegação por mouse — já é
+   * comportamento implícito do :focus-visible, mas explicito aqui
+   * pra documentar intenção. */
+  :focus:not(:focus-visible) {
+    outline: none;
+  }
+
+  /* ---------- Tipografia base do V2 ---------- */
+  /* Antialiasing pra texto mais suave em telas de alta densidade.
+   * Sem isso, Urbanist em fundo escuro renderiza com serrilhado
+   * perceptível em macOS. */
+  body {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
 }

@@ -1,0 +1,106 @@
+/* src/ui/theme.css
+ * ──────────────────────────────────────────────────────────────────────
+ * Theme do HYPR Report Hub V2 (Tailwind v4).
+ *
+ * Single source of truth para a identidade visual do V2. Cada token
+ * declarado aqui dentro do bloco `@theme` automaticamente gera
+ * utilitárias correspondentes do Tailwind.
+ *
+ * Exemplo: `--color-signature: #3397B9` gera:
+ *   bg-signature, text-signature, border-signature, ring-signature,
+ *   from-signature, to-signature, etc.
+ *
+ * ──────────────────────────────────────────────────────────────────────
+ * SINCRONIZAÇÃO COM tokens.js
+ * ──────────────────────────────────────────────────────────────────────
+ * Algumas cores também precisam estar disponíveis em JS (recharts,
+ * SVG dinâmico, lógica de cor condicional). Esses valores estão
+ * espelhados em src/shared/tokens.js. Se mudar uma cor aqui, mude lá.
+ *
+ * No longo prazo, vale considerar gerar tokens.js automaticamente a
+ * partir deste arquivo, mas o set é pequeno (~20 tokens) e raramente
+ * muda — manutenção manual é aceitável.
+ *
+ * ──────────────────────────────────────────────────────────────────────
+ * MODO DARK
+ * ──────────────────────────────────────────────────────────────────────
+ * O V2 nasce dark-first (alinhado com a paleta HYPR canvas #1C262F).
+ * Suporte a light mode será adicionado em fase posterior, sobrescrevendo
+ * estes mesmos tokens dentro de :root:not(.dark) ou similar.
+ */
+
+@theme {
+  /* ═══════════════ CORES OFICIAIS HYPR ═══════════════ */
+
+  /* Canvas (background principal) */
+  --color-canvas: #1C262F;
+  --color-canvas-deeper: #0F1419;        /* mais escuro, usado em borders e wells */
+  --color-canvas-elevated: #232F39;      /* surface elevada — cards sobre canvas */
+
+  /* Azul signature HYPR (CTA, links, foco, brand) */
+  --color-signature: #3397B9;
+  --color-signature-hover: #246C84;      /* hover/active do signature */
+  --color-signature-soft: rgba(51, 151, 185, 0.15);   /* fundo de pill/badge */
+
+  /* Semânticas (avisos, sucesso, erro) */
+  --color-warning: #EDD900;              /* atenção, pacing, alertas leves */
+  --color-warning-soft: rgba(237, 217, 0, 0.15);
+  --color-success: #4CB050;              /* completou, dentro do alvo */
+  --color-success-soft: rgba(76, 176, 80, 0.15);
+  --color-danger: #F5272B;               /* erro, pacing crítico */
+  --color-danger-soft: rgba(245, 39, 43, 0.15);
+
+  /* Foreground (texto sobre canvas) */
+  --color-fg: #F5F7FA;                   /* texto primário (alto contraste) */
+  --color-fg-muted: rgba(245, 247, 250, 0.7);   /* texto secundário */
+  --color-fg-subtle: rgba(245, 247, 250, 0.45); /* texto terciário, captions */
+  --color-fg-disabled: rgba(245, 247, 250, 0.3);
+
+  /* Borders e divisores */
+  --color-border: rgba(245, 247, 250, 0.08);    /* divisor padrão */
+  --color-border-strong: rgba(245, 247, 250, 0.16); /* divisor com ênfase */
+
+  /* Surface (cards, modais, popovers sobre canvas) */
+  --color-surface: rgba(245, 247, 250, 0.04);   /* surface sutil */
+  --color-surface-strong: rgba(245, 247, 250, 0.08); /* surface ativa/hover */
+
+  /* ═══════════════ TIPOGRAFIA ═══════════════ */
+
+  /* Stack de fonte sans (Urbanist + fallbacks). Carregamento dos arquivos
+   * .woff2 é responsabilidade de src/ui/typography.js, importado pelo
+   * entry do V2 (src/v2/v2.css ou ClientDashboardV2.jsx). */
+  --font-sans: 'Urbanist', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+
+  /* Mono para números, tokens, código (ui-monospace puxa da fonte de
+   * sistema do OS — San Francisco Mono no macOS, Cascadia Code no
+   * Windows, sem dependência externa). */
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  /* ═══════════════ RAIOS ═══════════════ */
+  /* Sobrescrevemos os defaults do Tailwind para uma escala um pouco
+   * mais arredondada (alinhado com tendências 2025-2026 e marcas SaaS
+   * modernas). */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+
+  /* ═══════════════ ELEVAÇÕES ═══════════════ */
+  /* Sombras sutis projetadas pra fundo escuro. Em fundo claro essas
+   * sombras seriam invisíveis — quando adicionarmos light mode, valores
+   * serão sobrescritos via variant. */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 12px -2px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 30px -5px rgba(0, 0, 0, 0.4);
+  --shadow-xl: 0 20px 50px -10px rgba(0, 0, 0, 0.5);
+
+  /* Inset (usado para wells, inputs focados, slots) */
+  --shadow-inset: inset 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+
+  /* ═══════════════ MOTION ═══════════════ */
+  /* Durações curtas pra microinterações (hover, focus, press).
+   * Mais lentas pra layout shifts (collapse, drawer). */
+  --ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);   /* default Apple-like */
+  --ease-emphasized: cubic-bezier(0.05, 0.7, 0.1, 1); /* in-out forte */
+}
