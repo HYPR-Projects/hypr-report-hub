@@ -33,7 +33,19 @@
 /* ───────────────────────────────────────────────────────────
  * Custom variants do Tailwind v4
  * ───────────────────────────────────────────────────────────
- * Adiciona modificadores específicos do V2 que não vêm com o
- * Tailwind core. Por enquanto vazio — preparado para extensões
- * futuras (ex: @custom-variant supported, @custom-variant rtl).
+ * Tailwind v4 não traz dark mode strategy default — precisamos
+ * registrar como queremos detectar dark mode. Adotamos a estratégia
+ * "class on ancestor": qualquer elemento dentro de `.dark` (ou que
+ * seja `.dark` ele mesmo) ativa as utilities `dark:` modifier.
+ *
+ * Equivalente ao `darkMode: 'class'` do Tailwind v3. Compatível com
+ * o sistema atual do Legacy (`shared/theme.js` aplica `.dark` no
+ * <html> ou <body>), o que facilitará reuso quando o V2 for default.
+ *
+ * Uso: `<div className="bg-canvas dark:bg-canvas-deeper" />`
+ *
+ * O V2 nasce dark-first, então `dark:` ainda não é usado — mas a
+ * variant fica registrada para Fase 2+ poder usar sem mudanças
+ * estruturais.
  */
+@custom-variant dark (&:where(.dark, .dark *));

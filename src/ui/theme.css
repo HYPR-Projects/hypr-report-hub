@@ -68,7 +68,9 @@
 
   /* Stack de fonte sans (Urbanist + fallbacks). Carregamento dos arquivos
    * .woff2 é responsabilidade de src/ui/typography.js, importado pelo
-   * entry do V2 (src/v2/v2.css ou ClientDashboardV2.jsx). */
+   * ClientDashboardV2.jsx como side-effect. CSS (este arquivo, v2.css)
+   * não pode importar typography.js porque é JS — apenas referencia o
+   * stack via custom property. */
   --font-sans: 'Urbanist', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 
   /* Mono para números, tokens, código (ui-monospace puxa da fonte de

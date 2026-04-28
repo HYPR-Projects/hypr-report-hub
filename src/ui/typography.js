@@ -12,28 +12,30 @@
 // (~12 KB por peso) é baixado em runtime.
 //
 // ──────────────────────────────────────────────────────────────────────
-// COMPORTAMENTO NESTA PR (Fase 0, PR-02)
+// COMPORTAMENTO ATUAL (Fase 1, PR-04 em diante)
 // ──────────────────────────────────────────────────────────────────────
-// Este módulo NÃO É IMPORTADO em lugar nenhum nesta PR. Fica dormente,
-// igual src/shared/tokens.js e src/shared/version.js. Tree-shaking do
-// Vite garante que nem o JS nem os arquivos de fonte vão pro bundle
-// final enquanto não houver uma importação efetiva.
+// Este módulo é importado pelo src/v2/dashboards/ClientDashboardV2.jsx
+// como side-effect (`import "../../ui/typography"`). O Vite resolve os
+// @import de @fontsource/urbanist/{peso}.css e empacota os arquivos
+// .woff2/.woff no bundle, com URLs hashadas e cacheáveis pelo CDN.
 //
-// A primeira importação acontece na Fase 1 (Design System primitives),
-// quando o V2 começar a usar a fonte.
+// O Legacy NÃO importa este módulo — continua usando suas fontes
+// system-ui via shared/theme.js. Quando o Legacy for removido (futuro
+// pós-Fase 7), este módulo passa a ser o único caminho de carregamento
+// de fontes do app.
 //
 // ──────────────────────────────────────────────────────────────────────
-// USO PREVISTO (a partir da Fase 1)
+// USO
 // ──────────────────────────────────────────────────────────────────────
-//   // No entry point do V2 (ex: src/v2/dashboards/ClientDashboardV2.jsx):
-//   import "../../ui/typography";  // efeito colateral: registra @font-face
+//   // Side-effect (registra @font-face no documento):
+//   import "../../ui/typography";
+//
+//   // Stack como string (ex: para style inline ou recharts label):
 //   import { FONT_FAMILY } from "../../ui/typography";
+//   <text fontFamily={FONT_FAMILY} />
 //
-//   // Em qualquer componente:
-//   <div style={{ fontFamily: FONT_FAMILY }}>...</div>
-//
-//   // Ou via CSS variável (tokens.js vai consumir esta constante):
-//   :root { --font-family-base: 'Urbanist', system-ui, sans-serif; }
+//   // Em CSS via Tailwind: a classe `font-sans` usa a Urbanist
+//   // automaticamente (definida em src/ui/theme.css via --font-sans).
 //
 // ──────────────────────────────────────────────────────────────────────
 // POR QUE FONTSOURCE E NÃO GOOGLE FONTS CDN
