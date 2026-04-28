@@ -31,6 +31,8 @@ import { TooltipProvider } from "../../ui/Tooltip";
 import { CampaignHeaderV2 } from "../components/CampaignHeaderV2";
 import { DateRangeFilterV2 } from "../components/DateRangeFilterV2";
 import { KpiCardV2 } from "../components/KpiCardV2";
+import { PacingBarV2 } from "../components/PacingBarV2";
+import { MediaSummaryV2 } from "../components/MediaSummaryV2";
 
 export default function OverviewV2({ data, onBackToLegacy }) {
   // mainRange local — quando o filtro de período evoluir pra ?from=&to=
@@ -56,6 +58,7 @@ export default function OverviewV2({ data, onBackToLegacy }) {
     totalImpressions, totalCusto, totalCustoOver,
     display, video, totals,
     isFiltered, rangeLabel, budgetProRata, budgetTotal,
+    availableDates,
   } = aggregates;
 
   const hasDisplay = display.length > 0;
@@ -89,6 +92,7 @@ export default function OverviewV2({ data, onBackToLegacy }) {
               value={mainRange}
               campaignStart={camp.start_date}
               campaignEnd={camp.end_date}
+              availableDates={availableDates}
               onChange={setMainRange}
             />
           </section>
@@ -155,12 +159,55 @@ export default function OverviewV2({ data, onBackToLegacy }) {
             </div>
           </section>
 
+          {/* Pacing — escondido quando há filtro de período (não faz sentido
+              em janela parcial). Display calcula no front (backend não expõe
+              pacing display agregado). Video tem pacing já no row[0] do backend. */}
+          {!isFiltered && (hasDisplay || hasVideo) && (
+            <section className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-3">
+              {hasDisplay && (
+                <PacingBarV2
+                  label="Pacing Display"
+                  pacing={computeDisplayPacing(display, camp)}
+                  budget={display.reduce(
+                    (s, r) => s + (r.o2o_display_budget || 0) + (r.ooh_display_budget || 0),
+                    0,
+                  )}
+                  cost={display.reduce((s, r) => s + (r.effective_total_cost || 0), 0)}
+                />
+              )}
+              {hasVideo && (
+                <PacingBarV2
+                  label="Pacing Video"
+                  pacing={video[0]?.pacing || 0}
+                  budget={video.reduce(
+                    (s, r) => s + (r.o2o_video_budget || 0) + (r.ooh_video_budget || 0),
+                    0,
+                  )}
+                  cost={video.reduce((s, r) => s + (r.effective_total_cost || 0), 0)}
+                />
+              )}
+            </section>
+          )}
+
+          {/* Resumo por mídia: Negociado vs Efetivo (diferencial citado no ADR) */}
+          {(hasDisplay || hasVideo) && (
+            <section className="mt-8">
+              <h2 className="text-xs font-semibold uppercase tracking-wider text-fg-subtle mb-3">
+                Resumo por mídia
+              </h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {hasDisplay && <MediaSummaryV2 type="DISPLAY" row={display[0]} />}
+                {hasVideo && <MediaSummaryV2 type="VIDEO" row={video[0]} />}
+              </div>
+            </section>
+          )}
+
           {/* Placeholder das próximas fatias */}
           <section className="mt-10 rounded-xl border border-border bg-surface px-5 py-6 text-center">
             <p className="text-sm text-fg-muted">
               <span className="font-semibold text-fg">Em breve:</span>{" "}
-              Pacing, comparação CPM/CPCV negociado vs efetivo, gráficos diários
-              e tabela detalhada chegam nas próximas atualizações.
+              Gráficos diários (Imp. Visíveis × CTR, Views 100% × VTR) e tabela
+              detalhada chegam na próxima atualização.
             </p>
           </section>
 
@@ -168,4 +215,51 @@ export default function OverviewV2({ data, onBackToLegacy }) {
       </div>
     </TooltipProvider>
   );
+}
+
+// ─── Helpers locais ──────────────────────────────────────────────────────
+//
+// Pacing Display calculado no front (backend só calcula Video). Lógica
+// idêntica à inline do Legacy em components/dashboard-tabs/OverviewTab.jsx
+// — replicada aqui pra não obrigar refactor do Legacy nessa PR.
+//
+// Quando o Legacy for removido (pós-Fase 7), essa função pode ser
+// movida pra shared/aggregations.js ou ficar como é.
+function computeDisplayPacing(displayRows, camp) {
+  if (!displayRows.length || !camp.start_date || !camp.end_date) return 0;
+
+  const contracted = displayRows.reduce(
+    (s, r) =>
+      s +
+      (r.contracted_o2o_display_impressions || 0) +
+      (r.contracted_ooh_display_impressions || 0),
+    0,
+  );
+  const bonus = displayRows.reduce(
+    (s, r) =>
+      s +
+      (r.bonus_o2o_display_impressions || 0) +
+      (r.bonus_ooh_display_impressions || 0),
+    0,
+  );
+  const totalNeg = contracted + bonus;
+  if (!totalNeg) return 0;
+
+  const delivered = displayRows.reduce(
+    (s, r) => s + (r.viewable_impressions || 0),
+    0,
+  );
+
+  const [sy, sm, sd] = camp.start_date.split("-").map(Number);
+  const [ey, em, ed] = camp.end_date.split("-").map(Number);
+  const start = new Date(sy, sm - 1, sd);
+  const end = new Date(ey, em - 1, ed);
+  const now = new Date();
+
+  if (now > end) return (delivered / totalNeg) * 100;
+
+  const total = (end - start) / 864e5 + 1;
+  const elapsed = now < start ? 0 : Math.floor((now - start) / 864e5);
+  const expected = totalNeg * (elapsed / total);
+  return expected > 0 ? (delivered / expected) * 100 : 0;
 }
