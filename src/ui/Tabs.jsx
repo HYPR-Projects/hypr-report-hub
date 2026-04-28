@@ -47,11 +47,11 @@ export const TabsTrigger = forwardRef(function TabsTrigger(
       className={cn(
         "inline-flex items-center justify-center whitespace-nowrap",
         "px-4 h-9 rounded-md text-sm font-semibold",
-        "text-fg-muted hover:text-fg",
+        "text-fg-muted hover:text-fg hover:bg-surface",
         "transition-colors duration-150",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signature focus-visible:ring-offset-2 focus-visible:ring-offset-canvas",
         // estado ativo (data-state="active" do Radix)
-        "data-[state=active]:bg-signature data-[state=active]:text-fg",
+        "data-[state=active]:bg-signature data-[state=active]:text-fg data-[state=active]:hover:bg-signature data-[state=active]:hover:text-fg",
         "disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer",
         className
       )}
