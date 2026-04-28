@@ -165,29 +165,28 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt 
             hint="Inclui valor da over-delivery."
           />
         )}
+
+        {/* 5º card: Pacing Geral (só faz sentido quando sem filtro de
+            período, porque pacing é cálculo do todo da campanha. Quando
+            há filtro, ocupa esse slot com Custo+Over como fallback). */}
+        {!isFiltered && pacingGeral > 0 ? (
+          <KpiCardV2
+            label="Pacing Geral"
+            value={`${fmt(pacingGeral, 1)}%`}
+            accent={pacingGeral >= 90 && pacingGeral <= 110}
+            hint="Média ponderada de pacing Display + Video pelo budget contratado."
+          />
+        ) : (
+          <KpiCardV2
+            label="Custo + Over"
+            value={fmtR(totalCustoOver)}
+            hint="Inclui valor da over-delivery."
+          />
+        )}
       </div>
 
-      {/* Pacing Geral pill — abaixo dos hero cards quando faz sentido */}
-      {!isFiltered && (hasDisplay || hasVideo) && pacingGeral > 0 && (
-        <div className="flex items-center gap-3 -mt-2">
-          <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-surface border border-border text-xs font-semibold text-fg-muted">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-fg-subtle">
-              Pacing Geral
-            </span>
-            <span
-              className="tabular-nums font-bold"
-              style={{ color: pacingColor(pacingGeral) }}
-            >
-              {fmt(pacingGeral, 1)}%
-            </span>
-            {pacingGeral >= 90 && pacingGeral <= 110 && (
-              <span className="inline-flex items-center gap-1 text-success text-[10px]">
-                <CheckIcon className="size-2.5" /> no esperado
-              </span>
-            )}
-          </span>
-        </div>
-      )}
+      {/* Pacing Geral pill abaixo do grid foi removido — agora é o 5º
+          card do hero grid pra bater com o mockup. */}
 
       {/* ─── 3. Comparison Row (Negociado vs Efetivo) ────────────────── */}
       {(hasDisplay || hasVideo) && (

@@ -43,12 +43,17 @@ export function ComparisonCardV2({
   // Economia = (negociado - efetivo) / negociado.
   // Positiva = HYPR entregou mais barato (CPM efetivo < negociado).
   // Negativa = saiu mais caro (raríssimo, sinaliza problema).
+  // Zero (negociado=efetivo) = caso degenerado, não mostra delta — mostra "—".
   const economyPct = hasValues
     ? ((negociado - efetivo) / negociado) * 100
     : null;
 
-  const isEconomy = economyPct !== null && economyPct > 0;
-  const isLoss = economyPct !== null && economyPct < 0;
+  // Threshold pra considerar "diferença significativa" — abaixo de 0.05%
+  // tratamos como neutro (provavelmente o backend ainda não tem CPCV
+  // efetivo separado do negociado, ou os dois são iguais por contrato).
+  const isSignificant = economyPct !== null && Math.abs(economyPct) >= 0.05;
+  const isEconomy = isSignificant && economyPct > 0;
+  const isLoss = isSignificant && economyPct < 0;
 
   return (
     <Card
@@ -107,7 +112,7 @@ export function ComparisonCardV2({
               !isEconomy && !isLoss && "text-fg-subtle",
             )}
           >
-            {isEconomy ? "Economia" : isLoss ? "Variação" : "—"}
+            {isEconomy ? "Economia" : isLoss ? "Variação" : "Sem variação"}
           </span>
           <span
             className={cn(
@@ -117,9 +122,9 @@ export function ComparisonCardV2({
               !isEconomy && !isLoss && "text-fg-muted",
             )}
           >
-            {economyPct !== null
-              ? `${economyPct > 0 ? "−" : "+"}${Math.abs(economyPct).toFixed(decimalsForDelta)}%`
-              : "—"}
+            {!isSignificant
+              ? "—"
+              : `${economyPct > 0 ? "−" : "+"}${Math.abs(economyPct).toFixed(decimalsForDelta)}%`}
           </span>
         </div>
       </div>
