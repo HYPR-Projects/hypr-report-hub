@@ -35,8 +35,7 @@ const DialogOverlay = forwardRef(function DialogOverlay(
       className={cn(
         "fixed inset-0 z-50",
         "bg-black/60 backdrop-blur-sm",
-        "data-[state=open]:animate-in data-[state=closed]:animate-out",
-        "data-[state=open]:fade-in data-[state=closed]:fade-out",
+        "data-[state=open]:animate-fade-in data-[state=closed]:animate-fade-out",
         className
       )}
       {...rest}
@@ -59,6 +58,7 @@ export const DialogContent = forwardRef(function DialogContent(
           "w-[92vw] max-w-lg",
           "rounded-xl border border-border bg-canvas-elevated shadow-xl",
           "focus-visible:outline-none",
+          "data-[state=open]:animate-zoom-in data-[state=closed]:animate-zoom-out",
           className
         )}
         {...rest}

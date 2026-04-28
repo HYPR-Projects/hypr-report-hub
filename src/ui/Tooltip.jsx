@@ -34,7 +34,7 @@ export const TooltipContent = forwardRef(function TooltipContent(
           "z-50 max-w-xs",
           "rounded-md border border-border bg-canvas-elevated",
           "px-3 py-2 text-xs text-fg shadow-md",
-          "data-[state=delayed-open]:animate-in data-[state=closed]:animate-out",
+          "data-[state=delayed-open]:animate-fade-in data-[state=closed]:animate-fade-out",
           className
         )}
         {...rest}
