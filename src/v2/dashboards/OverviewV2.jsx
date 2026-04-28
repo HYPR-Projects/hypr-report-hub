@@ -6,13 +6,17 @@
 // LAYOUT, NA ORDEM (top → bottom)
 //   1. InsightBannerV2 (1-N) — callouts auto-gerados de pacing/economia
 //   2. Hero KPI (Custo Efetivo) + grid de 4 KPIs auxiliares com sparklines
-//   3. ComparisonRow — 2 cards "Negociado vs Efetivo" (CPM Display + CPCV Video)
-//   4. Pacing Display + Pacing Video lado a lado, com marker "esperado hoje"
-//   5. Sumário por mídia (DISPLAY + VIDEO) — 2 cards lado a lado
-//   6. Charts diários (Display Imp×CTR + Video Views×VTR)
-//   7. DailyAggregateTableV2 — tabela "Entrega Agregada por Dia" (collapsible, aberto)
-//   8. CollapsibleSection + DataTable — "Detalhamento por Linha" (collapsible, fechado)
-//   9. AlcanceFrequenciaV2 — admin edita, cliente vê read-only
+//   3. Pacing Display + Pacing Video lado a lado, com marker "esperado hoje"
+//   4. Sumário por mídia (DISPLAY + VIDEO) — 2 cards lado a lado, layout
+//      inline compacto após PR-16 (label+valor numa linha só)
+//   5. Charts diários (Display Imp×CTR + Video Views×VTR)
+//   6. DailyAggregateTableV2 — tabela "Entrega Agregada por Dia" (collapsible, aberto)
+//   7. CollapsibleSection + DataTable — "Detalhamento por Linha" (collapsible, fechado)
+//   8. AlcanceFrequenciaV2 — admin edita, cliente vê read-only
+//
+// ComparisonRow (CPM Display + CPCV Video) saiu na PR-16 — era redundante
+// com o MediaSummaryV2 abaixo, que já carrega Efetivo + Delta. Continua
+// existindo como hero principal nas tabs Display e Video.
 //
 // Quando há filtro de período ativo, Pacing some (não faz sentido em
 // janela parcial). Insights podem se ajustar no texto (verbo passado vs
@@ -24,7 +28,6 @@ import { KpiCardV2 } from "../components/KpiCardV2";
 import { HeroKpiCardV2 } from "../components/HeroKpiCardV2";
 import { SparklineV2 } from "../components/SparklineV2";
 import { InsightBannerV2, buildInsights } from "../components/InsightBannerV2";
-import { ComparisonCardV2 } from "../components/ComparisonCardV2";
 import { PacingBarV2 } from "../components/PacingBarV2";
 import { MediaSummaryV2 } from "../components/MediaSummaryV2";
 import { DualChartV2 } from "../components/DualChartV2";
@@ -70,12 +73,6 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt 
   const pacingDisplay = computeDisplayPacing(display, camp);
   const pacingVideo = video[0]?.pacing || 0;
   const expectedToday = computeExpectedTodayPct(camp);
-
-  // CPM/CPCV Negociado vs Efetivo (pra ComparisonCard).
-  const cpmNegociado = camp.cpm_negociado || display[0]?.deal_cpm_amount || 0;
-  const cpmEfetivo = aggregateEffectiveCpm(display);
-  const cpcvNegociado = camp.cpcv_negociado || video[0]?.deal_cpcv_amount || 0;
-  const cpcvEfetivo = aggregateEffectiveCpcv(video);
 
   // Pacing Geral % — média ponderada por budget de Display + Video.
   const pacingGeral = computePacingGeral(display, video, camp);
@@ -188,29 +185,7 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt 
       {/* Pacing Geral pill abaixo do grid foi removido — agora é o 5º
           card do hero grid pra bater com o mockup. */}
 
-      {/* ─── 3. Comparison Row (Negociado vs Efetivo) ────────────────── */}
-      {(hasDisplay || hasVideo) && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-          {hasDisplay && (
-            <ComparisonCardV2
-              title="CPM Display · Negociado vs Efetivo"
-              negociado={cpmNegociado}
-              efetivo={cpmEfetivo}
-              formatValue={(v) => fmtR(v)}
-            />
-          )}
-          {hasVideo && (
-            <ComparisonCardV2
-              title="CPCV Video · Negociado vs Efetivo"
-              negociado={cpcvNegociado}
-              efetivo={cpcvEfetivo}
-              formatValue={(v) => `R$ ${v.toFixed(3).replace(".", ",")}`}
-            />
-          )}
-        </div>
-      )}
-
-      {/* ─── 4. Pacing Display + Video ───────────────────────────────── */}
+      {/* ─── 3. Pacing Display + Video ───────────────────────────────── */}
       {!isFiltered && (hasDisplay || hasVideo) && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {hasDisplay && (
@@ -240,7 +215,7 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt 
         </div>
       )}
 
-      {/* ─── 5. Resumo por mídia ─────────────────────────────────────── */}
+      {/* ─── 4. Resumo por mídia ─────────────────────────────────────── */}
       {(hasDisplay || hasVideo) && (
         <section>
           <h2 className="text-xs font-semibold uppercase tracking-wider text-fg-subtle mb-3">
@@ -253,7 +228,7 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt 
         </section>
       )}
 
-      {/* ─── 6. Charts diários ───────────────────────────────────────── */}
+      {/* ─── 5. Charts diários ───────────────────────────────────────── */}
       {(chartDisplay.length > 0 || chartVideo.length > 0) && (
         <section>
           <h2 className="text-xs font-semibold uppercase tracking-wider text-fg-subtle mb-3">
@@ -294,7 +269,7 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt 
         </section>
       )}
 
-      {/* ─── 7. Tabela Entrega Agregada por Dia ─────────────────────── */}
+      {/* ─── 6. Tabela Entrega Agregada por Dia ─────────────────────── */}
       {daily0 && daily0.length > 0 && (
         <CollapsibleSectionV2 title="Entrega Agregada por Dia" defaultOpen>
           <DailyAggregateTableV2
@@ -304,14 +279,14 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt 
         </CollapsibleSectionV2>
       )}
 
-      {/* ─── 8. Detalhamento granular por linha ─────────────────────── */}
+      {/* ─── 7. Detalhamento granular por linha ─────────────────────── */}
       {detail.length > 0 && (
         <CollapsibleSectionV2 title="Detalhamento por Linha">
           <DataTableV2 detail={detail} campaignName={camp.campaign_name} />
         </CollapsibleSectionV2>
       )}
 
-      {/* ─── 9. Alcance & Frequência ────────────────────────────────── */}
+      {/* ─── 8. Alcance & Frequência ────────────────────────────────── */}
       <AlcanceFrequenciaV2
         token={token}
         isAdmin={isAdmin}
@@ -413,28 +388,6 @@ function computeExpectedTodayPct(camp) {
   return (elapsed / total) * 100;
 }
 
-// CPM efetivo agregado = sum(cost) / sum(impressions) * 1000.
-function aggregateEffectiveCpm(displayRows) {
-  if (!displayRows.length) return 0;
-  const cost = displayRows.reduce(
-    (s, r) => s + (r.effective_total_cost || 0),
-    0,
-  );
-  const imp = displayRows.reduce(
-    (s, r) => s + (r.viewable_impressions || 0),
-    0,
-  );
-  return imp > 0 ? (cost / imp) * 1000 : 0;
-}
-
-// CPCV efetivo agregado = sum(cost) / sum(views100).
-function aggregateEffectiveCpcv(videoRows) {
-  if (!videoRows.length) return 0;
-  // videoRows são totals[] já agregados — usar effective_cpcv_amount
-  // do primeiro registro (backend já calcula).
-  return videoRows[0]?.effective_cpcv_amount || 0;
-}
-
 // Para a sparkline de custo do hero — combina display+video por data.
 function mergeCostSeries(chartDisplay, chartVideo) {
   const map = {};
@@ -447,12 +400,6 @@ function mergeCostSeries(chartDisplay, chartVideo) {
   return Object.entries(map)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, cost]) => ({ date, cost }));
-}
-
-function pacingColor(pct) {
-  if (pct >= 90 && pct <= 110) return "var(--color-success)";
-  if (pct >= 70) return "var(--color-warning)";
-  return "var(--color-danger)";
 }
 
 // ─── Ícones ──────────────────────────────────────────────────────────
