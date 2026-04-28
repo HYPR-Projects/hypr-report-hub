@@ -1,0 +1,51 @@
+/* src/v2/v2.css
+ * ──────────────────────────────────────────────────────────────────────
+ * Entry CSS do HYPR Report Hub V2.
+ *
+ * Importado UMA ÚNICA VEZ no root do V2 (ClientDashboardV2.jsx). Este
+ * arquivo é o único ponto de entrada de estilos do V2 — qualquer
+ * adição global de CSS deve passar por aqui.
+ *
+ * IMPORTANTE: este arquivo NÃO é importado pelo Legacy. O Tailwind
+ * processa apenas os arquivos onde encontra classes utilitárias (que
+ * estão exclusivamente em src/v2/ e src/ui/). O bundle CSS do Legacy
+ * permanece intocado.
+ *
+ * ORDEM DOS IMPORTS
+ * ──────────────────────────────────────────────────────────────────────
+ * A ordem importa por causa do cascade do CSS:
+ *
+ *   1. tailwindcss   — preflight, theme tokens default, utilitárias
+ *   2. theme.css     — sobrescreve tokens com valores HYPR via @theme
+ *   3. global-reset  — opiniões extras em @layer base (vencem preflight
+ *                      mas perdem para utilitárias do Tailwind)
+ *
+ * As fontes Urbanist são carregadas via JS em src/ui/typography.js,
+ * importado pelo ClientDashboardV2.jsx (não daqui), porque o
+ * @fontsource já vem como CSS-side-effect via JS imports — o Vite
+ * cuida disso automaticamente.
+ */
+
+@import "tailwindcss";
+@import "../ui/theme.css";
+@import "../ui/global-reset.css";
+
+/* ───────────────────────────────────────────────────────────
+ * Custom variants do Tailwind v4
+ * ───────────────────────────────────────────────────────────
+ * Tailwind v4 não traz dark mode strategy default — precisamos
+ * registrar como queremos detectar dark mode. Adotamos a estratégia
+ * "class on ancestor": qualquer elemento dentro de `.dark` (ou que
+ * seja `.dark` ele mesmo) ativa as utilities `dark:` modifier.
+ *
+ * Equivalente ao `darkMode: 'class'` do Tailwind v3. Compatível com
+ * o sistema atual do Legacy (`shared/theme.js` aplica `.dark` no
+ * <html> ou <body>), o que facilitará reuso quando o V2 for default.
+ *
+ * Uso: `<div className="bg-canvas dark:bg-canvas-deeper" />`
+ *
+ * O V2 nasce dark-first, então `dark:` ainda não é usado — mas a
+ * variant fica registrada para Fase 2+ poder usar sem mudanças
+ * estruturais.
+ */
+@custom-variant dark (&:where(.dark, .dark *));
