@@ -4,14 +4,13 @@
 // mockup definido na auditoria visual ("hypr_report_redesign_v2.html").
 //
 // LAYOUT, NA ORDEM (top → bottom)
-//   1. InsightBannerV2 (1-N) — callouts auto-gerados de pacing/economia
-//   2. Hero KPI (Custo Efetivo) + grid de 4 KPIs auxiliares com sparklines
-//   3. Pacing Display + Pacing Video lado a lado, com marker "esperado hoje"
-//   4. Sumário por mídia (DISPLAY + VIDEO) — 2 cards lado a lado, layout
+//   1. Hero KPI (Custo Efetivo) + grid de 4 KPIs auxiliares com sparklines
+//   2. Pacing Display + Pacing Video lado a lado, com marker "esperado hoje"
+//   3. Sumário por mídia (DISPLAY + VIDEO) — 2 cards lado a lado, layout
 //      inline compacto após PR-16 (label+valor numa linha só)
-//   5. Charts diários (Display Imp×CTR + Video Views×VTR)
-//   6. DailyAggregateTableV2 — tabela "Entrega Agregada por Dia" (collapsible, aberto)
-//   7. AlcanceFrequenciaV2 — admin edita, cliente vê read-only
+//   4. Charts diários (Display Imp×CTR + Video Views×VTR)
+//   5. DailyAggregateTableV2 — tabela "Entrega Agregada por Dia" (collapsible, aberto)
+//   6. AlcanceFrequenciaV2 — admin edita, cliente vê read-only
 //
 // ComparisonRow (CPM Display + CPCV Video) saiu na PR-16 — era redundante
 // com o MediaSummaryV2 abaixo, que já carrega Efetivo + Delta. Continua
@@ -20,6 +19,10 @@
 // Detalhamento por Linha (DataTableV2) também saiu na PR-16 — virou tab
 // dedicada (DetalhamentoV2). Visão Geral fica como executive summary
 // puro, sem raw data competindo por foco.
+//
+// InsightBanners (callouts auto-gerados de pacing/economia) também saíram
+// na PR-16 — competiam por foco com o Hero KPI sem agregar info que o
+// próprio MediaSummary/Pacing já carregam (over-delivery, on-target).
 //
 // Quando há filtro de período ativo, Pacing some (não faz sentido em
 // janela parcial). Insights podem se ajustar no texto (verbo passado vs
@@ -30,7 +33,6 @@ import { fmt, fmtR } from "../../shared/format";
 import { KpiCardV2 } from "../components/KpiCardV2";
 import { HeroKpiCardV2 } from "../components/HeroKpiCardV2";
 import { SparklineV2 } from "../components/SparklineV2";
-import { InsightBannerV2, buildInsights } from "../components/InsightBannerV2";
 import { PacingBarV2 } from "../components/PacingBarV2";
 import { MediaSummaryV2 } from "../components/MediaSummaryV2";
 import { DualChartV2 } from "../components/DualChartV2";
@@ -50,15 +52,6 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt 
   const hasDisplay = display.length > 0;
   const hasVideo = video.length > 0;
   const totalViews100 = totals.reduce((s, t) => s + (t.completions || 0), 0);
-
-  // Insights gerados a partir de pacing + economia.
-  const insights = buildInsights({
-    display,
-    video,
-    totals,
-    isFiltered,
-    isClosedPeriod: false, // TODO: derivar de camp.end_date < today
-  });
 
   // Sparklines: pegamos os últimos N pontos da série diária.
   const impSparklineValues = chartDisplay
@@ -84,18 +77,7 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt 
 
   return (
     <div className="space-y-6">
-      {/* ─── 1. Insights ─────────────────────────────────────────────── */}
-      {insights.length > 0 && (
-        <div className="space-y-2">
-          {insights.map((ins, i) => (
-            <InsightBannerV2 key={i} variant={ins.variant} title={ins.title}>
-              {ins.body}
-            </InsightBannerV2>
-          ))}
-        </div>
-      )}
-
-      {/* ─── 2. Hero KPI + auxiliares ────────────────────────────────── */}
+      {/* ─── 1. Hero KPI + auxiliares ────────────────────────────────── */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
         {/* Hero ocupa 2 colunas em xl (resto fica 4 cards de 1 col cada) */}
         <div className="md:col-span-2 xl:col-span-2">
@@ -187,7 +169,7 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt 
       {/* Pacing Geral pill abaixo do grid foi removido — agora é o 5º
           card do hero grid pra bater com o mockup. */}
 
-      {/* ─── 3. Pacing Display + Video ───────────────────────────────── */}
+      {/* ─── 2. Pacing Display + Video ───────────────────────────────── */}
       {!isFiltered && (hasDisplay || hasVideo) && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {hasDisplay && (
@@ -217,7 +199,7 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt 
         </div>
       )}
 
-      {/* ─── 4. Resumo por mídia ─────────────────────────────────────── */}
+      {/* ─── 3. Resumo por mídia ─────────────────────────────────────── */}
       {(hasDisplay || hasVideo) && (
         <section>
           <h2 className="text-xs font-semibold uppercase tracking-wider text-fg-subtle mb-3">
@@ -230,7 +212,7 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt 
         </section>
       )}
 
-      {/* ─── 5. Charts diários ───────────────────────────────────────── */}
+      {/* ─── 4. Charts diários ───────────────────────────────────────── */}
       {(chartDisplay.length > 0 || chartVideo.length > 0) && (
         <section>
           <h2 className="text-xs font-semibold uppercase tracking-wider text-fg-subtle mb-3">
@@ -271,7 +253,7 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt 
         </section>
       )}
 
-      {/* ─── 6. Tabela Entrega Agregada por Dia ─────────────────────── */}
+      {/* ─── 5. Tabela Entrega Agregada por Dia ─────────────────────── */}
       {daily0 && daily0.length > 0 && (
         <CollapsibleSectionV2 title="Entrega Agregada por Dia" defaultOpen>
           <DailyAggregateTableV2
@@ -281,7 +263,7 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt 
         </CollapsibleSectionV2>
       )}
 
-      {/* ─── 7. Alcance & Frequência ────────────────────────────────── */}
+      {/* ─── 6. Alcance & Frequência ────────────────────────────────── */}
       <AlcanceFrequenciaV2
         token={token}
         isAdmin={isAdmin}
