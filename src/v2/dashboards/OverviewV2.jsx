@@ -97,8 +97,8 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt 
       )}
 
       {/* ─── 2. Hero KPI + auxiliares ────────────────────────────────── */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
-        {/* Hero ocupa 2 colunas em xl */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
+        {/* Hero ocupa 2 colunas em xl (resto fica 4 cards de 1 col cada) */}
         <div className="md:col-span-2 xl:col-span-2">
           <HeroKpiCardV2
             icon={<DollarIcon />}
