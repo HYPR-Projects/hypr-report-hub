@@ -216,8 +216,8 @@ export default function OverviewV2({ data, token, isAdmin, adminJwt, onBackToLeg
                 Resumo por mídia
               </h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {hasDisplay && <MediaSummaryV2 type="DISPLAY" row={display[0]} />}
-                {hasVideo && <MediaSummaryV2 type="VIDEO" row={video[0]} />}
+                {hasDisplay && <MediaSummaryV2 type="DISPLAY" rows={display} />}
+                {hasVideo && <MediaSummaryV2 type="VIDEO" rows={video} />}
               </div>
             </section>
           )}
