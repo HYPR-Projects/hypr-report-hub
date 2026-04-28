@@ -5,26 +5,35 @@
 // RESPONSABILIDADES
 //   - Buscar dados da campanha via getCampaign(token)
 //   - Gerenciar state global do dashboard:
-//       • mainRange (filtro de período)  → ?from=&to=
-//       • tab ativa (overview | display) → ?tab=
-//       • tactic do Display (O2O | OOH)  → ?tactic=
+//       • mainRange (filtro de período)         → ?from=&to=
+//       • tab ativa (overview|display|video)    → ?tab=
+//       • tactic do Display (O2O|OOH)           → ?display_tactic=
+//       • tactic do Video (O2O|OOH)             → ?video_tactic=
 //   - Sincronizar com botão voltar/avançar do navegador (popstate)
 //   - Renderizar loading state (Skeleton) e error state
 //   - Renderizar layout master: CampaignHeader, filtro de período,
-//     Tabs Radix com painéis Visão Geral e Display
+//     Tabs Radix com painéis Visão Geral, Display e Video
 //
 // POR QUE STATE GLOBAL VIVE NO SHELL
-//   Período é compartilhado entre Visão Geral e Display — trocar a
-//   janela e mudar de tab tem que preservar o filtro. Tab/tactic
-//   também ficam aqui pra que o popstate listener seja único e
-//   reaja a TODAS as mudanças de URL ao mesmo tempo.
+//   Período é compartilhado entre as tabs — trocar a janela e mudar
+//   de tab tem que preservar o filtro. Tab/tactics também ficam aqui
+//   pra que o popstate listener seja único e reaja a TODAS as
+//   mudanças de URL ao mesmo tempo.
 //
-//   Quando VideoV2 entrar (PR-11), bastará adicionar um <TabsTrigger>
-//   e <TabsContent>, sem mudar nada na arquitetura do shell.
+//   Quando outras tabs (RMND, PDOOH, etc) entrarem, basta adicionar
+//   um <TabsTrigger> e <TabsContent>, sem mudar nada na arquitetura.
 //
-// FILTRO DE AUDIÊNCIA (Display) é state local da tab
-//   `lines` é efêmero, UX-only, e a string ficaria gigante na URL —
-//   mantido como state interno do componente DisplayV2. Ver doc lá.
+// POR QUE TACTICS DISPLAY E VIDEO SÃO INDEPENDENTES
+//   Um cliente pode ter Display rodando só em O2O e Video só em OOH
+//   (ou qualquer combinação). Acumular num \`tactic\` global daria UX
+//   confusa — usuário trocaria entre tabs e veria O2O/OOH alternando
+//   sem motivo aparente. O Legacy mantém \`dispTab\` e \`vidTab\`
+//   separados pelo mesmo motivo.
+//
+// FILTRO DE AUDIÊNCIA (lines) é state local POR TAB
+//   \`displayLines\` e \`videoLines\` — efêmeros, UX-only, e a string
+//   ficaria gigante na URL. Resetam ao trocar tactic dentro da
+//   respectiva tab.
 //
 // PERSISTÊNCIA DE URL
 //   Tudo via history.replaceState (não pushState) — não polui o
@@ -62,13 +71,14 @@ import { DateRangeFilterV2 } from "../components/DateRangeFilterV2";
 
 import OverviewV2 from "./OverviewV2";
 import DisplayV2 from "./DisplayV2";
+import VideoV2 from "./VideoV2";
 
 // ─── Helpers de URL ────────────────────────────────────────────────────
 //
 // Inline porque são consumidos só aqui. Quando aparecer terceira tab
 // ou outro state URL-persistido, vale extrair pra src/shared/urlState.js.
 
-const VALID_TABS = ["overview", "display"];
+const VALID_TABS = ["overview", "display", "video"];
 const VALID_TACTICS = ["O2O", "OOH"];
 
 function readTabFromUrl() {
@@ -91,22 +101,25 @@ function writeTabToUrl(tab) {
   } catch { /* noop */ }
 }
 
-function readTacticFromUrl() {
+// Tactic helpers parametrizados — Display e Video têm tactics
+// independentes (um cliente pode ter Display só em O2O e Video só em
+// OOH). Param key configurável: "display_tactic" ou "video_tactic".
+function readTacticFromUrl(paramKey) {
   if (typeof window === "undefined") return "O2O";
   try {
-    const t = new URLSearchParams(window.location.search).get("tactic");
+    const t = new URLSearchParams(window.location.search).get(paramKey);
     return VALID_TACTICS.includes(t) ? t : "O2O";
   } catch {
     return "O2O";
   }
 }
 
-function writeTacticToUrl(tactic) {
+function writeTacticToUrl(paramKey, tactic) {
   if (typeof window === "undefined") return;
   try {
     const url = new URL(window.location.href);
-    if (tactic === "O2O") url.searchParams.delete("tactic");
-    else url.searchParams.set("tactic", tactic);
+    if (tactic === "O2O") url.searchParams.delete(paramKey);
+    else url.searchParams.set(paramKey, tactic);
     window.history.replaceState({}, "", url.toString());
   } catch { /* noop */ }
 }
@@ -120,12 +133,19 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
   // State global do dashboard
   const [mainRange, setMainRangeState] = useState(() => readRangeFromUrl());
   const [tab, setTabState] = useState(() => readTabFromUrl());
-  const [tactic, setTacticState] = useState(() => readTacticFromUrl());
+  const [displayTactic, setDisplayTacticState] = useState(() =>
+    readTacticFromUrl("display_tactic"),
+  );
+  const [videoTactic, setVideoTacticState] = useState(() =>
+    readTacticFromUrl("video_tactic"),
+  );
 
-  // Filtro de audiência da tab Display — state local ao shell por
-  // simetria, mas NÃO persiste em URL (UX efêmero). Resetado ao trocar
-  // tactic dentro do DisplayV2 (que recebe setLines como prop).
-  const [lines, setLines] = useState([]);
+  // Filtro de audiência por tab — state local ao shell por simetria,
+  // mas NÃO persiste em URL (UX efêmero, string ficaria gigante).
+  // Resetado ao trocar tactic dentro de cada tab (Display/Video
+  // recebem setLines como prop).
+  const [displayLines, setDisplayLines] = useState([]);
+  const [videoLines, setVideoLines] = useState([]);
 
   // Setters que sincronizam com URL
   const setMainRange = (r) => {
@@ -136,9 +156,13 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
     setTabState(t);
     writeTabToUrl(t);
   };
-  const setTactic = (t) => {
-    setTacticState(t);
-    writeTacticToUrl(t);
+  const setDisplayTactic = (t) => {
+    setDisplayTacticState(t);
+    writeTacticToUrl("display_tactic", t);
+  };
+  const setVideoTactic = (t) => {
+    setVideoTacticState(t);
+    writeTacticToUrl("video_tactic", t);
   };
 
   // Fetch da campanha
@@ -168,7 +192,8 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
     const onPop = () => {
       setMainRangeState(readRangeFromUrl());
       setTabState(readTabFromUrl());
-      setTacticState(readTacticFromUrl());
+      setDisplayTacticState(readTacticFromUrl("display_tactic"));
+      setVideoTacticState(readTacticFromUrl("video_tactic"));
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
@@ -233,7 +258,7 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
             }
           />
 
-          {/* Filtro global de período — afeta Overview e Display */}
+          {/* Filtro global de período — afeta todas as tabs */}
           <section className="mt-6">
             <h2 className="text-xs font-semibold uppercase tracking-wider text-fg-subtle mb-3">
               Período
@@ -256,6 +281,7 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
               <TabsList>
                 <TabsTrigger value="overview">Visão Geral</TabsTrigger>
                 <TabsTrigger value="display">Display</TabsTrigger>
+                <TabsTrigger value="video">Video</TabsTrigger>
               </TabsList>
             </div>
 
@@ -273,10 +299,21 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
               <DisplayV2
                 data={data}
                 aggregates={aggregates}
-                tactic={tactic}
-                setTactic={setTactic}
-                lines={lines}
-                setLines={setLines}
+                tactic={displayTactic}
+                setTactic={setDisplayTactic}
+                lines={displayLines}
+                setLines={setDisplayLines}
+              />
+            </TabsContent>
+
+            <TabsContent value="video">
+              <VideoV2
+                data={data}
+                aggregates={aggregates}
+                tactic={videoTactic}
+                setTactic={setVideoTactic}
+                lines={videoLines}
+                setLines={setVideoLines}
               />
             </TabsContent>
           </Tabs>
@@ -318,6 +355,7 @@ function DashboardSkeleton({ onBackToLegacy }) {
         <div className="mt-8 flex gap-1 p-1 rounded-lg bg-surface-strong border border-border w-fit">
           <Skeleton className="h-9 w-28 rounded-md" />
           <Skeleton className="h-9 w-24 rounded-md" />
+          <Skeleton className="h-9 w-20 rounded-md" />
         </div>
 
         <div className="mt-6 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
