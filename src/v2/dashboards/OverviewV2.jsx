@@ -34,6 +34,7 @@ import { KpiCardV2 } from "../components/KpiCardV2";
 import { HeroKpiCardV2 } from "../components/HeroKpiCardV2";
 import { SparklineV2 } from "../components/SparklineV2";
 import { PacingBarV2 } from "../components/PacingBarV2";
+import { PacingOverPillV2 } from "../components/PacingOverPillV2";
 import { MediaSummaryV2 } from "../components/MediaSummaryV2";
 import { DualChartV2 } from "../components/DualChartV2";
 import { CollapsibleSectionV2 } from "../components/CollapsibleSectionV2";
@@ -152,7 +153,12 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt 
         {!isFiltered && pacingGeral > 0 ? (
           <KpiCardV2
             label="Pacing Geral"
-            value={`${fmt(pacingGeral, 1)}%`}
+            value={
+              <span className="inline-flex items-center gap-2 flex-wrap">
+                <span>{fmt(pacingGeral, 1)}%</span>
+                <PacingOverPillV2 pacing={pacingGeral} size="md" />
+              </span>
+            }
             accent={pacingGeral >= 90 && pacingGeral <= 110}
             hint="Média ponderada de pacing Display + Video pelo budget contratado."
           />
