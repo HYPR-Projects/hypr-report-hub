@@ -1,25 +1,33 @@
 // src/v2/components/MediaSummaryV2.jsx
 //
-// Card de resumo por mídia (Display ou Video).
+// Card de resumo por mídia (Display ou Video) — Stat Strip layout.
 //
-// LAYOUT (revisão "Linear/Vercel/Resend 2025"):
-//   - Tipo da mídia (Display/Video) sai do "DISPLAY · CPM EFETIVO" antigo.
-//     Vira label discreto no topo do card, sem competir com a métrica hero.
-//   - Hero metric (CPM/CPCV efetivo) ganha hierarquia tipográfica clara:
-//     valor grande, delta inline minúsculo (ícone + %, sem pill colorida),
-//     label da métrica em sub-info abaixo.
-//   - KPIs secundários reorganizados como stats em "value-first" (valor
-//     em cima, label embaixo) — mesma convenção dos hero KPIs do topo da
-//     visão geral.
+// LAYOUT (referência: Stripe Payments / Vercel Analytics / Linear)
+//   Strip horizontal com 5 colunas iguais distribuindo todo o espaço
+//   disponível, separadas por dividers sutis. A primeira célula é o
+//   hero (CPM/CPCV efetivo) com o delta de rentabilidade inline; as
+//   outras 4 são os KPIs secundários.
 //
-// CONTAINER QUERIES (Tailwind v4 built-in)
-//   O grid pai (Pacing/Resumo) ora coloca este card em 50% (Display+Video),
-//   ora em 100% (apenas uma mídia). Em vez de reagir ao viewport, o card
-//   reage ao próprio tamanho via @container:
-//     - narrow (< @2xl ≈ 672px): hero em cima, stats embaixo
-//     - wide  (≥ @2xl): hero à esquerda, stats à direita na mesma linha
-//   Resolve o "espalhamento" do grid 4-col esticado em full-width sem
-//   recorrer a viewport breakpoints (que não sabem o tamanho do container).
+//   ┌─────────────────────────────────────────────────────────────────┐
+//   │ Display                                                          │
+//   ├──────────┬──────────┬──────────┬──────────┬──────────────────────┤
+//   │ R$ 14,40 │ 6.263.110│  38.444  │  0,6%    │ R$ 2,35              │
+//   │ ↓ 0,0%   │          │          │          │                      │
+//   │ CPM ef.  │ Imp.vis. │ Clicks   │ CTR      │ CPC                  │
+//   └──────────┴──────────┴──────────┴──────────┴──────────────────────┘
+//
+// DECISÕES DE DESIGN
+//   - Tipografia uniforme (todos os valores em 22px) para evitar drama
+//     visual. Hierarquia é feita por COR: hero e métrica de qualidade
+//     (CTR/VTR) ganham `text-signature`; demais ficam neutras. Padrão
+//     adotado por dashboards operacionais top-tier.
+//   - Dividers `border-border/40` ancoram visualmente sem fazer barulho.
+//     Density adequada — não vira "card vazio com números soltos".
+//   - 5 colunas iguais (`grid-cols-5`) com `divide-x` distribuem o
+//     espaço uniformemente em qualquer largura — resolve tanto card
+//     metade (~620px) quanto card full-width (~1300px) sem reorganizar.
+//   - Em mobile, vira coluna única com `divide-y` (acessível, sem grid
+//     apertado).
 //
 // Quando consumir
 //   - Display: <MediaSummaryV2 type="DISPLAY" rows={display} />
@@ -30,33 +38,35 @@ import { fmt, fmtP, fmtR } from "../../shared/format";
 import { cn } from "../../ui/cn";
 import { Card, CardBody } from "../../ui/Card";
 
-// Stat secundário (value-first, label embaixo). Tabular-nums pra alinhar
-// dígitos verticalmente quando aparece em coluna.
-function Stat({ label, value, accent = false }) {
+// Célula do strip. Valor (com delta opcional inline) em cima, label embaixo.
+function StatCell({ label, value, accent = false, delta = null }) {
   return (
-    <div className="min-w-0">
-      <div
-        className={cn(
-          "text-[15px] font-semibold tabular-nums leading-tight truncate",
-          accent ? "text-signature" : "text-fg",
-        )}
-      >
-        {value}
+    <div className="px-5 py-4 min-w-0">
+      <div className="flex items-baseline gap-2 flex-wrap">
+        <span
+          className={cn(
+            "text-[22px] font-semibold tabular-nums leading-tight truncate",
+            accent ? "text-signature" : "text-fg",
+          )}
+        >
+          {value}
+        </span>
+        {delta !== null && delta !== undefined && <Delta rentab={delta} />}
       </div>
-      <div className="text-[10.5px] text-fg-muted mt-1 truncate">{label}</div>
+      <div className="text-[11px] text-fg-muted mt-1.5 truncate">{label}</div>
     </div>
   );
 }
 
-// Delta inline minimalista — só ícone + %, sem fundo de pill.
+// Delta inline minimalista — ícone + %, sem fundo de pill.
 // Convenção: rentab > 0 = efetivo abaixo do negociado (lucro, verde, ↓).
 function Delta({ rentab }) {
   if (rentab == null) {
-    return <span className="text-[12px] tabular-nums text-fg-muted">—</span>;
+    return <span className="text-[11px] tabular-nums text-fg-muted">—</span>;
   }
   if (rentab === 0) {
     return (
-      <span className="text-[12px] font-medium tabular-nums text-fg-muted">
+      <span className="text-[11px] font-medium tabular-nums text-fg-muted">
         {fmtP(0)}
       </span>
     );
@@ -65,7 +75,7 @@ function Delta({ rentab }) {
   return (
     <span
       className={cn(
-        "text-[12px] font-medium tabular-nums",
+        "text-[11px] font-medium tabular-nums whitespace-nowrap",
         isGood ? "text-success" : "text-danger",
       )}
       title="Rentabilidade — diferença % entre o CPM/CPCV negociado e o efetivo entregue"
@@ -114,52 +124,46 @@ export function MediaSummaryV2({ type, rows }) {
     ? (effCpm / 1000) * (totals.vi / totals.clks)
     : null;
 
-  const heroLabel = isDisplay ? "CPM efetivo" : "CPCV efetivo";
-  const heroValue = isDisplay ? effCpm : effCpcv;
-
-  const stats = isDisplay
+  // Cells do strip — hero é a primeira (com delta), as 4 seguintes são
+  // os KPIs secundários. CTR/VTR ficam em accent (métrica de qualidade).
+  const cells = isDisplay
     ? [
+        { label: "CPM efetivo",  value: fmtR(effCpm),         accent: true,  delta: rentab },
         { label: "Imp. visíveis", value: fmt(totals.vi) },
         { label: "Clicks",        value: fmt(totals.clks) },
         { label: "CTR",           value: ctr == null ? "—" : fmtP(ctr), accent: true },
         { label: "CPC",           value: cpc == null ? "—" : fmtR(cpc) },
       ]
     : [
-        { label: "Imp. visíveis",  value: fmt(totals.vi) },
-        { label: "Views 100%",     value: fmt(totals.v100) },
-        { label: "VTR",            value: vtr == null ? "—" : fmtP(vtr), accent: true },
-        { label: "Custo efetivo",  value: fmtR(totals.cost) },
+        { label: "CPCV efetivo",  value: fmtR(effCpcv),        accent: true,  delta: rentab },
+        { label: "Imp. visíveis", value: fmt(totals.vi) },
+        { label: "Views 100%",    value: fmt(totals.v100) },
+        { label: "VTR",           value: vtr == null ? "—" : fmtP(vtr),  accent: true },
+        { label: "Custo efetivo", value: fmtR(totals.cost) },
       ];
 
   return (
     <Card>
-      <CardBody className="@container p-5">
-        {/* Tipo da mídia: label discreto, sem competir com hero */}
-        <div className="text-[11px] font-medium text-fg-muted mb-4">
-          {isDisplay ? "Display" : "Video"}
+      <CardBody className="p-0">
+        {/* Header com border-bottom ancorando o card */}
+        <div className="px-5 py-3 border-b border-border">
+          <div className="text-[12px] font-medium text-fg-muted">
+            {isDisplay ? "Display" : "Video"}
+          </div>
         </div>
 
-        {/* Hero + stats: empilha em narrow, lado a lado em wide (>= ~672px) */}
-        <div className="flex flex-col gap-5 @2xl:flex-row @2xl:items-end @2xl:justify-between @2xl:gap-10">
-          {/* Hero metric */}
-          <div className="shrink-0">
-            <div className="flex items-baseline gap-2.5">
-              <span className="text-[30px] font-bold text-signature tabular-nums leading-none">
-                {fmtR(heroValue)}
-              </span>
-              <Delta rentab={rentab} />
-            </div>
-            <div className="text-[11px] text-fg-muted mt-2">{heroLabel}</div>
-          </div>
-
-          {/* Stats secundários: 4 colunas sempre (cabem confortavelmente
-              acima de ~360px de container). Encostados à direita em wide
-              pra não esticar. */}
-          <div className="grid grid-cols-4 gap-x-6 gap-y-3 @2xl:flex-1 @2xl:max-w-[640px]">
-            {stats.map((s) => (
-              <Stat key={s.label} label={s.label} value={s.value} accent={s.accent} />
-            ))}
-          </div>
+        {/* Strip: 5 colunas iguais com dividers verticais em desktop;
+            coluna única com dividers horizontais em mobile */}
+        <div className="grid grid-cols-1 md:grid-cols-5 divide-y md:divide-y-0 md:divide-x divide-border/40">
+          {cells.map((c) => (
+            <StatCell
+              key={c.label}
+              label={c.label}
+              value={c.value}
+              accent={c.accent}
+              delta={c.delta}
+            />
+          ))}
         </div>
       </CardBody>
     </Card>
