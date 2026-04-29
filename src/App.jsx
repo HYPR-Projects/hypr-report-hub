@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import RouteSuspense from "./components/RouteSuspense";
+import LoadingShell from "./components/LoadingShell";
 import V2ErrorBoundary from "./v2/components/ErrorBoundary";
 import {
   getAdminJwtFromUrl,
@@ -120,7 +121,7 @@ export default function App() {
 
     // Admin abrindo URL com share_id: aguarda lookup terminar.
     if (needsAdminLookup) {
-      if (adminLookup.loading) return <RouteSuspense />;
+      if (adminLookup.loading) return <LoadingShell />;
       if (adminLookup.error) {
         return (
           <div style={{
@@ -159,7 +160,7 @@ export default function App() {
 
     return (
       <V2ErrorBoundary>
-        <Suspense fallback={<RouteSuspense />}>
+        <Suspense fallback={<LoadingShell />}>
           <ClientDashboard {...dashboardProps} />
         </Suspense>
       </V2ErrorBoundary>
