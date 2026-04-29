@@ -28,7 +28,6 @@ import "../v2.css";
 import "../../ui/typography";
 
 import { getCampaign } from "../../lib/api";
-import { setReportVersion } from "../../shared/version";
 import { gaPageView } from "../../shared/analytics";
 import { computeAggregates } from "../../shared/aggregations";
 import {
@@ -178,13 +177,6 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
     [data, mainRange],
   );
 
-  const goLegacy = () => {
-    setReportVersion("legacy");
-    const url = new URL(window.location.href);
-    url.searchParams.delete("v");
-    window.location.replace(url.toString());
-  };
-
   const handleShare = () => {
     if (typeof navigator === "undefined" || !navigator.clipboard) return;
     navigator.clipboard.writeText(window.location.href).catch(() => {
@@ -202,10 +194,10 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
           <p className="text-sm text-fg-muted mb-6">{error}</p>
           <button
             type="button"
-            onClick={goLegacy}
+            onClick={() => window.location.reload()}
             className="text-sm font-semibold text-signature hover:text-signature-hover transition-colors cursor-pointer"
           >
-            Voltar à versão atual →
+            Tentar de novo →
           </button>
         </div>
       </div>
@@ -213,7 +205,7 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
   }
 
   if (!data || !aggregates) {
-    return <DashboardSkeleton onBackToLegacy={goLegacy} />;
+    return <DashboardSkeleton />;
   }
 
   const camp = data.campaign;
@@ -258,7 +250,6 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
         <TopBarV2
           updatedAtLabel="Atualizado agora"
           onShare={handleShare}
-          onBackToLegacy={goLegacy}
         />
 
         <div className="mx-auto max-w-[1440px] px-4 md:px-6 lg:px-8 py-6 md:py-8 space-y-6">
@@ -418,10 +409,10 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
 }
 
 // ─── Loading state ────────────────────────────────────────────────────
-function DashboardSkeleton({ onBackToLegacy }) {
+function DashboardSkeleton() {
   return (
     <div className="min-h-screen bg-canvas text-fg font-sans">
-      <TopBarV2 updatedAtLabel="Carregando..." onBackToLegacy={onBackToLegacy} />
+      <TopBarV2 updatedAtLabel="Carregando..." />
       <div className="mx-auto max-w-[1440px] px-4 md:px-6 lg:px-8 py-6 md:py-8 space-y-6">
         <div className="rounded-2xl border border-border-strong bg-surface-2 p-8 space-y-3">
           <Skeleton className="h-3 w-24" />

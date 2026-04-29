@@ -1,7 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import RouteSuspense from "./components/RouteSuspense";
 import V2ErrorBoundary from "./v2/components/ErrorBoundary";
-import { useReportVersion } from "./shared/version";
 import {
   getAdminJwtFromUrl,
   isJwtExpired,
@@ -14,6 +13,16 @@ import {
   getResolvedShortToken,
 } from "./shared/auth";
 import { lookupShare } from "./lib/api";
+
+// ── Code-splitting ──────────────────────────────────────────────────────
+// Cada rota é um chunk próprio. ErrorBoundary fica estático no bundle
+// inicial pra estar disponível ANTES do dashboard lazy carregar — caso
+// o chunk falhe, o boundary captura. Helpers de auth também ficam
+// estáticos por serem usados sincronamente no caminho crítico.
+const LoginScreen          = lazy(() => import("./pages/LoginScreen"));
+const ClientPasswordScreen = lazy(() => import("./pages/ClientPasswordScreen"));
+const CampaignMenu         = lazy(() => import("./pages/CampaignMenu"));
+const ClientDashboard      = lazy(() => import("./v2/dashboards/ClientDashboardV2"));
 
 /**
  * Heurística pra distinguir share_id (formato novo, opaco) de
@@ -38,26 +47,6 @@ function isLikelyShareId(token) {
   if (/[a-z]/.test(token)) return true;
   return false;
 }
-
-// ── Code-splitting (Fase 4 · PR-21) ─────────────────────────────────────
-// Cada rota é um chunk próprio. O bundle inicial cai de ~975 kB pra
-// apenas o que App.jsx + auth + version + ErrorBoundary precisam.
-//
-// Por que importar ErrorBoundary V2 estático
-//   ErrorBoundary deve estar disponível ANTES do componente que ele
-//   protege carregar — caso contrário, se o lazy do V2 falhar (chunk
-//   404 por deploy stale, rede caiu), não há boundary pra capturar.
-//   ErrorBoundary é leve (~3kB) então fica no bundle inicial.
-//
-// Por que getAdminJwt / loadSession / etc também ficam estáticos
-//   São utilitários sync usados antes do lazy resolver. Tentar
-//   lazy-loadar shared/auth criaria um await desnecessário no caminho
-//   crítico.
-const LoginScreen          = lazy(() => import("./pages/LoginScreen"));
-const ClientPasswordScreen = lazy(() => import("./pages/ClientPasswordScreen"));
-const CampaignMenu         = lazy(() => import("./pages/CampaignMenu"));
-const ClientDashboard      = lazy(() => import("./pages/ClientDashboard"));
-const ClientDashboardV2    = lazy(() => import("./v2/dashboards/ClientDashboardV2"));
 
 export default function App() {
   // Restaura sessão admin (8h TTL) e unlock de cliente direto do localStorage
@@ -114,12 +103,6 @@ export default function App() {
     return () => { cancelled = true; };
   }, [needsAdminLookup, clientToken]);
 
-  // Resolução do toggle Legacy ↔ V2. Chamado no topo do componente para
-  // respeitar a regra de hooks do React (mesmo que useReportVersion seja
-  // hoje uma função pura, manter como hook prepara o terreno se um dia
-  // precisar de useSyncExternalStore para reatividade ao localStorage).
-  const reportVersion = useReportVersion();
-
   if (isClient && clientToken) {
     if (!isAdminMode && !unlocked) {
       return (
@@ -164,36 +147,22 @@ export default function App() {
 
     // Admin sempre abre via short_token na URL (fluxo do menu não muda).
     // Cliente pode estar com share_id na URL — usa o resolvedToken.
-    const adminJwt = adminJwtFromUrl;
-    const _isAdmin = isAdminMode;
-    const dashboardToken = _isAdmin
+    const dashboardToken = isAdminMode
       ? (adminLookup.token || clientToken)
       : (resolvedToken || getResolvedShortToken(clientToken) || clientToken);
 
-    // Roteamento Legacy ↔ V2 controlado por src/shared/version.js.
-    // Default permanece 'legacy' até a Fase 7. O cliente só vê o V2 se
-    // chegar com ?v=v2 na URL ou já tiver feito opt-in numa sessão
-    // anterior. O ErrorBoundary do V2 captura crashes, registra no
-    // GA via gaEvent('v2_crash'), força localStorage='legacy' e
-    // recarrega — cliente nunca vê tela branca.
     const dashboardProps = {
       token: dashboardToken,
-      isAdmin: _isAdmin,
-      adminJwt: hasValidAdminJwt ? adminJwt : null,
+      isAdmin: isAdminMode,
+      adminJwt: hasValidAdminJwt ? adminJwtFromUrl : null,
     };
-    if (reportVersion === "v2") {
-      return (
-        <V2ErrorBoundary>
-          <Suspense fallback={<RouteSuspense />}>
-            <ClientDashboardV2 {...dashboardProps} />
-          </Suspense>
-        </V2ErrorBoundary>
-      );
-    }
+
     return (
-      <Suspense fallback={<RouteSuspense />}>
-        <ClientDashboard {...dashboardProps} />
-      </Suspense>
+      <V2ErrorBoundary>
+        <Suspense fallback={<RouteSuspense />}>
+          <ClientDashboard {...dashboardProps} />
+        </Suspense>
+      </V2ErrorBoundary>
     );
   }
 

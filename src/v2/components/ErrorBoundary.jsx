@@ -1,28 +1,28 @@
 // src/v2/components/ErrorBoundary.jsx
 //
-// ErrorBoundary específico do V2.
+// ErrorBoundary do dashboard.
 //
-// Captura erros de runtime em qualquer descendente do <ClientDashboardV2>,
-// registra o ocorrido (console + Google Analytics existente), força a
-// versão para 'legacy' no localStorage, e recarrega a página.
-//
-// ──────────────────────────────────────────────────────────────────────
-// POR QUE FORÇAR LEGACY EM VEZ DE SÓ MOSTRAR FALLBACK UI
-// ──────────────────────────────────────────────────────────────────────
-// Mostrar uma fallback UI ("ops, algo deu errado") deixa o cliente
-// olhando para uma mensagem de erro até decidir o que fazer. Forçar
-// 'legacy' + reload coloca o cliente de volta numa interface
-// funcional em ~500ms, sem ação manual. A persistência em localStorage
-// garante que o crash não se repita na próxima visita — cliente fica
-// no Legacy permanentemente até alguém intervir manualmente
-// (?v=v2 na URL para tentar de novo).
+// Captura erros de runtime em qualquer descendente do <ClientDashboard>,
+// registra o ocorrido (console + Google Analytics existente), e mostra
+// uma UI de fallback com botão "Tentar de novo" que recarrega a página.
 //
 // ──────────────────────────────────────────────────────────────────────
-// COMO É RECONHECIDO COMO ERRO V2 NO GA
+// HISTÓRICO
 // ──────────────────────────────────────────────────────────────────────
-// O evento disparado tem nome 'v2_crash' e parâmetros que permitem
-// agrupar crashes recorrentes (mensagem do erro + nome do componente).
-// No GA Dashboard: Reports → Engagement → Events → v2_crash.
+// Antes da remoção do Legacy, este boundary forçava
+// `localStorage.hypr_report_version = 'legacy'` e recarregava — caía
+// pra interface antiga em ~500ms sem ação do cliente. Com Legacy
+// removido, não há fallback automático possível: ou o cliente clica
+// em "Tentar de novo", ou contata a equipe.
+//
+// ──────────────────────────────────────────────────────────────────────
+// COMO É RECONHECIDO COMO ERRO NO GA
+// ──────────────────────────────────────────────────────────────────────
+// O evento disparado tem nome 'v2_crash' (mantido pelo histórico,
+// pra não perder continuidade nas dashboards do GA já criados) e
+// parâmetros que permitem agrupar crashes recorrentes (mensagem do
+// erro + stack do componente). No GA: Reports → Engagement → Events
+// → v2_crash.
 //
 // ──────────────────────────────────────────────────────────────────────
 // LIMITAÇÕES CONHECIDAS DE ERRORBOUNDARY (React)
@@ -33,90 +33,99 @@
 //   - Erros em SSR (não usamos SSR)
 //   - Erros no próprio ErrorBoundary
 //
-// O suficiente para o caso de uso: erros de render do V2 (que são a
-// classe mais grave — viram tela branca sem boundary).
+// O suficiente para o caso de uso: erros de render do dashboard,
+// que são a classe mais grave — viram tela branca sem boundary.
 
 import React from "react";
 import { gaEvent } from "../../shared/analytics";
-import { setReportVersion } from "../../shared/version";
 
 export default class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { hasError: false };
+    this.state = { hasError: false, message: "" };
   }
 
-  static getDerivedStateFromError() {
-    // Marca que houve erro. Render abaixo mostra mensagem provisória
-    // enquanto o reload acontece (em <1s típico).
-    return { hasError: true };
+  static getDerivedStateFromError(error) {
+    return {
+      hasError: true,
+      message: error?.message || "Erro desconhecido",
+    };
   }
 
   componentDidCatch(error, errorInfo) {
     // 1. Console — para devs com DevTools aberto verem stack completo
     //    sem precisar abrir GA.
-    console.error("[V2 ErrorBoundary] Crash capturado, voltando ao Legacy:", error, errorInfo);
+    console.error("[ErrorBoundary] Crash capturado:", error, errorInfo);
 
-    // 2. Google Analytics — telemetria leve para detectar volume
-    //    anormal em produção. gaEvent é resiliente: se gtag não estiver
-    //    carregado, vira no-op silencioso.
+    // 2. Google Analytics — telemetria leve para detectar volume e
+    //    padrões. Mantemos o nome 'v2_crash' por continuidade do
+    //    histórico no GA.
     try {
       gaEvent("v2_crash", {
-        error_message: String(error?.message || error).slice(0, 200),
-        error_name: error?.name || "Error",
-        component_stack: String(errorInfo?.componentStack || "").slice(0, 500),
+        error_message: String(error?.message || error || "unknown").slice(0, 100),
+        error_stack: String(errorInfo?.componentStack || "").slice(0, 200),
       });
     } catch {
-      // Telemetria nunca pode quebrar o fallback. Engole qualquer erro
-      // do próprio gaEvent.
-    }
-
-    // 3. Persistir 'legacy' no localStorage — cliente não cai no V2
-    //    de novo na próxima visita até alguém forçar ?v=v2 na URL.
-    try {
-      setReportVersion("legacy");
-    } catch {
-      // setReportVersion já é resiliente, mas defesa em profundidade.
-    }
-
-    // 4. Reload — o ?v=v2 atual da URL precisa virar ?v=legacy ou
-    //    sumir. Removemos o parâmetro 'v' explicitamente e recarregamos.
-    //    Sem isso, o reload mantém ?v=v2 e o toggle prioriza URL sobre
-    //    localStorage, então o cliente volta a cair no V2 quebrado.
-    try {
-      const url = new URL(window.location.href);
-      url.searchParams.delete("v");
-      // replace em vez de assign pra não criar entrada no histórico
-      // (evita cliente clicar "Voltar" e cair no V2 quebrado de novo).
-      window.location.replace(url.toString());
-    } catch {
-      // Se URL API falhar (improvável em browsers modernos), reload
-      // simples como último recurso.
-      window.location.reload();
+      /* gaEvent pode falhar se gtag não carregou — não é fatal */
     }
   }
 
+  handleRetry = () => {
+    window.location.reload();
+  };
+
   render() {
-    if (this.state.hasError) {
-      // Mensagem mínima visível no instante entre captura e reload.
-      // Tipicamente <500ms. Sem botão — o reload é automático.
-      return (
+    if (!this.state.hasError) return this.props.children;
+
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 24,
+          background: "#0d1117",
+          color: "#fff",
+          fontFamily: "system-ui, -apple-system, sans-serif",
+        }}
+      >
         <div
           style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            minHeight: "100vh",
-            background: "#1C262F",
-            color: "#fff",
-            fontFamily: "system-ui, -apple-system, sans-serif",
-            fontSize: 14,
+            maxWidth: 420,
+            width: "100%",
+            textAlign: "center",
+            background: "rgba(255,255,255,0.04)",
+            border: "1px solid rgba(255,255,255,0.08)",
+            borderRadius: 12,
+            padding: "32px 28px",
           }}
         >
-          Carregando versão estável…
+          <h1 style={{ fontSize: 20, fontWeight: 700, marginBottom: 8 }}>
+            Algo deu errado ao carregar o report
+          </h1>
+          <p style={{ fontSize: 14, opacity: 0.7, marginBottom: 24, lineHeight: 1.6 }}>
+            Já registramos o erro automaticamente. Tenta recarregar — se
+            persistir, contata a equipe HYPR.
+          </p>
+          <button
+            type="button"
+            onClick={this.handleRetry}
+            style={{
+              background: "#3397b9",
+              color: "#fff",
+              border: "none",
+              padding: "12px 24px",
+              borderRadius: 8,
+              fontSize: 14,
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            Tentar de novo
+          </button>
         </div>
-      );
-    }
-    return this.props.children;
+      </div>
+    );
   }
 }
