@@ -35,7 +35,7 @@ export function TopBarV2({
     >
       {/* Branding: wordmark HYPR°REPORT CENTER tematizado */}
       <div className="flex items-center text-fg">
-        <HyprReportCenterLogo height={44} />
+        <HyprReportCenterLogo height={60} />
       </div>
 
       {/* Ações */}
