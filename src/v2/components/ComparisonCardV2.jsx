@@ -1,23 +1,33 @@
 // src/v2/components/ComparisonCardV2.jsx
 //
 // Card "Negociado vs Efetivo" — destaque do diferencial HYPR.
-// Mostrado no Visão Geral (CPM Display + CPCV Video) e no header de
-// cada tab Display/Video.
+// Mostrado no header das abas Display e Video.
 //
-// Layout do mockup:
-//   ┌──────────────────────────────────────────────────┐
-//   │ CPM Display · Negociado vs Efetivo               │ header
-//   ├──────────────────────────────────────────────────┤
-//   │  Negociado    →    Efetivo    │   Economia      │
-//   │  R$ 25,00          R$ 18,82   │   −24.7%        │
-//   │                                │                  │
-//   └──────────────────────────────────────────────────┘
-//                                    ↑
-//                        bloco direito com bg success-soft
+// LAYOUT (refatorado pra casar com o stat strip do MediaSummaryV2)
+//   ┌──────────────────────────────────────────────────────────┐
+//   │ CPM Display · O2O                                         │
+//   ├──────────────┬───────────────┬───────────────────────────┤
+//   │ R$ 14,40     │ R$ 8,96       │ ↓ 37,7%                   │
+//   │ Negociado    │ Efetivo       │ Economia                  │
+//   └──────────────┴───────────────┴───────────────────────────┘
+//
+// DECISÕES DE DESIGN
+//   - 3 cells iguais (grid-cols-3) com dividers sutis — distribui
+//     espaço uniformemente, sem dominante visual desproporcional.
+//   - Hierarquia por COR, não por fundo:
+//       Negociado: text-fg-muted (contexto, "antes")
+//       Efetivo:   text-signature (resultado, "depois")
+//       Economia:  text-success c/ seta ↓ (diferencial HYPR)
+//     Sem bg-success-soft no card: a cor da fonte + seta + label
+//     "Economia" carregam a mensagem sem ruído visual.
+//   - Tipografia uniforme (22px valores, 11px labels) — mesma
+//     linguagem do MediaSummaryV2 e dos hero KPIs.
+//   - Header simplificado: "CPM Display · O2O" (sem "Negociado vs
+//     Efetivo" redundante — labels embaixo já comunicam).
 //
 // API:
 //   <ComparisonCardV2
-//     title="CPM Display · Negociado vs Efetivo"
+//     title="CPM Display · O2O"
 //     negociado={25.00}
 //     efetivo={18.82}
 //     formatValue={(v) => fmtR(v)}
@@ -41,111 +51,77 @@ export function ComparisonCardV2({
     negociado > 0;
 
   // Economia = (negociado - efetivo) / negociado.
-  // Positiva = HYPR entregou mais barato (CPM efetivo < negociado).
-  // Negativa = saiu mais caro (raríssimo, sinaliza problema).
-  // Zero (negociado=efetivo) = caso degenerado, não mostra delta — mostra "—".
+  // Positiva = HYPR entregou mais barato (efetivo < negociado, ↓).
+  // Negativa = saiu mais caro (raro, sinaliza problema, ↑).
+  // Threshold de 0.05% pra tratar oscilações ínfimas como neutras.
   const economyPct = hasValues
     ? ((negociado - efetivo) / negociado) * 100
     : null;
-
-  // Threshold pra considerar "diferença significativa" — abaixo de 0.05%
-  // tratamos como neutro (provavelmente o backend ainda não tem CPCV
-  // efetivo separado do negociado, ou os dois são iguais por contrato).
   const isSignificant = economyPct !== null && Math.abs(economyPct) >= 0.05;
   const isEconomy = isSignificant && economyPct > 0;
   const isLoss = isSignificant && economyPct < 0;
 
+  const economyDisplay = !isSignificant
+    ? "—"
+    : `${isEconomy ? "↓" : "↑"} ${Math.abs(economyPct).toFixed(decimalsForDelta)}%`;
+
+  const economyLabel = isEconomy
+    ? "Economia"
+    : isLoss
+      ? "Variação"
+      : "Sem variação";
+
   return (
     <Card
       className={cn(
-        "bg-surface-2 border-border-strong overflow-hidden",
+        "border-border-strong overflow-hidden p-0",
         className,
       )}
     >
-      <div className="px-5 pt-4 pb-3 border-b border-border">
-        <div className="text-[11px] font-bold uppercase tracking-widest text-fg-muted">
-          {title}
-        </div>
+      {/* Header — title case, sem uppercase tracking gritante */}
+      <div className="px-5 py-3 border-b border-border">
+        <div className="text-[12px] font-medium text-fg-muted">{title}</div>
       </div>
 
-      <div className="grid grid-cols-[1fr_auto_1fr_auto_1.2fr] items-center gap-3 px-5 py-5">
-        {/* Negociado */}
-        <div className="flex flex-col gap-1">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-fg-subtle">
-            Negociado
-          </span>
-          <span className="text-2xl font-bold text-fg-muted leading-none tabular-nums">
-            {hasValues ? formatValue(negociado) : "—"}
-          </span>
-        </div>
-
-        {/* Seta separadora */}
-        <ArrowRightIcon className="size-5 text-fg-subtle" />
-
-        {/* Efetivo */}
-        <div className="flex flex-col gap-1">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-fg-subtle">
-            Efetivo
-          </span>
-          <span className="text-2xl font-bold text-signature leading-none tabular-nums">
-            {hasValues ? formatValue(efetivo) : "—"}
-          </span>
-        </div>
-
-        {/* Divisor vertical */}
-        <div className="w-px h-12 bg-border" />
-
-        {/* Economia/Loss block */}
-        <div
-          className={cn(
-            "flex flex-col gap-1 rounded-lg px-4 py-3 border",
-            isEconomy && "bg-success-soft border-success/30",
-            isLoss && "bg-danger-soft border-danger/30",
-            !isEconomy && !isLoss && "bg-surface border-border",
-          )}
-        >
-          <span
-            className={cn(
-              "text-[10px] font-bold uppercase tracking-wider",
-              isEconomy && "text-success",
-              isLoss && "text-danger",
-              !isEconomy && !isLoss && "text-fg-subtle",
-            )}
-          >
-            {isEconomy ? "Economia" : isLoss ? "Variação" : "Sem variação"}
-          </span>
-          <span
-            className={cn(
-              "text-2xl font-bold leading-none tabular-nums",
-              isEconomy && "text-success",
-              isLoss && "text-danger",
-              !isEconomy && !isLoss && "text-fg-muted",
-            )}
-          >
-            {!isSignificant
-              ? "—"
-              : `${economyPct > 0 ? "−" : "+"}${Math.abs(economyPct).toFixed(decimalsForDelta)}%`}
-          </span>
-        </div>
+      {/* Strip 3 cells iguais com dividers verticais em desktop;
+          coluna única com dividers horizontais em mobile */}
+      <div className="grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-border/40">
+        <ComparisonCell
+          label="Negociado"
+          value={hasValues ? formatValue(negociado) : "—"}
+          tone="muted"
+        />
+        <ComparisonCell
+          label="Efetivo"
+          value={hasValues ? formatValue(efetivo) : "—"}
+          tone="accent"
+        />
+        <ComparisonCell
+          label={economyLabel}
+          value={economyDisplay}
+          tone={isEconomy ? "success" : isLoss ? "danger" : "muted"}
+        />
       </div>
     </Card>
   );
 }
 
-function ArrowRightIcon({ className }) {
+function ComparisonCell({ label, value, tone = "default" }) {
   return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <line x1="5" y1="12" x2="19" y2="12" />
-      <polyline points="12 5 19 12 12 19" />
-    </svg>
+    <div className="px-5 py-4 min-w-0">
+      <div
+        className={cn(
+          "text-[22px] font-semibold tabular-nums leading-tight truncate",
+          tone === "muted" && "text-fg-muted",
+          tone === "accent" && "text-signature",
+          tone === "success" && "text-success",
+          tone === "danger" && "text-danger",
+          tone === "default" && "text-fg",
+        )}
+      >
+        {value}
+      </div>
+      <div className="text-[11px] text-fg-muted mt-1.5 truncate">{label}</div>
+    </div>
   );
 }

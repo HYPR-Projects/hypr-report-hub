@@ -136,7 +136,7 @@ export default function VideoV2({
 
       {/* ─── 2. Hero ComparisonCard ──────────────────────────────────── */}
       <ComparisonCardV2
-        title={`CPCV Video ${tactic} · Negociado vs Efetivo`}
+        title={`CPCV Video · ${tactic}`}
         negociado={kpis.cpcvNeg}
         efetivo={kpis.cpcvEf}
         formatValue={(v) => `R$ ${(v || 0).toFixed(3).replace(".", ",")}`}

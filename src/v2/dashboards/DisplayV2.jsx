@@ -138,7 +138,7 @@ export default function DisplayV2({
 
       {/* ─── 2. Hero ComparisonCard ──────────────────────────────────── */}
       <ComparisonCardV2
-        title={`CPM Display ${tactic} · Negociado vs Efetivo`}
+        title={`CPM Display · ${tactic}`}
         negociado={kpis.cpmNeg}
         efetivo={kpis.cpmEf}
         formatValue={(v) => fmtR(v)}
