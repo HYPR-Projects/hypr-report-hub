@@ -143,15 +143,68 @@ export async function saveReportOwner({ short_token, cp_email, cs_email }) {
 // ── Share IDs (admin) ────────────────────────────────────────────────────────
 
 /**
+ * Cache localStorage dos share_ids resolvidos. Share_id é permanente uma vez
+ * criado (16 chars URL-safe, sem expiração no banco), então cachear no
+ * dispositivo é seguro e elimina round-trip pro backend a cada click em
+ * "Link Cliente".
+ *
+ * Antes: cada click → cloud function (potencial cold start 1-3s) + query
+ *        BigQuery + JWT auth = 1-4s de latência percebida pelo admin.
+ * Agora: primeiro click custa o mesmo (cria/busca no banco e cacheia);
+ *        clicks subsequentes na mesma campanha = instantâneo (cache hit).
+ *
+ * Se em algum momento o backend passar a devolver share_id no payload de
+ * `?list=true` (Frente 2), basta popular este cache no `listCampaigns`
+ * que o copyLink já fica zero-latency desde o primeiro click.
+ */
+const SHARE_ID_CACHE_KEY = "hypr.share_ids";
+
+function readShareIdCache() {
+  try {
+    return JSON.parse(localStorage.getItem(SHARE_ID_CACHE_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function writeShareIdCache(map) {
+  try {
+    localStorage.setItem(SHARE_ID_CACHE_KEY, JSON.stringify(map));
+  } catch {
+    /* quota exceeded ou storage indisponível — falha graciosa */
+  }
+}
+
+export function getCachedShareId(short_token) {
+  if (!short_token) return null;
+  return readShareIdCache()[short_token] || null;
+}
+
+export function setCachedShareId(short_token, share_id) {
+  if (!short_token || !share_id) return;
+  const map = readShareIdCache();
+  if (map[short_token] === share_id) return;
+  map[short_token] = share_id;
+  writeShareIdCache(map);
+}
+
+/**
  * Retorna o `share_id` público de uma campanha. Cria sob demanda no backend
  * se ainda não existir (idempotente). Usado pelo botão "Link Cliente" para
  * gerar URLs compartilháveis sem expor a senha (short_token) no path.
+ *
+ * Cache local elimina round-trip em clicks subsequentes — share_id é
+ * permanente, então cachear é seguro.
  *
  * Se o backend não tem o endpoint ainda (rollout em andamento) ou o JWT
  * estiver indisponível, retorna null — o caller cai no formato legacy
  * (URL com short_token) sem quebrar o fluxo.
  */
 export async function getShareId(short_token) {
+  // Fast path: cache hit (clicks subsequentes na mesma campanha)
+  const cached = getCachedShareId(short_token);
+  if (cached) return cached;
+
   try {
     const jwt = await getOrIssueAdminJwt();
     if (!jwt) return null;
@@ -161,7 +214,9 @@ export async function getShareId(short_token) {
     );
     if (!r.ok) return null;
     const d = await r.json();
-    return d?.share_id || null;
+    const share_id = d?.share_id || null;
+    setCachedShareId(short_token, share_id);
+    return share_id;
   } catch {
     return null;
   }
