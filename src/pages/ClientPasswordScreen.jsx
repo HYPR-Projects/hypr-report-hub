@@ -74,7 +74,7 @@ const ClientPasswordScreen = ({ token, onUnlock }) => {
     <div style={{minHeight:"100vh",width:"100%",display:"flex",alignItems:"center",justifyContent:"center",padding:24,position:"relative",overflow:"hidden",background:C.dark}}>
       <GlobalStyle/>
       {/* Dot grid layer: pontos sutis em azul brand, espaçamento 24px */}
-      <div style={{position:"absolute",inset:0,backgroundImage:`radial-gradient(rgba(51,151,185,0.18) 1px, transparent 1px)`,backgroundSize:"24px 24px",pointerEvents:"none"}}/>
+      <div style={{position:"absolute",inset:0,backgroundImage:`radial-gradient(rgba(51,151,185,0.32) 1.2px, transparent 1.2px)`,backgroundSize:"22px 22px",pointerEvents:"none"}}/>
       {/* Vignette layer: fade radial centralizado pra dar foco no card */}
       <div style={{position:"absolute",inset:0,background:`radial-gradient(ellipse 70% 60% at center, transparent 0%, ${C.dark}d9 80%)`,pointerEvents:"none"}}/>
       {/* Soft glow atrás do card pra dar profundidade */}
