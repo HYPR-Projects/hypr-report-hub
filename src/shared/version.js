@@ -3,24 +3,26 @@
 // Toggle de versão Legacy ↔ V2 do HYPR Report Hub.
 //
 // ──────────────────────────────────────────────────────────────────────
-// COMPORTAMENTO ATUAL (Fase 0, PR-03 em diante)
+// COMPORTAMENTO ATUAL (V2 default)
 // ──────────────────────────────────────────────────────────────────────
-// useReportVersion() está ATIVO e respeita a prioridade abaixo. O default
-// continua sendo 'legacy' até a Fase 7 — o V2 só aparece quando o
-// cliente trouxer ?v=v2 na URL ou já tiver `hypr_report_version=v2`
-// persistido no localStorage de uma sessão anterior.
+// useReportVersion() está ATIVO. O default é 'v2' — todo cliente que
+// abre /report/* sem flag específica recebe a interface nova.
+// Legacy continua disponível como rede de proteção:
+//   - O V2ErrorBoundary persiste 'legacy' no localStorage e recarrega
+//     quando captura crash do V2.
+//   - Opt-out manual via ?v=legacy na URL (persiste no localStorage).
+//
+// Killar a Legacy de vez é um passo separado, pra ser feito depois de
+// algum tempo sem incidentes de v2_crash no GA.
 //
 // ──────────────────────────────────────────────────────────────────────
 // PRIORIDADE DE RESOLUÇÃO
 // ──────────────────────────────────────────────────────────────────────
-// 1. Query param  ?v=v2   → força V2 (e persiste no localStorage)
-//    Query param  ?v=legacy → força Legacy (e persiste no localStorage)
+// 1. Query param  ?v=v2     → força V2 (e persiste no localStorage)
+//    Query param  ?v=legacy → força Legacy (e persiste no localStorage,
+//                             usado pelo ErrorBoundary)
 // 2. localStorage  hypr_report_version   → respeita escolha anterior
-// 3. Fallback     → 'legacy' (default seguro até a Fase 7)
-//
-// A Fase 7 inverte o fallback para 'v2', mantendo o opt-out via
-// `?v=legacy` por mais alguns ciclos antes da remoção definitiva do
-// Legacy.
+// 3. Fallback     → 'v2'
 //
 // ──────────────────────────────────────────────────────────────────────
 // CHAVE DO localStorage
@@ -77,9 +79,11 @@ export function resolveReportVersion() {
   if (fromUrl) setReportVersion(fromUrl);
 
   // Prioridade: URL > localStorage > fallback.
-  // Fallback é 'legacy' até a Fase 7 (default seguro). Quando a Fase 7
-  // for executada, este fallback vira 'v2', mantendo opt-out via ?v=legacy.
-  return fromUrl || fromStorage || "legacy";
+  // Fallback é 'v2' — interface padrão. Legacy permanece acessível via
+  // ?v=legacy ou pela escrita automática do V2ErrorBoundary em caso de
+  // crash. Quando killarmos a Legacy de vez, este fallback continua
+  // 'v2' e os ramos de Legacy somem do App.jsx.
+  return fromUrl || fromStorage || "v2";
 }
 
 // Hook React. Retorna a versão atual ('legacy' | 'v2').
