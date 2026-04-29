@@ -122,9 +122,16 @@ export function CampaignHeaderV2({
 
         {/* Logo do cliente — img quando o admin fez upload, senão fallback
             texto com inicial estilizada. Box dimensionado pra acomodar logos
-            horizontais (mais comuns) com padding generoso pra respirar. */}
+            horizontais (mais comuns) com padding generoso pra respirar.
+            Quando há logo (img), usamos bg-white sempre — garante contraste
+            com logos do cliente em qualquer tema (logos costumam ser
+            otimizadas pra fundo claro). Padrão "logo wall" do mercado. */}
         {(logo || clientName) && (
-          <div className="hidden md:flex items-center justify-center w-36 h-20 rounded-lg bg-white/[0.03] border border-border overflow-hidden p-3">
+          <div
+            className={`hidden md:flex items-center justify-center w-40 h-20 rounded-lg border border-border overflow-hidden ${
+              logo ? "bg-white px-6 py-4" : "bg-white/[0.03] p-3"
+            }`}
+          >
             {logo ? (
               <img
                 src={logo}
