@@ -47,6 +47,7 @@ function deriveStatus(startStr, endStr) {
 export function CampaignHeaderV2({
   campaignName,
   clientName,
+  logo, // data URL base64 (PNG/JPG/SVG) — opcional. Se ausente, cai no placeholder de texto
   startDate,
   endDate,
   shortToken, // ex: "UT10QW" — vai no token-badge à direita do meta
@@ -119,10 +120,23 @@ export function CampaignHeaderV2({
           </div>
         </div>
 
-        {/* Logo do cliente — placeholder texto centrado */}
-        {clientName && (
-          <div className="hidden md:flex items-center justify-center w-32 h-20 rounded-lg bg-white/[0.03] border border-border text-fg-muted font-bold text-lg">
-            {clientName}
+        {/* Logo do cliente — img quando o admin fez upload, senão fallback
+            texto com inicial estilizada. Box dimensionado pra acomodar logos
+            horizontais (mais comuns) com padding generoso pra respirar. */}
+        {(logo || clientName) && (
+          <div className="hidden md:flex items-center justify-center w-36 h-20 rounded-lg bg-white/[0.03] border border-border overflow-hidden p-3">
+            {logo ? (
+              <img
+                src={logo}
+                alt={clientName ? `Logo ${clientName}` : "Logo do cliente"}
+                className="max-w-full max-h-full object-contain"
+                loading="lazy"
+              />
+            ) : (
+              <span className="text-fg-muted font-semibold text-sm tracking-wide truncate">
+                {clientName}
+              </span>
+            )}
           </div>
         )}
       </div>

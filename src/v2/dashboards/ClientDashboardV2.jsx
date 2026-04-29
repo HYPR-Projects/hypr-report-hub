@@ -256,6 +256,7 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
           <CampaignHeaderV2
             campaignName={camp.campaign_name}
             clientName={camp.client_name}
+            logo={data.logo}
             startDate={camp.start_date}
             endDate={camp.end_date}
             shortToken={camp.short_token || token}
