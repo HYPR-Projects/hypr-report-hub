@@ -28,6 +28,7 @@
 // Renderiza null quando pacing é null/undefined.
 
 import { fmt, fmtR } from "../../shared/format";
+import { PacingOverPillV2 } from "./PacingOverPillV2";
 
 const palette = {
   success: "var(--color-success)",
@@ -81,18 +82,7 @@ export function PacingBarV2({
           style={{ color: labelColor }}
         >
           {fmt(realPct, 1)}%
-          {realPct > 100 && (
-            <span
-              className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded-md inline-flex items-center gap-1"
-              style={{
-                color: palette.warning,
-                background: "var(--color-warning-soft)",
-              }}
-            >
-              <BoltIcon className="size-2.5" />
-              Over {fmt(realPct - 100, 1)}%
-            </span>
-          )}
+          <PacingOverPillV2 pacing={realPct} size="sm" />
         </span>
       </div>
 
@@ -126,18 +116,5 @@ export function PacingBarV2({
         </span>
       </div>
     </div>
-  );
-}
-
-function BoltIcon({ className }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="currentColor"
-      aria-hidden="true"
-    >
-      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-    </svg>
   );
 }
