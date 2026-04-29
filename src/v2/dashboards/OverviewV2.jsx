@@ -244,8 +244,8 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt 
             Resumo por mídia
           </h2>
           <div className={`grid grid-cols-1 gap-3 ${hasDisplay && hasVideo ? "md:grid-cols-2" : ""}`}>
-            {hasDisplay && <MediaSummaryV2 type="DISPLAY" rows={display} />}
-            {hasVideo && <MediaSummaryV2 type="VIDEO" rows={video} />}
+            {hasDisplay && <MediaSummaryV2 type="DISPLAY" rows={display} compact={hasDisplay && hasVideo} />}
+            {hasVideo && <MediaSummaryV2 type="VIDEO" rows={video} compact={hasDisplay && hasVideo} />}
           </div>
         </section>
       )}

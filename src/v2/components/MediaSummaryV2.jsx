@@ -34,7 +34,7 @@
 //   - Video:   <MediaSummaryV2 type="VIDEO"   rows={video} />
 //   - rows pode estar vazio — componente renderiza null silenciosamente.
 
-import { fmt, fmtP, fmtR } from "../../shared/format";
+import { fmt, fmtCompact, fmtP2, fmtR } from "../../shared/format";
 import { cn } from "../../ui/cn";
 import { Card, CardBody } from "../../ui/Card";
 
@@ -67,7 +67,7 @@ function Delta({ rentab }) {
   if (rentab === 0) {
     return (
       <span className="text-[11px] font-medium tabular-nums text-fg-muted">
-        {fmtP(0)}
+        {fmtP2(0)}
       </span>
     );
   }
@@ -80,12 +80,12 @@ function Delta({ rentab }) {
       )}
       title="Rentabilidade — diferença % entre o CPM/CPCV negociado e o efetivo entregue"
     >
-      {isGood ? "↓" : "↑"} {fmtP(Math.abs(rentab))}
+      {isGood ? "↓" : "↑"} {fmtP2(Math.abs(rentab))}
     </span>
   );
 }
 
-export function MediaSummaryV2({ type, rows }) {
+export function MediaSummaryV2({ type, rows, compact = false }) {
   if (!rows || rows.length === 0) return null;
 
   const isDisplay = type === "DISPLAY";
@@ -124,21 +124,25 @@ export function MediaSummaryV2({ type, rows }) {
     ? (effCpm / 1000) * (totals.vi / totals.clks)
     : null;
 
-  // Cells do strip — hero é a primeira (com delta), as 4 seguintes são
-  // os KPIs secundários. CTR/VTR ficam em accent (métrica de qualidade).
+  // Formatação dos números grandes — quando `compact` (Display+Video lado a
+  // lado), usa "k/M" pra evitar truncate; quando full-width, mostra valor
+  // completo. CTR/VTR sempre em 2 casas decimais (precisão importa pra
+  // métricas de qualidade — diferença entre 0,5% e 0,9% é grande em adtech).
+  const fmtBig = compact ? fmtCompact : fmt;
+
   const cells = isDisplay
     ? [
-        { label: "CPM efetivo",  value: fmtR(effCpm),         accent: true,  delta: rentab },
-        { label: "Imp. visíveis", value: fmt(totals.vi) },
-        { label: "Clicks",        value: fmt(totals.clks) },
-        { label: "CTR",           value: ctr == null ? "—" : fmtP(ctr), accent: true },
+        { label: "CPM efetivo",   value: fmtR(effCpm),                                 accent: true,  delta: rentab },
+        { label: "Imp. visíveis", value: fmtBig(totals.vi) },
+        { label: "Clicks",        value: fmtBig(totals.clks) },
+        { label: "CTR",           value: ctr == null ? "—" : fmtP2(ctr),               accent: true },
         { label: "CPC",           value: cpc == null ? "—" : fmtR(cpc) },
       ]
     : [
-        { label: "CPCV efetivo",  value: fmtR(effCpcv),        accent: true,  delta: rentab },
-        { label: "Imp. visíveis", value: fmt(totals.vi) },
-        { label: "Views 100%",    value: fmt(totals.v100) },
-        { label: "VTR",           value: vtr == null ? "—" : fmtP(vtr),  accent: true },
+        { label: "CPCV efetivo",  value: fmtR(effCpcv),                                accent: true,  delta: rentab },
+        { label: "Imp. visíveis", value: fmtBig(totals.vi) },
+        { label: "Views 100%",    value: fmtBig(totals.v100) },
+        { label: "VTR",           value: vtr == null ? "—" : fmtP2(vtr),               accent: true },
       ];
 
   return (
