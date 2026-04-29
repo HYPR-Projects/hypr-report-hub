@@ -122,21 +122,33 @@ export function CampaignHeaderV2({
 
         {/* Logo do cliente — img quando o admin fez upload, senão fallback
             texto com inicial estilizada. Box dimensionado pra acomodar logos
-            horizontais (mais comuns) com padding generoso pra respirar.
-            Quando há logo (img), usamos bg-white sempre — garante contraste
-            com logos do cliente em qualquer tema (logos costumam ser
-            otimizadas pra fundo claro). Padrão "logo wall" do mercado. */}
+            horizontais com padding generoso pra respirar.
+
+            Adaptação dark/light:
+              - light: bg-white (logos coloridas/dark dão contraste natural)
+              - dark:  bg muito sutil (white/[0.04]) pra integrar com o
+                       tema escuro em vez de virar um quadrado branco
+                       gritante; combinado com filtro de inversão
+                       hue-rotate na <img>, logos monocromáticas (preto
+                       sobre transparente) ficam legíveis no dark, e logos
+                       coloridas mantêm proximidade com a paleta original
+                       (hue-rotate 180° devolve cores ao espectro).
+
+            Padding lateral generoso (px-8 py-5) dá margem pra logo
+            respirar dentro do box em vez de encostar nas bordas. */}
         {(logo || clientName) && (
           <div
-            className={`hidden md:flex items-center justify-center w-40 h-20 rounded-lg border border-border overflow-hidden ${
-              logo ? "bg-white px-6 py-4" : "bg-white/[0.03] p-3"
+            className={`hidden md:flex items-center justify-center w-44 h-20 rounded-lg overflow-hidden border transition-colors ${
+              logo
+                ? "bg-white border-border px-8 py-5 dark:bg-white/[0.04] dark:border-white/10"
+                : "bg-white/[0.03] border-border p-3"
             }`}
           >
             {logo ? (
               <img
                 src={logo}
                 alt={clientName ? `Logo ${clientName}` : "Logo do cliente"}
-                className="max-w-full max-h-full object-contain"
+                className="max-w-full max-h-full object-contain dark:[filter:invert(1)_hue-rotate(180deg)]"
                 loading="lazy"
               />
             ) : (
