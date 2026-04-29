@@ -13,7 +13,6 @@
 // Não fixo (não sticky). Decisão: manter scroll comportamento padrão,
 // poupa pixel real estate em mobile.
 
-import { Button } from "../../ui/Button";
 import { cn } from "../../ui/cn";
 import { ThemeToggleV2 } from "./ThemeToggleV2";
 import HyprReportCenterLogo from "../../components/HyprReportCenterLogo";
@@ -21,7 +20,6 @@ import HyprReportCenterLogo from "../../components/HyprReportCenterLogo";
 export function TopBarV2({
   updatedAtLabel,
   onShare,
-  onBackToLegacy,
   onContactCS,
   className,
 }) {
@@ -78,12 +76,6 @@ export function TopBarV2({
         )}
 
         <ThemeToggleV2 />
-
-        {onBackToLegacy && (
-          <Button variant="ghost" size="sm" onClick={onBackToLegacy} className="hidden md:inline-flex">
-            Voltar à versão atual
-          </Button>
-        )}
       </div>
     </header>
   );
