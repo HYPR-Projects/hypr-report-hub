@@ -107,6 +107,7 @@ BQ_DATASET_HUB: prod_prod_hypr_reporthub
 BQ_TABLE: campaign_results
 LOG_EXECUTION_ID: 'true'
 JWT_SECRET: '${JWT_SECRET}'
+SHEETS_DRIVE_FOLDER_ID: '1ddnSYIYbDio5BkH3p9nq-n7evmneIHh9'
 EOF
 
 if [ -n "$TYPEFORM_TOKEN" ]; then
