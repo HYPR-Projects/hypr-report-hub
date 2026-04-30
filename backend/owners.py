@@ -57,8 +57,20 @@ SHEET_ID   = "1nd6UtJJ5fA81D9VZRiH2ZJGHYsiiv28LPzXhNRtd2aM"
 # Tabela física de overrides — única que usamos no BigQuery agora
 TABLE_OVERRIDES = "report_owners_overrides"
 
-# Cache global da planilha — invalida a cada CACHE_TTL segundos
-CACHE_TTL = 60  # segundos
+# Cache global da planilha. Estrutura: {"data": dict | None, "ts": float}
+#
+# CACHE_TTL alto (5 min) porque a planilha de De-Para Comercial muda raras
+# vezes por dia. Reduz exposição ao caminho de leitura remota — onde mora a
+# falha intermitente que sumiu owners do menu admin.
+#
+# CACHE_STALE_MAX é o teto de aceitação do fallback "stale-while-error":
+# se a Sheets API falhar e tivermos cache mais velho que isso, ainda assim
+# servimos o stale (1h) em vez de dict vazio. Servir owner ligeiramente
+# desatualizado é muito menos ruim que sumir avatares de toda a tela.
+CACHE_TTL        = 300       # 5 min — vida útil do cache "fresco"
+CACHE_STALE_MAX  = 3600      # 1h   — teto pra servir stale em caso de erro
+SHEETS_RETRIES   = 1         # nº de retries antes de declarar falha
+SHEETS_BACKOFF_S = 0.2       # espera entre retries
 _sheet_cache: Dict[str, object] = {"data": None, "ts": 0.0}
 
 bq = bigquery.Client()
@@ -81,24 +93,10 @@ def _sheets_client():
     return build_google_api("sheets", "v4", credentials=creds, cache_discovery=False)
 
 
-def _load_sheet_data() -> dict:
-    """Lê as duas primeiras abas da planilha (por ÍNDICE, não por nome).
-
-    Retorna dict com:
-      - "lookup_rows": lista de listas (linhas da aba 1, sem header)
-      - "team_rows":   lista de listas (linhas da aba 2, sem header)
-      - "sheet_names": [nome_aba1, nome_aba2] (debug/log)
-
-    Cache em memória por CACHE_TTL segundos. Cloud Functions de 2ª geração
-    mantêm processo entre invocações, então o cache persiste entre requests
-    da mesma instância — múltiplos admins consultando o menu não disparam
-    leituras repetidas da Sheets API.
+def _fetch_sheet_data_remote() -> dict:
+    """Faz a leitura efetiva da Google Sheets API. Sem cache, sem retry —
+    é o "trabalho cru" chamado por `_load_sheet_data`. Pode levantar.
     """
-    now = time.time()
-    cached = _sheet_cache.get("data")
-    if cached and (now - _sheet_cache["ts"]) < CACHE_TTL:
-        return cached  # type: ignore
-
     svc = _sheets_client().spreadsheets()
 
     # 1) Descobre os nomes das abas pra montar ranges robustos
@@ -128,14 +126,72 @@ def _load_sheet_data() -> dict:
     lookup_rows = lookup_raw[1:] if lookup_raw else []
     team_rows   = team_raw[1:]   if team_raw   else []
 
-    data = {
+    return {
         "lookup_rows": lookup_rows,
         "team_rows":   team_rows,
         "sheet_names": [name_lookup, name_team],
     }
-    _sheet_cache["data"] = data
-    _sheet_cache["ts"]   = now
-    return data
+
+
+def _load_sheet_data() -> dict:
+    """Lê as duas primeiras abas da planilha (por ÍNDICE, não por nome).
+
+    Retorna dict com:
+      - "lookup_rows": lista de listas (linhas da aba 1, sem header)
+      - "team_rows":   lista de listas (linhas da aba 2, sem header)
+      - "sheet_names": [nome_aba1, nome_aba2] (debug/log)
+
+    Camadas de defesa, em ordem:
+      1. Cache fresco (idade <= CACHE_TTL): devolve direto.
+      2. Leitura remota com retry (`SHEETS_RETRIES` tentativas, backoff
+         curto). Cobre blips transitórios da Sheets API (timeouts, 5xx,
+         rate-limit ocasional).
+      3. Stale-while-error: se a leitura remota falhar mas tivermos cache
+         antigo (idade <= CACHE_STALE_MAX), devolvemos o stale e logamos.
+         Owners ligeiramente velhos > avatares sumidos.
+      4. Sem cache utilizável: levanta. O caller (`get_owners_lookup_dict`)
+         já trata isso retornando dict vazio sem quebrar a request.
+
+    Cloud Functions de 2ª geração mantêm processo entre invocações, então
+    o cache persiste entre requests da mesma instância. Múltiplas
+    instâncias têm caches independentes — daí o sintoma "F5 às vezes
+    resolve" antes desse fix.
+    """
+    now = time.time()
+    cached = _sheet_cache.get("data")
+    cached_ts = float(_sheet_cache.get("ts") or 0.0)
+
+    # 1) Cache fresco
+    if cached and (now - cached_ts) < CACHE_TTL:
+        return cached  # type: ignore
+
+    # 2) Leitura remota com retry
+    last_exc: Optional[Exception] = None
+    for attempt in range(SHEETS_RETRIES + 1):
+        try:
+            data = _fetch_sheet_data_remote()
+            _sheet_cache["data"] = data
+            _sheet_cache["ts"]   = now
+            return data
+        except Exception as e:
+            last_exc = e
+            if attempt < SHEETS_RETRIES:
+                time.sleep(SHEETS_BACKOFF_S)
+            else:
+                break
+
+    # 3) Stale-while-error
+    if cached and (now - cached_ts) < CACHE_STALE_MAX:
+        age = int(now - cached_ts)
+        print(
+            f"[owners] sheets fetch falhou após {SHEETS_RETRIES + 1} tentativas, "
+            f"servindo stale cache (idade={age}s). Erro: {last_exc}"
+        )
+        return cached  # type: ignore
+
+    # 4) Sem cache utilizável — propaga
+    print(f"[owners] sheets fetch falhou e não há cache stale válido. Erro: {last_exc}")
+    raise last_exc if last_exc else RuntimeError("sheets fetch falhou")
 
 
 def invalidate_cache() -> None:
