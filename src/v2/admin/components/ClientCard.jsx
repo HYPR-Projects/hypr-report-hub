@@ -39,9 +39,11 @@ import {
   formatTimeAgo,
   formatPacingValue,
   formatPct,
+  formatBRL,
   pacingColorClass,
   ctrColorClass,
   vtrColorClass,
+  ecpmBgClass,
   localPartFromEmail,
   slugToDisplay,
 } from "../lib/format";
@@ -60,14 +62,6 @@ const SPARK_STROKE = {
   down: "var(--color-danger)",
   flat: "var(--color-fg-subtle)",
 };
-
-// Formatter BRL pra eCPM. Cacheado em module scope — Intl.NumberFormat
-// custa ~1ms na primeira chamada por locale, então vale reusar a instância.
-const BRL = new Intl.NumberFormat("pt-BR", {
-  style: "currency",
-  currency: "BRL",
-  minimumFractionDigits: 2,
-});
 
 export function ClientCard({ client, onOpen }) {
   const {
@@ -187,33 +181,36 @@ export function ClientCard({ client, onOpen }) {
         )}
       </div>
 
-      {/* ── Bloco de métricas (eCPM destaque + 3-col detalhe) ──────────
-          Wrapper com border-y agrupa as 2 sub-rows (eCPM + métricas)
-          como uma "seção financeira" única. eCPM em cima com tint
-          signature-soft pra sinalizar que é dado interno (admin only). */}
-      <div className="border-y border-border">
+      {/* ── Painel financeiro: eCPM (header tinted) + métricas ──────────
+          Container rounded com 1 borda única isolando o bloco inteiro.
+          eCPM band ocupa o topo do painel como "header" — bg-signature-soft
+          + border-b serve de separador interno; bem mais limpo que ter
+          border-y do wrapper externo COMPETINDO com border-t do grid. */}
+      <div className="rounded-lg border border-border overflow-hidden">
         {admin_ecpm != null && (
-          <div className="flex items-baseline justify-between gap-2 px-4 py-2.5 -mx-5 bg-signature-soft/40">
-            <div className="flex items-baseline gap-1.5 px-1">
-              <span className="text-[10px] uppercase tracking-[0.14em] font-bold text-signature">
+          <div className={cn(
+            "flex items-center justify-between gap-2 px-3 py-2.5 border-b border-border transition-colors",
+            // Bg pastel pelo tier do eCPM (verde/amarelo/vermelho soft).
+            // A cor do header é que comunica saúde — texto fica neutro.
+            ecpmBgClass(admin_ecpm)
+          )}>
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-[10px] uppercase tracking-[0.14em] font-bold text-fg-muted">
                 eCPM real
               </span>
               <span
-                className="text-[8.5px] uppercase tracking-widest font-semibold text-fg-subtle"
-                title="Calculado com custo bruto do DSP — não exibir para o cliente"
+                className="text-[8.5px] uppercase tracking-widest font-semibold text-fg-subtle/70"
+                title="Custo bruto do DSP / impressions × 1000 — não exibir para o cliente"
               >
                 admin
               </span>
             </div>
-            <span className="text-[18px] font-bold tabular-nums tracking-tight text-signature px-1">
-              {BRL.format(admin_ecpm)}
+            <span className="text-[18px] font-bold tabular-nums tracking-tight text-fg">
+              {formatBRL(admin_ecpm)}
             </span>
           </div>
         )}
-        <div className={cn(
-          "grid grid-cols-3 py-3",
-          admin_ecpm != null && "border-t border-border"
-        )}>
+        <div className="grid grid-cols-3 py-3">
           <Metric
             label="DSP·VID"
             value={formatPacingValue(avg_pacing)}

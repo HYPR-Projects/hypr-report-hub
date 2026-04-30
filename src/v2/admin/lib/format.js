@@ -84,6 +84,53 @@ export function vtrColorClass(vtr) {
 }
 
 /**
+ * Régua de cor do eCPM real (admin).
+ *
+ * IMPORTANTE — semântica INVERTIDA das outras métricas:
+ *   pacing/CTR/VTR: maior = melhor
+ *   eCPM:           MENOR = melhor (custo por mil mais eficiente,
+ *                                   = mais margem)
+ *
+ * Tiers (em R$):
+ *   < 0,70   verde   (abaixo do alvo — ótima margem)
+ *   0,70–0,80  amarelo (atenção — perto do teto)
+ *   ≥ 0,80   vermelho (acima do alvo — margem comprimida)
+ *
+ * Sem dado → cinza sutil. Thresholds definidos junto com a operação;
+ * ajustar aqui se a régua mudar (única fonte da verdade pro front).
+ */
+export function ecpmColorClass(ecpm) {
+  if (ecpm == null || isNaN(ecpm)) return "text-fg-subtle";
+  if (ecpm < 0.70) return "text-success";
+  if (ecpm < 0.80) return "text-warning";
+  return "text-danger";
+}
+
+/**
+ * Variante de cor de FUNDO pastelíssima pro eCPM. Usa tokens base
+ * (success/warning/danger) com alpha curta (/8 a /12) — bem mais
+ * sutil que os tokens *-soft (alpha 0.15) que pesavam visualmente.
+ *
+ * Calibragem por tier:
+ *   verde/vermelho:  /8  (8% alpha — quase imperceptível, só dá um tom)
+ *   amarelo:         /12 (saturação do warning é mais baixa, precisa um
+ *                         pouco mais de alpha pra não sumir contra fundo)
+ *
+ * Usado no card admin (Por mês + Por cliente) pra sinalizar saúde
+ * via tint do box em vez do texto — mais minimalista, deixa o número
+ * neutro pra leitura limpa.
+ *
+ * Mesma régua de tiers do `ecpmColorClass`. Sem dado / sem dinheiro
+ * → bg-surface neutro (não polui visualmente).
+ */
+export function ecpmBgClass(ecpm) {
+  if (ecpm == null || isNaN(ecpm)) return "bg-surface";
+  if (ecpm < 0.70) return "bg-success/8";
+  if (ecpm < 0.80) return "bg-warning/12";
+  return "bg-danger/8";
+}
+
+/**
  * Campanha encerrada = data final estritamente menor que hoje (timezone
  * local do usuário). Usado pra "esmaecer" cards e tirar a cor condicional
  * — uma vez encerrada, a métrica vira histórico e não precisa mais
@@ -161,6 +208,27 @@ export function localPartFromEmail(email) {
   if (!email) return "";
   const idx = email.indexOf("@");
   return idx > 0 ? email.slice(0, idx) : email;
+}
+
+/**
+ * Formatter de moeda BRL. Cacheado em module scope porque
+ * `Intl.NumberFormat` custa ~1ms na primeira chamada por locale —
+ * vale reusar a instância em vez de criar a cada render.
+ *
+ * Usado pra exibir eCPM real (admin) nos cards do menu.
+ *   formatBRL(1.2)     → "R$ 1,20"
+ *   formatBRL(12.45)   → "R$ 12,45"
+ *   formatBRL(null)    → "—"
+ */
+const _BRL = new Intl.NumberFormat("pt-BR", {
+  style: "currency",
+  currency: "BRL",
+  minimumFractionDigits: 2,
+});
+
+export function formatBRL(value) {
+  if (value == null || isNaN(value)) return "—";
+  return _BRL.format(Number(value));
 }
 
 /**

@@ -38,9 +38,11 @@ import {
   formatDateRange,
   formatPacingValue,
   formatPct,
+  formatBRL,
   pacingColorClass,
   ctrColorClass,
   vtrColorClass,
+  ecpmBgClass,
   isCampaignEnded,
   localPartFromEmail,
 } from "../lib/format";
@@ -102,6 +104,10 @@ export function CampaignCardV2({
     video_vtr,
     cp_email,
     cs_email,
+    // ADMIN-ONLY — custo cru/impressions × 1000. Backend só envia este
+    // campo em endpoints admin-gated; quando ausente (campanha sem dado
+    // de custo no DSP), a coluna mostra "—" mantendo o alinhamento.
+    admin_ecpm,
   } = campaign;
 
   const ended  = isCampaignEnded(end_date);
@@ -161,6 +167,41 @@ export function CampaignCardV2({
           <p className="text-[10.5px] text-fg-subtle mt-0.5 tabular-nums">
             {formatDateRange(start_date, end_date)}
           </p>
+        </div>
+
+        <Divider />
+
+        {/* ── eCPM REAL (admin-only, destaque) ─────────────────────────
+            Coluna com bg pastel sinalizando o tier (verde/amarelo/vermelho
+            soft do design system, alpha 0.15 → naturalmente pastel).
+            Texto fica neutro — a cor do box é que comunica saúde, deixa
+            o número clean. Encerrada vira bg-surface neutro pra não
+            alarmar campanha histórica. Quando admin_ecpm é null mostra
+            "—" pra manter alinhamento entre linhas. */}
+        <div
+          className={cn(
+            "hidden md:flex flex-col justify-center shrink-0 w-[96px]",
+            "px-2.5 py-1.5 rounded-md transition-colors",
+            ended ? "bg-surface" : ecpmBgClass(admin_ecpm)
+          )}
+        >
+          <div className="flex items-baseline gap-1 leading-none">
+            <span className="text-[9px] uppercase tracking-[0.14em] font-bold text-fg-muted">
+              eCPM
+            </span>
+            <span
+              className="text-[7.5px] uppercase tracking-widest font-semibold text-fg-subtle/70"
+              title="Custo bruto do DSP / impressions × 1000 — não exibir para o cliente"
+            >
+              adm
+            </span>
+          </div>
+          <span className={cn(
+            "text-[14px] font-bold tabular-nums tracking-tight mt-1",
+            ended ? "text-fg-subtle" : "text-fg"
+          )}>
+            {formatBRL(admin_ecpm)}
+          </span>
         </div>
 
         <Divider />
