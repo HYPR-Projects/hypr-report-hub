@@ -1,0 +1,642 @@
+<!doctype html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>HYPR Report Center · Admin Card Redesign Mockup</title>
+<style>
+  /* ─────────────────────────────────────────────────────────
+   * Tokens (mirrors src/ui/theme.css)
+   * ───────────────────────────────────────────────────────── */
+  :root[data-theme="dark"] {
+    --canvas: #1C262F;
+    --canvas-deeper: #0F1419;
+    --canvas-elevated: #232F39;
+    --signature: #3397B9;
+    --signature-hover: #246C84;
+    --signature-soft: rgba(51,151,185,.15);
+    --warning: #EDD900;
+    --warning-soft: rgba(237,217,0,.15);
+    --success: #4CB050;
+    --success-soft: rgba(76,176,80,.15);
+    --danger:  #F5272B;
+    --danger-soft: rgba(245,39,43,.15);
+    --fg: #F5F7FA;
+    --fg-muted: rgba(245,247,250,.7);
+    --fg-subtle: rgba(245,247,250,.45);
+    --border: rgba(245,247,250,.12);
+    --border-strong: rgba(245,247,250,.20);
+    --surface: rgba(245,247,250,.06);
+    --surface-strong: rgba(245,247,250,.10);
+    --surface-2: #232F3A;
+    --shadow-md: 0 4px 12px -2px rgba(0,0,0,.3);
+    --shadow-lg: 0 10px 30px -5px rgba(0,0,0,.4);
+    --glow-success:   0 0 0 3px rgba(76,176,80,.18);
+    --glow-warning:   0 0 0 3px rgba(237,217,0,.20);
+    --glow-danger:    0 0 0 3px rgba(245,39,43,.18);
+    --glow-signature: 0 0 0 3px rgba(51,151,185,.18);
+  }
+  :root[data-theme="light"] {
+    --canvas: #F8F9FA;
+    --canvas-deeper: #F1F3F6;
+    --canvas-elevated: #FFFFFF;
+    --signature: #2A7B97;
+    --signature-hover: #1F5E75;
+    --signature-soft: rgba(42,123,151,.12);
+    --warning: #B8A500;
+    --warning-soft: rgba(184,165,0,.18);
+    --success: #3D9842;
+    --success-soft: rgba(61,152,66,.18);
+    --danger:  #D8201E;
+    --danger-soft: rgba(216,32,30,.18);
+    --fg: #0F1419;
+    --fg-muted: rgba(15,20,25,.65);
+    --fg-subtle: rgba(15,20,25,.5);
+    --border: rgba(15,20,25,.10);
+    --border-strong: rgba(15,20,25,.16);
+    --surface: rgba(15,20,25,.025);
+    --surface-strong: rgba(15,20,25,.045);
+    --surface-2: #FFFFFF;
+    --shadow-md: 0 4px 12px -2px rgba(15,20,25,.08);
+    --shadow-lg: 0 10px 30px -5px rgba(15,20,25,.10);
+    --glow-success:   0 0 0 3px rgba(61,152,66,.22);
+    --glow-warning:   0 0 0 3px rgba(184,165,0,.22);
+    --glow-danger:    0 0 0 3px rgba(216,32,30,.22);
+    --glow-signature: 0 0 0 3px rgba(42,123,151,.20);
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--canvas);
+    color: var(--fg);
+    font-family: 'Urbanist', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+    transition: background-color .2s ease, color .2s ease;
+  }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+  .tnum { font-variant-numeric: tabular-nums; }
+
+  /* ── Page chrome ── */
+  .page { max-width: 1200px; margin: 0 auto; padding: 24px 32px 80px; }
+  .page-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding-bottom: 18px; margin-bottom: 24px;
+    border-bottom: 1px solid var(--border);
+  }
+  .brand { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; }
+  .brand .accent { color: var(--signature); }
+  .controls { display: flex; gap: 8px; }
+  .pill-btn {
+    background: var(--surface); border: 1px solid var(--border); color: var(--fg);
+    padding: 6px 12px; border-radius: 999px; font-size: 12px; font-weight: 600;
+    cursor: pointer; transition: all .15s;
+  }
+  .pill-btn:hover { background: var(--surface-strong); border-color: var(--border-strong); }
+  .pill-btn.active { background: var(--signature); border-color: var(--signature); color: white; }
+
+  .section-label {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .15em;
+    color: var(--fg-muted); font-weight: 700;
+    margin: 32px 0 12px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .section-label::after {
+    content: ""; flex: 1; height: 1px; background: var(--border);
+  }
+  .section-tag {
+    background: var(--surface); border: 1px solid var(--border); color: var(--fg-muted);
+    padding: 2px 8px; border-radius: 999px; font-size: 10px; letter-spacing: 0;
+    text-transform: none; font-weight: 600;
+  }
+
+  .month-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    margin: 24px 0 10px;
+  }
+  .month-head h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .12em;
+    font-weight: 700; color: var(--fg-muted); margin: 0;
+  }
+  .month-head .count { font-size: 11px; color: var(--fg-subtle); }
+
+  /* ─────────────────────────────────────────────────────────
+   * CURRENT DESIGN (replica fiel do CampaignCardV2 atual)
+   * ───────────────────────────────────────────────────────── */
+  .card-current {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin-bottom: 8px;
+    display: flex; align-items: center; gap: 16px;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .card-current:hover { border-color: var(--signature); background: var(--surface-strong); }
+
+  .dot {
+    width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+  }
+  .dot.success { background: var(--success); box-shadow: var(--glow-success); }
+  .dot.warning { background: var(--warning); box-shadow: var(--glow-warning); }
+  .dot.danger  { background: var(--danger);  box-shadow: var(--glow-danger);  }
+  .dot.signature { background: var(--signature); box-shadow: var(--glow-signature); }
+
+  .card-current .info { min-width: 0; flex: 1; display: flex; gap: 12px; align-items: center; }
+  .card-current .info-text { min-width: 0; }
+  .card-current .client-row { display: flex; align-items: center; gap: 8px; }
+  .card-current .client { font-size: 14px; font-weight: 700; letter-spacing: -0.01em; }
+  .token {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+    font-size: 10px; padding: 2px 6px; border-radius: 4px;
+    background: var(--surface); border: 1px solid var(--border);
+    color: var(--fg-subtle); letter-spacing: .08em;
+  }
+  .card-current .campaign { font-size: 12px; color: var(--fg-muted); margin: 2px 0 0; }
+  .card-current .date { font-size: 10.5px; color: var(--fg-subtle); margin-top: 4px; }
+
+  .pills { display: flex; gap: 6px; flex-shrink: 0; }
+  .pill {
+    display: flex; flex-direction: column; align-items: center;
+    padding: 4px 10px; border-radius: 6px;
+    background: var(--surface); border: 1px solid var(--border);
+    min-width: 58px;
+  }
+  .pill .label {
+    font-size: 8.5px; letter-spacing: .15em; text-transform: uppercase;
+    font-weight: 700; color: var(--fg-subtle);
+  }
+  .pill .val {
+    font-size: 12px; font-weight: 700; line-height: 1.1; margin-top: 2px;
+    font-variant-numeric: tabular-nums;
+  }
+  .v-success { color: var(--success); }
+  .v-warning { color: var(--warning); }
+  .v-danger  { color: var(--danger); }
+  .v-signature { color: var(--signature); }
+  .v-muted { color: var(--fg-muted); }
+
+  .owners { display: flex; }
+  .avatar {
+    width: 24px; height: 24px; border-radius: 50%;
+    background: var(--surface-strong); border: 1.5px solid var(--canvas);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 9px; font-weight: 700; color: var(--fg);
+  }
+  .avatar.cp { background: var(--success-soft); color: var(--success); }
+  .avatar.cs { background: var(--signature-soft); color: var(--signature); margin-left: -6px; }
+
+  .ver-btn {
+    background: var(--signature); color: white; border: none;
+    height: 32px; padding: 0 14px; border-radius: 8px;
+    font-size: 12px; font-weight: 700; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 4px;
+    transition: background .15s;
+  }
+  .ver-btn:hover { background: var(--signature-hover); }
+
+  .actions { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+
+  /* ─────────────────────────────────────────────────────────
+   * NEW DESIGN — Option 2
+   * "Status-driven com barra lateral, cores só em alerta"
+   * ───────────────────────────────────────────────────────── */
+  .card-new {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    margin-bottom: 8px;
+    display: grid;
+    grid-template-columns: 4px 1fr auto auto auto;
+    align-items: stretch;
+    cursor: pointer;
+    overflow: hidden;
+    transition: transform .15s var(--ease, cubic-bezier(0.2,0.8,0.2,1)),
+                box-shadow .15s ease,
+                border-color .15s ease;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  }
+  .card-new:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-md);
+    border-color: var(--border-strong);
+  }
+  .card-new:hover .ver-action { opacity: 1; transform: translateX(0); }
+
+  .status-bar { width: 4px; }
+  .status-bar.success { background: var(--success); }
+  .status-bar.warning { background: var(--warning); }
+  .status-bar.danger { background: var(--danger); }
+  .status-bar.signature { background: var(--signature); }
+
+  .card-new .body {
+    padding: 14px 16px;
+    min-width: 0;
+    display: flex; flex-direction: column; gap: 4px;
+    justify-content: center;
+  }
+  .card-new .head-row {
+    display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  }
+  .card-new .client-name {
+    font-size: 11px; font-weight: 700;
+    letter-spacing: .14em; text-transform: uppercase;
+    color: var(--fg-muted);
+  }
+  .card-new .token-soft {
+    font-family: ui-monospace, monospace;
+    font-size: 10px; color: var(--fg-subtle);
+    letter-spacing: .08em;
+    opacity: .7;
+  }
+  .card-new .campaign-name {
+    font-size: 15px; font-weight: 700;
+    letter-spacing: -0.015em;
+    color: var(--fg);
+  }
+  .card-new .meta-row {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 11px; color: var(--fg-subtle);
+  }
+  .card-new .meta-row .sep { opacity: .5; }
+  .card-new .meta-row .days {
+    color: var(--fg-muted); font-weight: 600;
+  }
+
+  /* Pacing block — duas linhas separadas (DSP / VID) */
+  .card-new .pacing-cell {
+    padding: 12px 18px; border-left: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    gap: 8px; min-width: 230px; justify-content: center;
+  }
+
+  /* Cada linha de pacing: LABEL | % | BARRA */
+  .pacing-row {
+    display: grid;
+    grid-template-columns: 38px 56px 1fr;
+    align-items: center;
+    gap: 12px;
+  }
+  .pacing-row .pac-label {
+    font-size: 10px; letter-spacing: .14em; text-transform: uppercase;
+    font-weight: 800; color: var(--fg-muted);
+  }
+  .pacing-row .pac-pct {
+    font-size: 17px; font-weight: 800; line-height: 1;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+    text-align: right;
+  }
+  .pacing-row .pac-empty {
+    font-size: 12px; color: var(--fg-subtle);
+    text-align: right; font-style: italic;
+  }
+
+  /* Mini-bar de pacing — fica ao lado de cada linha */
+  .pacing-bar {
+    height: 5px;
+    background: var(--surface); border-radius: 999px;
+    position: relative; overflow: hidden;
+  }
+  .pacing-bar .fill {
+    position: absolute; left: 0; top: 0; bottom: 0;
+    border-radius: 999px;
+    transition: width .3s var(--ease, cubic-bezier(0.2,0.8,0.2,1));
+  }
+  .pacing-bar .target {
+    position: absolute; top: -2px; bottom: -2px; width: 2px;
+    background: var(--fg-subtle); opacity: .45;
+  }
+  .pacing-bar.empty {
+    background: transparent;
+    border: 1px dashed var(--border);
+  }
+
+  /* Quality cell (CTR + VTR) — só ganha cor se fora da meta */
+  .card-new .quality-cell {
+    padding: 14px 18px; border-left: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 4px;
+    justify-content: center; min-width: 110px;
+  }
+  .card-new .quality-cell .row {
+    display: flex; align-items: baseline; gap: 8px;
+    font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+  }
+  .card-new .quality-cell .row .k {
+    font-size: 9.5px; letter-spacing: .15em; text-transform: uppercase;
+    font-weight: 700; color: var(--fg-subtle);
+    width: 28px;
+  }
+  .card-new .quality-cell .row .v { font-weight: 700; }
+
+  /* Right rail: owners + ação */
+  .card-new .right-rail {
+    padding: 14px 16px; border-left: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px;
+    background: linear-gradient(90deg, transparent 0%, var(--surface) 100%);
+  }
+  .card-new .ver-action {
+    background: var(--signature); color: white; border: none;
+    height: 32px; padding: 0 12px; border-radius: 8px;
+    font-size: 11.5px; font-weight: 700; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 4px;
+    opacity: .7;
+    transform: translateX(-2px);
+    transition: opacity .15s, transform .15s, background .15s;
+  }
+  .card-new .ver-action:hover { background: var(--signature-hover); }
+  .card-new .ver-action svg { width: 12px; height: 12px; }
+
+  /* Encerrada: linha compacta */
+  .card-new.ended {
+    grid-template-columns: 4px 1fr auto auto;
+    opacity: .55;
+  }
+  .card-new.ended .body { padding: 8px 16px; }
+  .card-new.ended .campaign-name { font-size: 13px; font-weight: 600; }
+  .card-new.ended .right-rail { padding: 8px 12px; }
+  .card-new.ended .ver-action { height: 26px; padding: 0 10px; font-size: 11px; }
+
+  .ended-pacing {
+    padding: 8px 18px;
+    border-left: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+    font-size: 12px;
+    color: var(--fg-muted);
+    min-width: 180px;
+  }
+  .ended-pacing .ended-pac { display: inline-flex; gap: 5px; align-items: baseline; }
+  .ended-pacing .ended-k {
+    font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase;
+    font-weight: 800; color: var(--fg-subtle);
+  }
+  .ended-pacing .sep { color: var(--fg-subtle); opacity: .5; }
+
+  /* Comparison label */
+  .compare-grid {
+    display: grid; grid-template-columns: 1fr; gap: 0;
+  }
+  .demo-note {
+    font-size: 12px; color: var(--fg-muted);
+    background: var(--signature-soft);
+    border: 1px solid var(--signature);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    line-height: 1.5;
+  }
+  .demo-note b { color: var(--signature); }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="page-head">
+    <div class="brand">H Y P R<sup>a</sup> Report <span class="accent">Center</span> · <span style="color: var(--fg-muted); font-weight: 500; font-size: 14px; letter-spacing: 0;">Mockup do redesign de cards</span></div>
+    <div class="controls">
+      <button class="pill-btn active" id="theme-dark" onclick="setTheme('dark')">Dark</button>
+      <button class="pill-btn" id="theme-light" onclick="setTheme('light')">Light</button>
+    </div>
+  </header>
+
+  <div class="demo-note">
+    <b>Como ler:</b> abaixo você vê o mesmo conjunto de campanhas renderizado primeiro no design <b>atual</b> e depois no <b>proposto (Opção 2)</b>. Passe o mouse nos cards do design proposto pra ver os micro-comportamentos (lift, "Ver Report" aparecendo só no hover, sombra). Toggle entre dark e light no canto superior direito.
+  </div>
+
+  <!-- ════════════════ DESIGN ATUAL ════════════════ -->
+  <div class="section-label">
+    Design atual
+    <span class="section-tag">como está hoje</span>
+  </div>
+
+  <div class="month-head">
+    <h2>Abril de 2026</h2>
+    <span class="count">8 campanhas</span>
+  </div>
+
+  <div id="current-cards"></div>
+
+  <!-- ════════════════ DESIGN PROPOSTO ════════════════ -->
+  <div class="section-label" style="margin-top: 56px;">
+    Design proposto · Opção 2
+    <span class="section-tag">barra lateral · cor só em alerta · pacing como herói</span>
+  </div>
+
+  <div class="month-head">
+    <h2>Abril de 2026 · 8 campanhas · 2 críticas</h2>
+    <span class="count">R$ aggregate aqui (futuro)</span>
+  </div>
+
+  <div id="new-cards"></div>
+
+</div>
+
+<script>
+  // ── Sample data baseada no print ──────────────────────
+  const data = [
+    { client: "PICPAY",  token: "4Q0J5Y", name: "Raul GIL",                      start: "28/04", end: "12/06", dsp: null,  vid: 16,  ctr: null,  vtr: 120.1, cp: "KC", cs: "JB", days: 45 },
+    { client: "KENVUE",  token: "9Z9004", name: "Neutrogena",                    start: "27/04", end: "31/05", dsp: 2,     vid: null,ctr: 0.15,  vtr: null,  cp: "KC", cs: "JB", days: 35 },
+    { client: "DIAGEO",  token: "QGT00K", name: "JOHNNIE WALKER",                start: "22/04", end: "30/04", dsp: 29,    vid: 172, ctr: 0.27,  vtr: 94.6,  cp: "KC", cs: "JB", days: 9 },
+    { client: "HEINEKEN",token: "A6GZPX", name: "Reforço Regional",              start: "13/04", end: "30/04", dsp: 63,    vid: 86,  ctr: 0.62,  vtr: 90.8,  cp: "KC", cs: "JB", days: 18 },
+    { client: "LOREAL",  token: "4MTFHN", name: "Valentino Born in Roma",        start: "02/04", end: "30/04", dsp: 108,   vid: 414, ctr: 1.09,  vtr: 95.6,  cp: "DK", cs: "JB", days: 29, ended: true },
+    { client: "PICPAY",  token: "UT100W", name: "Institucional",                 start: "01/04", end: "30/04", dsp: 138,   vid: 104, ctr: 0.55,  vtr: 85.2,  cp: "KC", cs: "JB", days: 30, ended: true },
+    { client: "KENVUE",  token: "4PMEDI", name: "BABY · Promo",                  start: "01/04", end: "30/04", dsp: 117,   vid: null,ctr: 1.08,  vtr: null,  cp: "KC", cs: "JB", days: 30, ended: true },
+    { client: "KENVUE",  token: "T6B414", name: "Listerine RMNF",                start: "01/04", end: "30/04", dsp: 124,   vid: null,ctr: 0.54,  vtr: null,  cp: "KC", cs: "JB", days: 30, ended: true },
+  ];
+
+  // ── Lógica de cor (mirrors src/v2/admin/lib/format.js) ──
+  function pacingClass(p) {
+    if (p == null) return "v-muted";
+    if (p < 90)   return "v-danger";
+    if (p < 100)  return "v-warning";
+    if (p < 125)  return "v-success";
+    return "v-signature";
+  }
+  function ctrClass(v) {
+    if (v == null) return "v-muted";
+    if (v < 0.50) return "v-danger";
+    if (v < 0.65) return "v-warning";
+    return "v-success";
+  }
+  function vtrClass(v) {
+    if (v == null) return "v-muted";
+    if (v < 70) return "v-danger";
+    if (v < 80) return "v-warning";
+    return "v-success";
+  }
+  function classifyHealth(dsp, vid) {
+    const worst = [dsp, vid].filter(x => x != null).reduce((a,b)=>Math.min(a,b), Infinity);
+    if (worst === Infinity) return "muted";
+    if (worst < 90) return "danger";
+    if (worst < 100) return "warning";
+    if (worst < 125) return "success";
+    return "signature";
+  }
+
+  // ── Render ATUAL (replica do CampaignCardV2 hoje) ──
+  function renderCurrent() {
+    const root = document.getElementById("current-cards");
+    root.innerHTML = data.map(c => {
+      const health = c.ended ? "muted" : classifyHealth(c.dsp, c.vid);
+      const dimColor = c.ended ? "v-muted" : null;
+      const pillCls = (orig) => dimColor || orig;
+
+      const pills = [];
+      if (c.dsp != null) pills.push({ label: "DSP PAC", val: c.dsp + "%",  cls: pillCls(pacingClass(c.dsp)) });
+      if (c.vid != null) pills.push({ label: "VID PAC", val: c.vid + "%",  cls: pillCls(pacingClass(c.vid)) });
+      if (c.ctr != null) pills.push({ label: "CTR",     val: c.ctr.toFixed(2) + "%", cls: pillCls(ctrClass(c.ctr)) });
+      if (c.vtr != null) pills.push({ label: "VTR",     val: c.vtr.toFixed(1) + "%", cls: pillCls(vtrClass(c.vtr)) });
+
+      return `
+        <div class="card-current" style="${c.ended ? 'opacity:.65;' : ''}">
+          <div class="info">
+            <span class="dot ${health === 'muted' ? '' : health}"></span>
+            <div class="info-text">
+              <div class="client-row">
+                <span class="client">${c.client}</span>
+                <span class="token">${c.token}</span>
+              </div>
+              <p class="campaign">${c.name}</p>
+              <p class="date tnum">${c.start} → ${c.end}</p>
+            </div>
+          </div>
+          <div class="pills">
+            ${pills.map(p => `<div class="pill"><span class="label">${p.label}</span><span class="val ${p.cls}">${p.val}</span></div>`).join("")}
+          </div>
+          <div class="actions">
+            <div class="owners">
+              <span class="avatar cp">${c.cp}</span>
+              <span class="avatar cs">${c.cs}</span>
+            </div>
+            <button class="ver-btn">Ver Report ›</button>
+          </div>
+        </div>`;
+    }).join("");
+  }
+
+  // ── Render NOVO (Opção 2) ──
+  function renderNew() {
+    const root = document.getElementById("new-cards");
+    root.innerHTML = data.map(c => {
+      const health = c.ended ? "muted" : classifyHealth(c.dsp, c.vid);
+
+      // Qualidade: cor só se fora do verde
+      const ctrCls = c.ctr != null ? ctrClass(c.ctr) : "v-muted";
+      const vtrCls = c.vtr != null ? vtrClass(c.vtr) : "v-muted";
+      const ctrShown = ctrCls !== "v-success" && c.ctr != null ? ctrCls : "v-muted";
+      const vtrShown = vtrCls !== "v-success" && c.vtr != null ? vtrCls : "v-muted";
+
+      // Helper: monta uma linha de pacing (DSP ou VID) com label + número + barra
+      const fillColorFor = (p) => p == null ? "var(--fg-subtle)"
+        : p < 90 ? "var(--danger)"
+        : p < 100 ? "var(--warning)"
+        : p < 125 ? "var(--success)"
+        : "var(--signature)";
+      const pacingRow = (label, value) => {
+        if (value == null) {
+          return `
+            <div class="pacing-row">
+              <span class="pac-label">${label}</span>
+              <span class="pac-empty">—</span>
+              <div class="pacing-bar empty"></div>
+            </div>`;
+        }
+        const fillPct = Math.min(value, 150);
+        const tooltip = `${label}: ${value}% do esperado · meta 100%`;
+        return `
+          <div class="pacing-row">
+            <span class="pac-label">${label}</span>
+            <span class="pac-pct ${pacingClass(value)} tnum">${value}%</span>
+            <div class="pacing-bar" title="${tooltip}">
+              <div class="fill" style="width: ${(fillPct/150)*100}%; background: ${fillColorFor(value)};"></div>
+              <div class="target" style="left: ${(100/150)*100}%;"></div>
+            </div>
+          </div>`;
+      };
+
+      if (c.ended) {
+        // Linha compacta para encerradas — DSP/VID inline, sem barras
+        const endedPacing = [
+          c.dsp != null ? `<span class="ended-pac"><span class="ended-k">DSP</span> <span class="tnum">${c.dsp}%</span></span>` : "",
+          c.vid != null ? `<span class="ended-pac"><span class="ended-k">VID</span> <span class="tnum">${c.vid}%</span></span>` : "",
+        ].filter(Boolean).join('<span class="sep">·</span>');
+
+        return `
+          <div class="card-new ended">
+            <div class="status-bar"></div>
+            <div class="body">
+              <div class="head-row">
+                <span class="client-name">${c.client}</span>
+                <span class="token-soft">${c.token}</span>
+                <span class="campaign-name" style="font-size:13px;">${c.name}</span>
+              </div>
+              <div class="meta-row">
+                <span class="tnum">${c.start} → ${c.end}</span>
+                <span class="sep">·</span>
+                <span>Encerrada</span>
+              </div>
+            </div>
+            <div class="ended-pacing">${endedPacing}</div>
+            <div class="right-rail">
+              <button class="ver-action">Histórico
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m9 18 6-6-6-6"/></svg>
+              </button>
+            </div>
+          </div>`;
+      }
+
+      // Card ativo (full)
+      return `
+        <div class="card-new">
+          <div class="status-bar ${health}"></div>
+          <div class="body">
+            <div class="head-row">
+              <span class="client-name">${c.client}</span>
+              <span class="token-soft">${c.token}</span>
+            </div>
+            <div class="campaign-name">${c.name}</div>
+            <div class="meta-row">
+              <span class="tnum">${c.start} → ${c.end}</span>
+              <span class="sep">·</span>
+              <span class="days">${c.days}d</span>
+            </div>
+          </div>
+
+          <div class="pacing-cell">
+            ${pacingRow("DSP", c.dsp)}
+            ${pacingRow("VID", c.vid)}
+          </div>
+
+          <div class="quality-cell">
+            ${c.ctr != null ? `<div class="row"><span class="k">CTR</span><span class="v ${ctrShown} tnum">${c.ctr.toFixed(2)}%</span></div>` : ""}
+            ${c.vtr != null ? `<div class="row"><span class="k">VTR</span><span class="v ${vtrShown} tnum">${c.vtr.toFixed(1)}%</span></div>` : ""}
+          </div>
+
+          <div class="right-rail">
+            <div class="owners">
+              <span class="avatar cp" title="CP">${c.cp}</span>
+              <span class="avatar cs" title="CS">${c.cs}</span>
+            </div>
+            <button class="ver-action">Ver Report
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m9 18 6-6-6-6"/></svg>
+            </button>
+          </div>
+        </div>`;
+    }).join("");
+  }
+
+  // ── Theme toggle ──
+  function setTheme(t) {
+    document.documentElement.setAttribute("data-theme", t);
+    document.getElementById("theme-dark").classList.toggle("active", t === "dark");
+    document.getElementById("theme-light").classList.toggle("active", t === "light");
+  }
+
+  renderCurrent();
+  renderNew();
+</script>
+</body>
+</html>
