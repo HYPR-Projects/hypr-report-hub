@@ -246,10 +246,15 @@ export default function SheetsIntegrationCardV2({
 
   // ── Estado ATIVO ──────────────────────────────────────────────────────────
   if (integration?.status === "active") {
+    // Cliente vê só ícone + título + pill + botão — alinhamento ao centro
+    // dá leitura mais limpa. Admin tem metadados em coluna abaixo do
+    // título (created_by, last_sync, sync_until), então alinha ao topo
+    // pra ícone/título encostarem na primeira linha de texto.
+    const rowAlign = isAdmin ? "items-start" : "items-center";
     return (
       <Card>
         <div className="flex flex-col gap-3">
-          <div className="flex items-start gap-4">
+          <div className={`flex ${rowAlign} gap-4`}>
             <SheetIcon />
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
