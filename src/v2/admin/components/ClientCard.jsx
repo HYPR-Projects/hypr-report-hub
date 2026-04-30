@@ -5,18 +5,27 @@
 //
 // Layout:
 //   ┌─────────────────────────────────────────────┐
-//   │ ● Kenvue                          ↑ +12%   │
-//   │ 12 campanhas · 3 ativas                     │
+//   │▌Kenvue                              ↑ +12% │  ← stripe + name + trend inline
+//   │ 9 campanhas  · 4 ativas         há 10 h    │  ← timestamp no header (era footer)
 //   │                                             │
-//   │ ╱╲╱╲___╱╱─── (sparkline 12 semanas)         │
+//   │ ╱╲╱╲___╱╱─── (sparkline + área sutil)       │
 //   │                                             │
-//   │ ┌─────────┬─────────┬─────────┐             │
-//   │ │ Pacing  │ CTR     │ VTR     │             │
-//   │ │ 108%    │ 0.74%   │ 89.2%   │             │
-//   │ └─────────┴─────────┴─────────┘             │
+//   │ DSP·VID 108%   CTR 0.74%   VTR 89.2%        │  ← métricas inline (sem boxes)
 //   │                                             │
-//   │ NB BM Nogueira · Beatriz       há 2h →     │
+//   │ NB BM                                       │  ← só avatares (tooltip nos nomes)
 //   └─────────────────────────────────────────────┘
+//
+// Decisões de harmonização com o CampaignCardV2:
+//   • Stripe lateral 3px substitui o dot + glow (mesma "linguagem visual"
+//     entre as 2 views do admin).
+//   • TrendPill sem chip — agora inline (cor sólida + seta), pra não
+//     virar "campo de alertas vermelhos" com 10+ cards na tela.
+//   • Métricas em label tiny + valor bold colorido (mesmo padrão da
+//     régua de cores condicional). Sem grid boxed/divisores verticais.
+//   • Timestamp `há Xh` virou parte do header (subtle), não duplica
+//     espaço no footer. Footer agora é só os pips de owners.
+//   • SparklineV2 ganhou área de fill sutil (fillOpacity 0.10) — dá
+//     corpo visual sem aumentar altura.
 //
 // Click → navega pra `/admin/client/{slug}`.
 
@@ -37,20 +46,13 @@ import {
   slugToDisplay,
 } from "../lib/format";
 
-// 4 níveis de health, espelhando a régua de pacing (ver format.js).
-// Cliente só agrega campanhas ATIVAS, então não precisa de "ended" aqui.
-const HEALTH_DOT = {
+// Stripe lateral por health (mesma régua de pacing). Cliente só agrega
+// campanhas ATIVAS, então não precisa de "ended".
+const HEALTH_BAR = {
   healthy:   "bg-success",     // alguma campanha 100–124%
-  over:      "bg-signature",   // todas as campanhas ≥125%
+  over:      "bg-signature",   // todas ≥125%
   attention: "bg-warning",     // alguma 90–99%
   critical:  "bg-danger",      // alguma <90%
-};
-
-const HEALTH_GLOW = {
-  healthy:   "shadow-[var(--shadow-glow-success)]",
-  over:      "shadow-[var(--shadow-glow-signature)]",
-  attention: "shadow-[var(--shadow-glow-warning)]",
-  critical:  "shadow-[var(--shadow-glow-danger)]",
 };
 
 const SPARK_STROKE = {
@@ -58,6 +60,14 @@ const SPARK_STROKE = {
   down: "var(--color-danger)",
   flat: "var(--color-fg-subtle)",
 };
+
+// Formatter BRL pra eCPM. Cacheado em module scope — Intl.NumberFormat
+// custa ~1ms na primeira chamada por locale, então vale reusar a instância.
+const BRL = new Intl.NumberFormat("pt-BR", {
+  style: "currency",
+  currency: "BRL",
+  minimumFractionDigits: 2,
+});
 
 export function ClientCard({ client, onOpen }) {
   const {
@@ -74,32 +84,38 @@ export function ClientCard({ client, onOpen }) {
     health,
     sparkline,
     trend,
+    // ADMIN-ONLY — custo cru / impressions × 1000. Backend só envia
+    // este campo em endpoints admin-gated (action=list_clients), então
+    // se chegou aqui é porque já passou auth. Mas: NÃO duplicar este
+    // valor em props/contextos que descem pra componentes client-facing.
+    admin_ecpm,
   } = client || {};
 
-  // Display name fallback se backend não mandou
   const displayName = display_name || slugToDisplay(slug);
 
-  // Stroke do sparkline conforme trend (ou fallback para signature)
+  // Stroke do sparkline conforme trend (fallback signature quando não há trend)
   const sparkStroke = trend?.direction
     ? SPARK_STROKE[trend.direction]
     : "var(--color-signature)";
 
-  // Owners pra mostrar — top 1 CP + top 1 CS pra economizar espaço
+  // Top 1 CP + top 1 CS
   const primaryCp = top_cp_owners[0];
   const primaryCs = top_cs_owners[0];
 
-  // Display de owners textual
-  const ownersText = useMemo(() => {
-    const parts = [];
-    if (primaryCp?.email) parts.push(localPartFromEmail(primaryCp.email).split(".")[0]);
-    if (primaryCs?.email) parts.push(localPartFromEmail(primaryCs.email).split(".")[0]);
-    return parts.map(capitalizeFirst).join(" · ");
-  }, [primaryCp, primaryCs]);
+  // Pra tooltip dos avatares — nome capitalizado
+  const cpName = useMemo(
+    () => primaryCp?.email ? capitalizeFirst(localPartFromEmail(primaryCp.email).split(".")[0]) : null,
+    [primaryCp]
+  );
+  const csName = useMemo(
+    () => primaryCs?.email ? capitalizeFirst(localPartFromEmail(primaryCs.email).split(".")[0]) : null,
+    [primaryCs]
+  );
 
   return (
     <Card
       className={cn(
-        "p-5 cursor-pointer group",
+        "relative overflow-hidden p-5 cursor-pointer group",
         "border-border hover:border-signature/40",
         "transition-all duration-150 hover:-translate-y-0.5",
         "hover:shadow-[0_4px_14px_rgba(0,0,0,0.06)]"
@@ -114,51 +130,55 @@ export function ClientCard({ client, onOpen }) {
         }
       }}
     >
-      {/* Header: status dot + name + trend */}
-      <div className="flex items-start justify-between gap-3 mb-1">
+      {/* Stripe lateral de saúde — substitui o dot. Mesma "linguagem"
+       *  visual do CampaignCardV2 (admin/Por mês). */}
+      {health && (
+        <span
+          aria-hidden
+          className={cn(
+            "absolute left-0 top-0 bottom-0 w-[3px]",
+            HEALTH_BAR[health]
+          )}
+          title={`Status: ${health}`}
+        />
+      )}
+
+      {/* ── Header: nome + trend inline ────────────────────────────── */}
+      <div className="flex items-start justify-between gap-3 pb-3 border-b border-border">
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            {health && (
-              <span
-                className={cn(
-                  "w-1.5 h-1.5 rounded-full shrink-0",
-                  HEALTH_DOT[health],
-                  HEALTH_GLOW[health]
-                )}
-                title={`Status: ${health}`}
-                aria-label={`Status: ${health}`}
-              />
-            )}
-            <h3 className="text-[15px] font-bold text-fg tracking-tight leading-tight truncate">
-              {displayName}
-            </h3>
-          </div>
-          <p className="text-[12px] text-fg-muted mt-0.5">
-            <span className="tabular-nums font-semibold text-fg">{total_campaigns}</span>{" "}
-            campanha{total_campaigns === 1 ? "" : "s"}
+          <h3 className="text-[15px] font-bold text-fg tracking-tight leading-tight truncate">
+            {displayName}
+          </h3>
+          <div className="flex items-center gap-2 mt-1 text-[12px] text-fg-muted">
+            <span>
+              <span className="tabular-nums font-semibold text-fg">{total_campaigns}</span>{" "}
+              campanha{total_campaigns === 1 ? "" : "s"}
+            </span>
             {active_campaigns > 0 && (
-              <>
-                {" · "}
-                <span className="text-success font-semibold tabular-nums">
-                  {active_campaigns} ativa{active_campaigns === 1 ? "" : "s"}
-                </span>
-              </>
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded-full bg-success-soft text-success text-[10.5px] font-semibold tabular-nums leading-none">
+                {active_campaigns} ativa{active_campaigns === 1 ? "" : "s"}
+              </span>
             )}
-          </p>
+          </div>
         </div>
-        <TrendPill trend={trend} />
+        <div className="flex flex-col items-end gap-1 shrink-0">
+          <TrendPill trend={trend} />
+          <span className="text-[10.5px] text-fg-subtle tabular-nums">
+            {formatTimeAgo(last_updated)}
+          </span>
+        </div>
       </div>
 
-      {/* Sparkline — só se backend mandou. Reserva altura mesmo sem dados pra
-          evitar layout shift entre cards com/sem sparkline. */}
-      <div className="my-3 h-[28px] -mx-1">
+      {/* ── Sparkline com área de gradiente ────────────────────────── */}
+      <div className="py-3 h-[60px] -mx-1 flex items-center">
         {sparkline?.length > 1 ? (
           <SparklineV2
             values={sparkline}
             stroke={sparkStroke}
             strokeWidth={1.6}
+            fillOpacity={0.22}
             width={400}
-            height={28}
+            height={36}
             className="w-full"
             ariaLabel="Tendência de entrega nas últimas 12 semanas"
           />
@@ -167,56 +187,91 @@ export function ClientCard({ client, onOpen }) {
         )}
       </div>
 
-      {/* Métricas em grid 3-col */}
-      <div className="grid grid-cols-3 gap-0 py-2.5 border-y border-border">
-        <Metric label="Pacing" value={formatPacingValue(avg_pacing)} colorClass={pacingColorClass(avg_pacing)} />
-        <Metric label="CTR"    value={formatPct(avg_ctr, 2)} colorClass={ctrColorClass(avg_ctr)} border />
-        <Metric label="VTR"    value={formatPct(avg_vtr, 1)} colorClass={vtrColorClass(avg_vtr)} border />
+      {/* ── Bloco de métricas (eCPM destaque + 3-col detalhe) ──────────
+          Wrapper com border-y agrupa as 2 sub-rows (eCPM + métricas)
+          como uma "seção financeira" única. eCPM em cima com tint
+          signature-soft pra sinalizar que é dado interno (admin only). */}
+      <div className="border-y border-border">
+        {admin_ecpm != null && (
+          <div className="flex items-baseline justify-between gap-2 px-4 py-2.5 -mx-5 bg-signature-soft/40">
+            <div className="flex items-baseline gap-1.5 px-1">
+              <span className="text-[10px] uppercase tracking-[0.14em] font-bold text-signature">
+                eCPM real
+              </span>
+              <span
+                className="text-[8.5px] uppercase tracking-widest font-semibold text-fg-subtle"
+                title="Calculado com custo bruto do DSP — não exibir para o cliente"
+              >
+                admin
+              </span>
+            </div>
+            <span className="text-[18px] font-bold tabular-nums tracking-tight text-signature px-1">
+              {BRL.format(admin_ecpm)}
+            </span>
+          </div>
+        )}
+        <div className={cn(
+          "grid grid-cols-3 py-3",
+          admin_ecpm != null && "border-t border-border"
+        )}>
+          <Metric
+            label="DSP·VID"
+            value={formatPacingValue(avg_pacing)}
+            colorClass={pacingColorClass(avg_pacing)}
+          />
+          <Metric
+            label="CTR"
+            value={formatPct(avg_ctr, 2)}
+            colorClass={ctrColorClass(avg_ctr)}
+            divider
+          />
+          <Metric
+            label="VTR"
+            value={formatPct(avg_vtr, 1)}
+            colorClass={vtrColorClass(avg_vtr)}
+            divider
+          />
+        </div>
       </div>
 
-      {/* Footer: owners + tempo */}
-      <div className="flex items-center justify-between gap-2 mt-3">
-        <div className="flex items-center gap-2 min-w-0">
-          {(primaryCp || primaryCs) && (
-            <div className="inline-flex">
-              {primaryCp && (
-                <Avatar
-                  name={localPartFromEmail(primaryCp.email)}
-                  role="cp"
-                  size="sm"
-                />
-              )}
-              {primaryCs && (
-                <Avatar
-                  name={localPartFromEmail(primaryCs.email)}
-                  role="cs"
-                  size="sm"
-                  className={primaryCp ? "-ml-1.5" : ""}
-                />
-              )}
-            </div>
+      {/* ── Footer: só pips de owners (tooltip carrega o nome) ─────── */}
+      <div className="flex items-center gap-2 pt-3">
+        <div className="inline-flex">
+          {primaryCp && cpName && (
+            <Avatar name={cpName} role="cp" size="sm" title={`CP: ${cpName}`} />
           )}
-          {ownersText && (
-            <span className="text-[11px] text-fg-muted truncate">{ownersText}</span>
+          {primaryCs && csName && (
+            <Avatar
+              name={csName}
+              role="cs"
+              size="sm"
+              className={primaryCp ? "-ml-1.5" : ""}
+              title={`CS: ${csName}`}
+            />
           )}
         </div>
-        <span className="text-[10.5px] text-fg-subtle shrink-0 tabular-nums">
-          {formatTimeAgo(last_updated)}
-        </span>
       </div>
     </Card>
   );
 }
 
-function Metric({ label, value, colorClass, border }) {
+/** Métrica em formato label-acima / valor-abaixo, sem box.
+ *  Centralizada na coluna do grid, com divisor à esquerda opcional
+ *  (pra colunas 2 e 3 do bloco de métricas). */
+function Metric({ label, value, colorClass, divider }) {
   return (
-    <div className={cn("px-2 first:pl-0 last:pr-0", border && "border-l border-border")}>
-      <div className="text-[9.5px] uppercase tracking-widest font-bold text-fg-subtle">
+    <div
+      className={cn(
+        "flex flex-col items-center text-center leading-tight",
+        divider && "border-l border-border"
+      )}
+    >
+      <span className="text-[9px] uppercase tracking-[0.14em] font-semibold text-fg-subtle">
         {label}
-      </div>
-      <div className={cn("text-[15px] font-bold tracking-tight tabular-nums mt-0.5", colorClass)}>
+      </span>
+      <span className={cn("text-[15px] font-bold tracking-tight tabular-nums mt-0.5", colorClass)}>
         {value}
-      </div>
+      </span>
     </div>
   );
 }

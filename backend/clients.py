@@ -233,6 +233,17 @@ def aggregate_clients_from_campaigns(campaigns):
         avg_ctr = round(sum(ctr_values) / len(ctr_values), 2) if ctr_values else None
         avg_vtr = round(sum(vtr_values) / len(vtr_values), 2) if vtr_values else None
 
+        # ADMIN-ONLY — eCPM real (cumulativo, todas as campanhas).
+        # = SUM(total_cost cru) / SUM(impressions gross) * 1000
+        # NÃO é média de eCPMs (média de razões dá número errado), e sim
+        # razão das somas (eCPM ponderado pelo volume — o jeito certo).
+        # Inclui campanhas encerradas porque é métrica histórica de custo,
+        # não estado operacional. Campos com prefixo admin_ — endpoint que
+        # consome (action=list_clients) já é admin-gated; não vazar daqui.
+        cost_sum = sum(float(c.get("admin_total_cost", 0) or 0) for c in group)
+        impr_sum = sum(int(c.get("admin_impressions", 0) or 0) for c in group)
+        admin_ecpm = round(cost_sum / impr_sum * 1000, 2) if impr_sum > 0 and cost_sum > 0 else None
+
         # Top owners (frequência por email, separados CP/CS)
         cp_emails = [c.get("cp_email") for c in group if c.get("cp_email")]
         cs_emails = [c.get("cs_email") for c in group if c.get("cs_email")]
@@ -257,7 +268,7 @@ def aggregate_clients_from_campaigns(campaigns):
         # Token list (tokens curtos, p/ filtros do worklist sem segundo round-trip)
         active_tokens = [c["short_token"] for c in active if c.get("short_token")]
 
-        out.append({
+        client_dict = {
             "slug":                slug,
             "display_name":        display,
             "total_campaigns":     len(group),
@@ -270,7 +281,12 @@ def aggregate_clients_from_campaigns(campaigns):
             "last_updated":        last_updated,
             "health":              health,
             "active_short_tokens": active_tokens,
-        })
+        }
+        # admin_ecpm só sai quando há dado — evita poluir payload com nulls
+        # e deixa o front detectar ausência via `if (client.admin_ecpm)`.
+        if admin_ecpm is not None:
+            client_dict["admin_ecpm"] = admin_ecpm
+        out.append(client_dict)
 
     # Ordena por nº de campanhas ativas desc, depois total desc, depois display name
     out.sort(key=lambda c: (-c["active_campaigns"], -c["total_campaigns"], c["display_name"]))

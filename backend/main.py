@@ -1713,7 +1713,13 @@ def query_campaigns_list():
                         video_view_100_complete * (viewable_impressions / impressions),
                         0))                                        AS v_viewable_completions,
                 COUNT(DISTINCT IF(media_type='DISPLAY', date, NULL)) AS d_days_with_delivery,
-                SUM(IF(media_type='DISPLAY', viewable_impressions, 0)) AS d_viewable_impressions
+                SUM(IF(media_type='DISPLAY', viewable_impressions, 0)) AS d_viewable_impressions,
+                -- ADMIN-ONLY: custo cru do DSP (sem margem/over) + impressions
+                -- gross. Usados pra calcular eCPM real (= cost/impressions*1000)
+                -- na view "Por cliente". NÃO BUBBLE para client-facing endpoints.
+                -- Mesma varredura — custo BQ zero adicional.
+                SUM(total_cost)  AS admin_total_cost,
+                SUM(impressions) AS admin_impressions
             FROM `site-hypr.prod_assets.unified_daily_performance_metrics`
             WHERE media_type IN ('DISPLAY', 'VIDEO')
               AND UPPER(line_name) NOT LIKE '%SURVEY%'
@@ -1730,7 +1736,8 @@ def query_campaigns_list():
             c.bonus_o2o_display,      c.bonus_ooh_display,
             c.bonus_o2o_video,        c.bonus_ooh_video,
             u.v_actual_start_date,    u.v_days_with_delivery,  u.v_viewable_completions,
-            u.d_days_with_delivery,   u.d_viewable_impressions
+            u.d_days_with_delivery,   u.d_viewable_impressions,
+            u.admin_total_cost,       u.admin_impressions
         FROM base b
         LEFT JOIN agg       a USING (short_token)
         LEFT JOIN checklist c USING (short_token)
@@ -1839,6 +1846,21 @@ def query_campaigns_list():
         if video_pacing   is not None: entry["video_pacing"]   = video_pacing
         if display_ctr    is not None: entry["display_ctr"]    = display_ctr
         if video_vtr      is not None: entry["video_vtr"]      = video_vtr
+
+        # ADMIN-ONLY: campos com prefixo `admin_` carregam dado confidencial
+        # (custo cru do DSP, antes da margem/over que vai pro cliente).
+        # Estes campos circulam APENAS pelos endpoints admin-gated:
+        #   /api/admin/campaigns?list=true        (CampaignMenuV2)
+        #   /api/admin/campaigns?action=list_clients (ClientCard)
+        # Nunca devem aparecer em endpoints client-facing como get_campaign_data.
+        # O prefixo deixa explícito no payload — qualquer dev fazendo grep
+        # por "admin_" deve checar autorização antes de retornar.
+        admin_total_cost   = float(r["admin_total_cost"]   or 0)
+        admin_impressions  = int(r["admin_impressions"]    or 0)
+        if admin_impressions > 0 and admin_total_cost > 0:
+            entry["admin_total_cost"] = round(admin_total_cost, 2)
+            entry["admin_impressions"] = admin_impressions
+            entry["admin_ecpm"] = round(admin_total_cost / admin_impressions * 1000, 2)
 
         result.append(entry)
 
