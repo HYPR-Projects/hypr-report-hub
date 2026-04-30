@@ -93,6 +93,12 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 # para mas a sheet permanece acessível no Drive do membro.
 SYNC_GRACE_DAYS = 30
 
+# ID da pasta compartilhada no Drive HYPR onde as sheets são movidas
+# após criação. Vazio = mantém no Meu Drive raiz do membro que ativou.
+# Como a sheet é criada via OAuth do membro, ele precisa ter acesso
+# de Editor à pasta destino (caso típico: foi ele quem compartilhou).
+DRIVE_FOLDER_ID = os.environ.get("SHEETS_DRIVE_FOLDER_ID", "")
+
 
 # ─── Lazy singletons ─────────────────────────────────────────────────────────
 _bq = None
@@ -448,9 +454,12 @@ def sync_all_due(detail_loader) -> Dict:
 
 
 # ─── Sheet creation + sync ───────────────────────────────────────────────────
-# Schema das colunas escritas. Replica DataTableV2 do frontend exatamente:
-# se quiser mexer aqui, mexe no frontend também (e vice-versa). Centralizar
-# essa lista em um lugar só seria ideal mas exigiria refactor cross-stack.
+# Schema das colunas escritas — fonte da verdade é src/v2/components/DataTableV2.jsx
+# (FIELDS no topo do arquivo). Manter os 2 lugares em sincronia: cliente
+# espera ver na sheet o mesmo schema do download CSV do dash.
+#
+# IMPORTANTE: só campos que vêm BRUTOS no detail. Métricas derivadas como
+# CTR e VTR não estão aqui — quem quiser elas faz fórmula no próprio Sheets.
 SHEET_COLUMNS = [
     ("date",                     "Data"),
     ("campaign_name",             "Campanha"),
@@ -461,12 +470,11 @@ SHEET_COLUMNS = [
     ("impressions",               "Impressões"),
     ("viewable_impressions",      "Imp. Visíveis"),
     ("clicks",                    "Cliques"),
-    ("ctr",                       "CTR"),
-    ("video_view_25",             "Views 25%"),
-    ("video_view_50",             "Views 50%"),
-    ("video_view_75",             "Views 75%"),
-    ("video_view_100",            "Views 100%"),
-    ("vtr",                       "VTR"),
+    ("video_starts",              "Video Starts"),
+    ("video_view_25",             "25%"),
+    ("video_view_50",             "50%"),
+    ("video_view_75",             "75%"),
+    ("video_view_100",            "100%"),
     ("effective_total_cost",      "Custo Efetivo"),
     ("effective_cost_with_over",  "Custo Ef. + Over"),
 ]
@@ -608,6 +616,26 @@ def create_sheet_for_campaign(
     except Exception:
         _try_delete_spreadsheet(spreadsheet_id, access_token)
         raise
+
+    # Move pra pasta compartilhada do Drive HYPR (se configurada).
+    # Best-effort: se falhar (ex.: usuário sem acesso à pasta), mantém
+    # a sheet no My Drive raiz dele e segue. Não é fatal.
+    if DRIVE_FOLDER_ID:
+        try:
+            drive_svc = _build_drive_client(access_token)
+            # Pega parents atuais pra remover (geralmente "root" do user).
+            file_meta = drive_svc.files().get(
+                fileId=spreadsheet_id, fields="parents",
+            ).execute()
+            current_parents = ",".join(file_meta.get("parents", []))
+            drive_svc.files().update(
+                fileId=spreadsheet_id,
+                addParents=DRIVE_FOLDER_ID,
+                removeParents=current_parents,
+                fields="id,parents",
+            ).execute()
+        except Exception as e:
+            print(f"[WARN move sheet to folder {spreadsheet_id}] {e}")
 
     # Persiste a integração no BQ.
     sync_until = (end_date + timedelta(days=SYNC_GRACE_DAYS)) if end_date else None
