@@ -6,7 +6,7 @@
 // Esse atributo é setado em 3 momentos:
 //   1. Script anti-FOUC inline no index.html (lê localStorage antes do
 //      React montar pra evitar flash de tema errado)
-//   2. Hook useTheme.useEffect — sincroniza state React → DOM quando
+//   2. Hook useTheme — sincroniza state global → DOM quando
 //      o user clica no toggle
 //   3. Listener prefers-color-scheme — atualiza se user mudar tema do
 //      sistema operacional E não tiver preferência salva
@@ -14,12 +14,26 @@
 // Ordem de prioridade na resolução inicial:
 //   localStorage > prefers-color-scheme > 'dark' (default)
 //
+// IMPORTANTE: state global, não local
+// ───────────────────────────────────
+// O hook usa useSyncExternalStore (React 18+) com state module-level
+// + pub/sub. Múltiplos componentes que chamam useTheme() compartilham
+// O MESMO estado — quando um componente trigga setTheme/toggleTheme,
+// TODOS os outros são notificados e re-renderizam automaticamente.
+//
+// Por que importa: o ThemeToggleV2 muda o tema, e isso precisa
+// propagar pro CampaignHeaderV2 (que aplica filter na logo conforme
+// o tema), pros gráficos (que mudam paleta) etc. Se cada hook tivesse
+// seu próprio useState, só o componente do toggle re-renderizaria —
+// o resto da árvore ficaria com o tema "antigo" até o próximo refresh.
+// (Foi exatamente o bug do PR #58.)
+//
 // Exporta:
-//   - useTheme()       → ['dark' | 'light', toggleFn, setThemeFn]
+//   - useTheme()        → ['dark' | 'light', toggleFn, setThemeFn]
 //   - getInitialTheme() → string (usado pelo script anti-FOUC; export
-//     pra reutilizar a mesma lógica em ambos os lugares)
+//                         pra reutilizar a mesma lógica em ambos os lugares)
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
 
 const STORAGE_KEY = "hypr_theme";
 const VALID = ["dark", "light"];
@@ -46,17 +60,47 @@ function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
 }
 
+// ── Estado global module-level + pub/sub ─────────────────────────────────
+// Todas as instâncias de useTheme leem deste store. setCurrentTheme notifica
+// todos os subscribers, garantindo re-render sincronizado em toda a árvore.
+
+let currentTheme = typeof window !== "undefined" ? getInitialTheme() : "dark";
+const listeners = new Set();
+
+function getSnapshot() {
+  return currentTheme;
+}
+
+function getServerSnapshot() {
+  // SSR: assume default. O script anti-FOUC corrige no client antes do
+  // primeiro paint, então não dá flash visível.
+  return "dark";
+}
+
+function subscribe(listener) {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+function setCurrentTheme(next) {
+  if (!VALID.includes(next) || next === currentTheme) return;
+  currentTheme = next;
+  applyTheme(next);
+  // Notifica todos os hooks ativos
+  listeners.forEach((l) => l());
+}
+
+// Aplica imediatamente no carregamento do módulo (caso script anti-FOUC
+// não tenha rodado, ex: dev sem index.html customizado).
+if (typeof window !== "undefined") {
+  applyTheme(currentTheme);
+}
+
+// ── Hook ─────────────────────────────────────────────────────────────────
+
 export function useTheme() {
-  const [theme, setThemeState] = useState(() => getInitialTheme());
+  const theme = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 
-  // Sincroniza state React → DOM. Idempotente: se script anti-FOUC já
-  // setou data-theme, esta linha apenas confirma.
-  useEffect(() => {
-    applyTheme(theme);
-  }, [theme]);
-
-  // Persiste E atualiza estado local. Toggle escreve em localStorage,
-  // o que sinaliza preferência explícita do usuário (sobrescreve OS).
   const setTheme = useCallback((next) => {
     if (!VALID.includes(next)) return;
     try {
@@ -64,15 +108,17 @@ export function useTheme() {
     } catch {
       /* sem persistência, mas troca em sessão */
     }
-    setThemeState(next);
+    setCurrentTheme(next);
   }, []);
 
   const toggleTheme = useCallback(() => {
-    setTheme(theme === "dark" ? "light" : "dark");
-  }, [theme, setTheme]);
+    setTheme(currentTheme === "dark" ? "light" : "dark");
+  }, [setTheme]);
 
-  // Listener pra mudança de prefers-color-scheme do OS — só atualiza se
-  // user NÃO tem preferência salva (toggle explícito sobrescreve OS).
+  // Listener prefers-color-scheme do OS — só atualiza se user NÃO tem
+  // preferência salva (toggle explícito sobrescreve OS). Mounted uma vez
+  // por instância, mas o efeito é idempotente: setCurrentTheme é early-return
+  // se o tema já é o atual.
   useEffect(() => {
     if (typeof window === "undefined" || !window.matchMedia) return;
     const mq = window.matchMedia("(prefers-color-scheme: light)");
@@ -82,7 +128,7 @@ export function useTheme() {
       } catch {
         /* sem localStorage — segue OS */
       }
-      setThemeState(e.matches ? "light" : "dark");
+      setCurrentTheme(e.matches ? "light" : "dark");
     };
     mq.addEventListener("change", onChange);
     return () => mq.removeEventListener("change", onChange);
