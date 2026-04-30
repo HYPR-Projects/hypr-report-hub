@@ -28,6 +28,7 @@ import { useMemo } from "react";
 import {
   buildLineOptions,
   computeDisplayKpis,
+  extractAudience,
   groupByDate,
   groupBySize,
   groupByAudience,
@@ -92,7 +93,7 @@ export default function DisplayV2({
     return { totals, detailAll, detailFiltered, lineOptions, kpis, daily, bySize, byAudience };
   }, [aggregates, tactic, lines, camp]);
 
-  const { totals, detailFiltered, lineOptions, kpis, daily, bySize, byAudience } = view;
+  const { totals, detailAll, detailFiltered, lineOptions, kpis, daily, bySize, byAudience } = view;
 
   // Empty state: a tactic atual não tem entregas. Antes a gente fazia
   // early return aqui sem renderizar a toolbar — o usuário ficava preso
@@ -146,6 +147,7 @@ export default function DisplayV2({
           camp={camp}
           tactic={tactic}
           aggregates={aggregates}
+          detailAll={detailAll}
           detailFiltered={detailFiltered}
           kpis={kpis}
           daily={daily}
@@ -166,6 +168,7 @@ function DisplayContent({
   camp,
   tactic,
   aggregates,
+  detailAll,
   detailFiltered,
   kpis,
   daily,
@@ -316,6 +319,33 @@ function DisplayContent({
             />
           </div>
         </section>
+      )}
+
+      {/* ─── 8b. Tabela "Por Audiência" ──────────────────────────────────
+          Mesmo estilo da tabela "Por Formato": share visual, métricas
+          alinhadas, ordenação por share. Espelha a visão do gráfico
+          acima — sempre mostra TODAS as audiências (detailAll), igual
+          ao DualChart, ignorando o filtro de audience selecionada.
+          extractAudience() resolve a chave de cada detail row pra
+          casar com r.audience das rows agrupadas.
+      */}
+      {byAudience.length > 0 && (
+        <FormatBreakdownTableV2
+          rows={byAudience}
+          groupKey="audience"
+          groupLabel="Audiência"
+          itemNoun="audiência"
+          denomKey="viewable_impressions"
+          denomLabel="Imp. Visíveis"
+          numeratorKey="clicks"
+          numeratorLabel="Cliques"
+          rateKey="ctr"
+          rateLabel="CTR"
+          rateFormatter={fmtP2}
+          extraRows={detailAll}
+          getDetailGroupKey={(r) => extractAudience(r.line_name)}
+          mediaType="DISPLAY"
+        />
       )}
 
       {/* ─── 9. Tabela "Por Dia" agregada ────────────────────────────── */}
