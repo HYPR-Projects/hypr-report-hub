@@ -84,6 +84,7 @@ _clients_cache   = {}     # "all" -> (timestamp, payload)
 # da lista — invalidados juntos via _cache_invalidate_token quando ocorre
 # mutação que afeta o payload do menu.
 _overrides_cache = {}     # "all" -> (timestamp, dict[short_token -> (cp, cs)])
+_aliases_cache   = {}     # "all" -> (timestamp, dict[alias_normalized -> canonical_normalized])
 _shares_cache    = {}     # "all" -> (timestamp, dict[short_token -> share_id])
 _cache_lock      = threading.Lock()
 
@@ -120,6 +121,7 @@ def _cache_invalidate_token(short_token):
         _list_cache.pop("all", None)
         _clients_cache.pop("all", None)
         _overrides_cache.pop("all", None)
+        _aliases_cache.pop("all", None)
         _shares_cache.pop("all", None)
 
 
@@ -793,6 +795,74 @@ def report_data(request):
             return (jsonify({"ok": True}), 200, headers)
         except Exception as e:
             print(f"[ERROR save_report_owner] {e}")
+            return (jsonify({"error": str(e)}), 500, headers)
+
+    # ── Endpoint: aliases de cliente (admin) ──────────────────────────────────
+    # Ajuda o match automático de owner quando a normalização padrão não
+    # basta (ex: "RD" → "Raia Drogasil"). A própria normalização já cobre
+    # caixa, acentos, apóstrofos e artigos PT-BR — aliases são o escape
+    # hatch pra abreviações e nomes-fantasia que não compartilham raiz
+    # textual com o cliente canônico.
+    #
+    #   GET    ?action=list_aliases                           → array
+    #   POST   ?action=save_alias    {alias, canonical}       → row salva
+    #   DELETE ?action=delete_alias  {alias}                  → ok
+    #
+    # Qualquer mutação invalida o cache da lista de campanhas pra que o
+    # match novo entre em vigor já no próximo refresh do menu admin.
+    if request.method == "GET" and request.args.get("action") == "list_aliases":
+        if not authenticate_admin(request):
+            return (jsonify({"error": "Não autorizado"}), 401, headers)
+        try:
+            data = owners.list_aliases()
+            return (jsonify({"aliases": data}), 200, headers)
+        except Exception as e:
+            print(f"[ERROR list_aliases] {e}")
+            return (jsonify({"error": str(e)}), 500, headers)
+
+    if request.method == "POST" and request.args.get("action") == "save_alias":
+        admin = authenticate_admin(request)
+        if not admin:
+            return (jsonify({"error": "Não autorizado"}), 401, headers)
+        try:
+            body = request.get_json(silent=True) or {}
+            alias_raw     = (body.get("alias") or "").strip()
+            canonical_raw = (body.get("canonical") or "").strip()
+            if not alias_raw or not canonical_raw:
+                return (jsonify({"error": "alias e canonical são obrigatórios"}), 400, headers)
+            saved = owners.save_alias(
+                alias_raw=alias_raw,
+                canonical_raw=canonical_raw,
+                updated_by=admin.get("email", "unknown"),
+            )
+            # Invalida caches pra a nova regra valer já no próximo F5.
+            with _cache_lock:
+                _list_cache.pop("all", None)
+                _clients_cache.pop("all", None)
+                _aliases_cache.pop("all", None)
+            return (jsonify({"ok": True, "alias": saved}), 200, headers)
+        except ValueError as e:
+            return (jsonify({"error": str(e)}), 400, headers)
+        except Exception as e:
+            print(f"[ERROR save_alias] {e}")
+            return (jsonify({"error": str(e)}), 500, headers)
+
+    if request.method == "POST" and request.args.get("action") == "delete_alias":
+        if not authenticate_admin(request):
+            return (jsonify({"error": "Não autorizado"}), 401, headers)
+        try:
+            body = request.get_json(silent=True) or {}
+            alias_raw = (body.get("alias") or "").strip()
+            if not alias_raw:
+                return (jsonify({"error": "alias é obrigatório"}), 400, headers)
+            owners.delete_alias(alias_raw)
+            with _cache_lock:
+                _list_cache.pop("all", None)
+                _clients_cache.pop("all", None)
+                _aliases_cache.pop("all", None)
+            return (jsonify({"ok": True}), 200, headers)
+        except Exception as e:
+            print(f"[ERROR delete_alias] {e}")
             return (jsonify({"error": str(e)}), 500, headers)
 
     # ── Endpoint: lista de clientes agregada (admin) ─────────────────────────
@@ -1758,11 +1828,13 @@ def query_campaigns_list():
     fut_query    = _query_pool.submit(lambda: list(bq.query(sql).result()))
     fut_owners   = _query_pool.submit(_safe_get_owners_lookup)
     fut_overrides= _query_pool.submit(_safe_get_overrides)
+    fut_aliases  = _query_pool.submit(_safe_get_aliases)
     fut_shares   = _query_pool.submit(_safe_get_all_share_ids)
 
     rows           = fut_query.result()
     lookup_owners  = fut_owners.result()
     overrides_map  = fut_overrides.result()
+    aliases_map    = fut_aliases.result()
     share_ids_map  = fut_shares.result()
 
     result = []
@@ -1892,13 +1964,15 @@ def query_campaigns_list():
 
         result.append(entry)
 
-    # Merge owners (lookup planilha + overrides BQ) em Python.
-    # Override sempre vence lookup. Se nenhum tem dado, deixa None.
+    # Merge owners (lookup planilha + overrides BQ + aliases BQ) em Python.
+    # Pipeline: override por short_token vence; senão normaliza client_name,
+    # resolve alias se houver, busca no lookup. Sem match → None (UI mostra "—").
     for c in result:
         token = c.get("short_token")
-        client_lc = (c.get("client_name") or "").strip().lower()
         ov_cp, ov_cs = overrides_map.get(token, (None, None))
-        lk_cp, lk_cs = lookup_owners.get(client_lc, (None, None))
+        lk_cp, lk_cs = owners.resolve_owner_for_client(
+            c.get("client_name"), lookup_owners, aliases_map
+        )
         c["cp_email"] = ov_cp or lk_cp
         c["cs_email"] = ov_cs or lk_cs
 
@@ -1941,6 +2015,25 @@ def _safe_get_overrides():
         print(f"[WARN _safe_get_overrides] {e}")
         data = {}
     _cache_set(_overrides_cache, "all", data)
+    return data
+
+
+def _safe_get_aliases():
+    """Wrapper resiliente + cacheado pro dict de aliases de cliente.
+
+    Mesmo padrão de `_safe_get_overrides`: BQ scan rápido (tabela com
+    poucos rows), cache atrelado ao TTL da lista. Falha em dict vazio —
+    o pipeline de match degrada graciosamente pra normalização pura.
+    """
+    cached = _cache_get(_aliases_cache, "all", _LIST_CACHE_TTL)
+    if cached is not None:
+        return cached
+    try:
+        data = owners.get_aliases_dict()
+    except Exception as e:
+        print(f"[WARN _safe_get_aliases] {e}")
+        data = {}
+    _cache_set(_aliases_cache, "all", data)
     return data
 
 

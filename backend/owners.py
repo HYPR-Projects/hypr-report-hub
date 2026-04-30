@@ -43,7 +43,9 @@ admin `?list=true` (já protegido por JWT) traz essa informação.
 """
 
 import os
+import re
 import time
+import unicodedata
 from typing import Dict, List, Optional, Tuple
 from google.cloud import bigquery
 from google.auth import default as google_auth_default
@@ -54,8 +56,63 @@ PROJECT_ID = os.environ.get("GCP_PROJECT", "site-hypr")
 DATASET    = "prod_assets"
 SHEET_ID   = "1nd6UtJJ5fA81D9VZRiH2ZJGHYsiiv28LPzXhNRtd2aM"
 
-# Tabela física de overrides — única que usamos no BigQuery agora
-TABLE_OVERRIDES = "report_owners_overrides"
+# Tabelas físicas que mantemos no BigQuery
+TABLE_OVERRIDES = "report_owners_overrides"   # override manual de owner por short_token
+TABLE_ALIASES   = "client_aliases"            # apelido → nome canônico (lookup fuzzy)
+
+
+# ─── Normalização de client_name ─────────────────────────────────────────────
+# Usada em duas pontas do match de owner:
+#   1. Ao montar o dict de lookup vindo da planilha (key = nome normalizado)
+#   2. Ao bater cada campaign.client_name contra esse dict
+# Empata "LOREAL" com "L'Oréal" e "BOTICARIO" com "O Boticário" sem precisar
+# de tabela manual. Casos onde a normalização não basta (ex: "RD" =
+# "Raia Drogasil") ficam pra `client_aliases`.
+_ARTICLE_PREFIX_RE = re.compile(r"^(o|a|os|as|the)\s+")
+_BIZ_SUFFIX_RE     = re.compile(r"\s+(ltda|s\s*a|me|epp|eireli|inc|llc)\s*$")
+_QUOTE_CHARS_RE    = re.compile(r"[‘’“”'`\"]")
+_NON_ALNUM_RE      = re.compile(r"[^a-z0-9]+")
+_MULTI_SPACE_RE    = re.compile(r"\s+")
+
+
+def normalize_client_name(name: str) -> str:
+    """Normalização agressiva pra match de cliente entre fontes diferentes.
+
+    Regras (ordem importa):
+      1. Remove aspas/apóstrofos sem deixar espaço (L'Oréal → LOreal, não L Oreal).
+      2. NFKD + drop diacríticos (Boticário → Boticario, Itaú → Itau).
+      3. lowercase.
+      4. Qualquer não-alfanumérico vira espaço (& . - / etc.).
+      5. Remove artigo PT-BR no início ("o ", "a ", "os ", "as ", "the ").
+      6. Remove sufixo corporativo no fim (" ltda", " sa", " me", " epp"...).
+      7. Colapsa espaços múltiplos.
+
+    Exemplos:
+      "L'Oréal"           → "loreal"
+      "LOREAL"            → "loreal"
+      "O Boticário"       → "boticario"
+      "BOTICARIO"         → "boticario"
+      "Casas Bahia S.A."  → "casas bahia"
+      "Itaú Unibanco"     → "itau unibanco"
+      ""                  → ""
+
+    Não removo espaços internos de propósito: evita falso positivo entre
+    nomes que têm prefixo igual (ex: "Real Madrid" vs "RealMadrid" são raros;
+    pra esses casos o admin cria alias manual).
+    """
+    if not name:
+        return ""
+    s = name.strip()
+    s = _QUOTE_CHARS_RE.sub("", s)
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    s = s.lower()
+    s = _NON_ALNUM_RE.sub(" ", s)
+    s = _MULTI_SPACE_RE.sub(" ", s).strip()
+    s = _ARTICLE_PREFIX_RE.sub("", s)
+    s = _BIZ_SUFFIX_RE.sub("", s)
+    s = _MULTI_SPACE_RE.sub(" ", s).strip()
+    return s
 
 # Cache global da planilha. Estrutura: {"data": dict | None, "ts": float}
 #
@@ -284,29 +341,33 @@ def list_team_members() -> dict:
 
 
 def get_owners_lookup_dict() -> Dict[str, Tuple[Optional[str], Optional[str]]]:
-    """Lê a primeira aba e monta dict de lookup por client_name (lowercase).
+    """Lê a primeira aba e monta dict de lookup por client_name normalizado.
 
     Estrutura da aba: Agência | Cliente | CP ATUAL | Email CP | CS Atual | Email CS
+
+    Chaveamos por `normalize_client_name(client)` em vez do nome cru
+    lowercased — assim "L'Oréal" e "LOREAL" colidem na mesma key e o
+    admin não precisa cadastrar duas linhas idênticas na planilha.
 
     Lógica de agregação quando o mesmo cliente aparece em múltiplas linhas
     (atendido por agências diferentes): só retornamos email se todas as
     linhas concordarem. Se houver divergência, retornamos None — o admin
     precisa criar override manual. Isso evita atribuir owner errado.
 
-    Retorna: {client_name_lower: (cp_email_or_none, cs_email_or_none)}
+    Retorna: {client_name_normalized: (cp_email_or_none, cs_email_or_none)}
     """
     data = _load_sheet_data()
     rows = data["lookup_rows"]
 
-    # Agrega CPs e CSs por cliente
+    # Agrega CPs e CSs por cliente normalizado
     by_client: Dict[str, Dict[str, set]] = {}
     for row in rows:
         cells = (list(row) + ["", "", "", "", "", ""])[:6]
         _agency, client, _cp_name, cp_email, _cs_name, cs_email = (str(c).strip() for c in cells)
 
-        if not client:
+        key = normalize_client_name(client)
+        if not key:
             continue
-        key = client.lower()
         bucket = by_client.setdefault(key, {"cp": set(), "cs": set()})
 
         cp_lower = cp_email.lower() if cp_email else ""
@@ -319,11 +380,166 @@ def get_owners_lookup_dict() -> Dict[str, Tuple[Optional[str], Optional[str]]]:
 
     # Resolve: só atribui se houver consenso (1 email único)
     result: Dict[str, Tuple[Optional[str], Optional[str]]] = {}
-    for client_lc, bucket in by_client.items():
+    for key, bucket in by_client.items():
         cp = next(iter(bucket["cp"])) if len(bucket["cp"]) == 1 else None
         cs = next(iter(bucket["cs"])) if len(bucket["cs"]) == 1 else None
-        result[client_lc] = (cp, cs)
+        result[key] = (cp, cs)
     return result
+
+
+# ─── Aliases manuais (BQ table) ──────────────────────────────────────────────
+# Quando a normalização não basta (ex: "RD" deve bater "Raia Drogasil"),
+# o admin cadastra manualmente um alias. Ambos os lados são guardados na
+# forma cru (pra exibir) e normalizada (pra match O(1)).
+_aliases_table_ready = False
+
+
+def _ensure_aliases_table() -> None:
+    """Cria a tabela de aliases se não existir. Idempotente, lazy-init."""
+    global _aliases_table_ready
+    if _aliases_table_ready:
+        return
+    sql = f"""
+        CREATE TABLE IF NOT EXISTS {_full(TABLE_ALIASES)} (
+            alias_normalized      STRING NOT NULL,
+            canonical_normalized  STRING NOT NULL,
+            alias_raw             STRING,
+            canonical_raw         STRING,
+            updated_by            STRING,
+            updated_at            TIMESTAMP
+        )
+    """
+    bq.query(sql).result()
+    _aliases_table_ready = True
+
+
+def get_aliases_dict() -> Dict[str, str]:
+    """Retorna {alias_normalized: canonical_normalized}.
+
+    Resiliente: se a tabela ainda não existe (primeiro deploy), retorna
+    dict vazio em vez de levantar — caller continua com match só por
+    normalização.
+    """
+    sql = f"""
+        SELECT alias_normalized, canonical_normalized
+        FROM {_full(TABLE_ALIASES)}
+    """
+    try:
+        rows = list(bq.query(sql).result())
+    except Exception as e:
+        print(f"[WARN get_aliases_dict] {e}")
+        return {}
+    return {r["alias_normalized"]: r["canonical_normalized"] for r in rows}
+
+
+def list_aliases() -> List[dict]:
+    """Lista de aliases pra UI: [{alias_raw, canonical_raw, alias_normalized,
+    canonical_normalized, updated_by, updated_at_iso}, ...] ordenada por
+    canonical_raw asc.
+    """
+    sql = f"""
+        SELECT alias_normalized, canonical_normalized, alias_raw, canonical_raw,
+               updated_by, updated_at
+        FROM {_full(TABLE_ALIASES)}
+        ORDER BY canonical_raw, alias_raw
+    """
+    try:
+        rows = list(bq.query(sql).result())
+    except Exception as e:
+        print(f"[WARN list_aliases] {e}")
+        return []
+    out = []
+    for r in rows:
+        ts = r.get("updated_at")
+        out.append({
+            "alias_normalized":     r.get("alias_normalized"),
+            "canonical_normalized": r.get("canonical_normalized"),
+            "alias_raw":            r.get("alias_raw") or r.get("alias_normalized"),
+            "canonical_raw":        r.get("canonical_raw") or r.get("canonical_normalized"),
+            "updated_by":           r.get("updated_by"),
+            "updated_at":           ts.isoformat() if ts else None,
+        })
+    return out
+
+
+def save_alias(alias_raw: str, canonical_raw: str, updated_by: str) -> dict:
+    """Upsert de alias. Normaliza ambos os lados antes de gravar.
+
+    Retorna o dict da linha gravada (pra UI atualizar a tabela sem refetch).
+    Levanta ValueError se algum dos lados normaliza pra string vazia
+    (entrada inválida) ou se alias == canonical (no-op disfarçado).
+    """
+    _ensure_aliases_table()
+
+    alias_n     = normalize_client_name(alias_raw)
+    canonical_n = normalize_client_name(canonical_raw)
+
+    if not alias_n or not canonical_n:
+        raise ValueError("Alias e canonical não podem ser vazios após normalização.")
+    if alias_n == canonical_n:
+        raise ValueError("Alias e canonical são equivalentes após normalização — não precisa de mapeamento.")
+
+    sql = f"""
+        MERGE {_full(TABLE_ALIASES)} T
+        USING (SELECT @alias_n AS alias_normalized) S
+        ON T.alias_normalized = S.alias_normalized
+        WHEN MATCHED THEN UPDATE SET
+            canonical_normalized = @canonical_n,
+            alias_raw            = @alias_raw,
+            canonical_raw        = @canonical_raw,
+            updated_by           = @by,
+            updated_at           = CURRENT_TIMESTAMP()
+        WHEN NOT MATCHED THEN INSERT
+            (alias_normalized, canonical_normalized, alias_raw, canonical_raw, updated_by, updated_at)
+            VALUES (@alias_n, @canonical_n, @alias_raw, @canonical_raw, @by, CURRENT_TIMESTAMP())
+    """
+    bq.query(sql, job_config=bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("alias_n",       "STRING", alias_n),
+            bigquery.ScalarQueryParameter("canonical_n",   "STRING", canonical_n),
+            bigquery.ScalarQueryParameter("alias_raw",     "STRING", alias_raw.strip()),
+            bigquery.ScalarQueryParameter("canonical_raw", "STRING", canonical_raw.strip()),
+            bigquery.ScalarQueryParameter("by",            "STRING", updated_by),
+        ]
+    )).result()
+
+    return {
+        "alias_normalized":     alias_n,
+        "canonical_normalized": canonical_n,
+        "alias_raw":            alias_raw.strip(),
+        "canonical_raw":        canonical_raw.strip(),
+        "updated_by":           updated_by,
+    }
+
+
+def delete_alias(alias_raw: str) -> None:
+    """Remove o alias pelo seu valor normalizado."""
+    _ensure_aliases_table()
+    alias_n = normalize_client_name(alias_raw)
+    if not alias_n:
+        return
+    sql = f"DELETE FROM {_full(TABLE_ALIASES)} WHERE alias_normalized = @a"
+    bq.query(sql, job_config=bigquery.QueryJobConfig(
+        query_parameters=[bigquery.ScalarQueryParameter("a", "STRING", alias_n)]
+    )).result()
+
+
+def resolve_owner_for_client(
+    client_name: str,
+    lookup: Dict[str, Tuple[Optional[str], Optional[str]]],
+    aliases: Dict[str, str],
+) -> Tuple[Optional[str], Optional[str]]:
+    """Pipeline canônico de match: normaliza → resolve alias → busca lookup.
+
+    Caller tem 3 dicts em mãos (overrides, lookup, aliases) e aplica nessa
+    ordem. Esta função cuida dos passos 2-3 (normalize+alias+lookup); o
+    override fica fora porque é chaveado por short_token, não por nome.
+    """
+    n = normalize_client_name(client_name or "")
+    if not n:
+        return (None, None)
+    canonical = aliases.get(n, n)
+    return lookup.get(canonical, (None, None))
 
 
 def get_overrides_dict() -> Dict[str, Tuple[Optional[str], Optional[str]]]:
@@ -354,11 +570,16 @@ def get_overrides_dict() -> Dict[str, Tuple[Optional[str], Optional[str]]]:
 def resolve_owners_for_campaigns(campaigns: List[dict]) -> None:
     """Mutação in-place: enriquece cada campaign dict com cp_email/cs_email.
 
-    Faz uma única leitura da planilha e uma única leitura da tabela de
-    overrides, depois aplica o merge em Python. Muito mais rápido que
-    JOIN no BigQuery quando temos só ~280 entries no lookup.
+    Faz uma única leitura da planilha, uma da tabela de overrides e uma
+    da tabela de aliases, depois aplica o merge em Python. Muito mais
+    rápido que JOIN no BigQuery quando temos só ~280 entries no lookup.
 
-    Override sempre vence lookup. Se nenhum dos dois tem dado, deixa None.
+    Pipeline de match (override > alias+lookup > none):
+      1. Override por short_token sempre vence.
+      2. Caso contrário, normaliza client_name → resolve alias (se existir)
+         → busca no lookup normalizado da planilha.
+      3. Sem match em nenhuma fonte: deixa None (UI mostra "—").
+
     Cada campaign dict precisa ter `short_token` e `client_name`.
     """
     try:
@@ -368,13 +589,13 @@ def resolve_owners_for_campaigns(campaigns: List[dict]) -> None:
         lookup = {}
 
     overrides = get_overrides_dict()
+    aliases   = get_aliases_dict()
 
     for c in campaigns:
         token = c.get("short_token")
-        client_lc = (c.get("client_name") or "").strip().lower()
 
         ov_cp, ov_cs = overrides.get(token, (None, None))
-        lk_cp, lk_cs = lookup.get(client_lc, (None, None))
+        lk_cp, lk_cs = resolve_owner_for_client(c.get("client_name"), lookup, aliases)
 
         c["cp_email"] = ov_cp or lk_cp
         c["cs_email"] = ov_cs or lk_cs
