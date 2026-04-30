@@ -37,14 +37,18 @@ import {
   slugToDisplay,
 } from "../lib/format";
 
+// 4 níveis de health, espelhando a régua de pacing (ver format.js).
+// Cliente só agrega campanhas ATIVAS, então não precisa de "ended" aqui.
 const HEALTH_DOT = {
-  healthy:   "bg-success",
-  attention: "bg-warning",
-  critical:  "bg-danger",
+  healthy:   "bg-success",     // alguma campanha 100–124%
+  over:      "bg-signature",   // todas as campanhas ≥125%
+  attention: "bg-warning",     // alguma 90–99%
+  critical:  "bg-danger",      // alguma <90%
 };
 
 const HEALTH_GLOW = {
   healthy:   "shadow-[var(--shadow-glow-success)]",
+  over:      "shadow-[var(--shadow-glow-signature)]",
   attention: "shadow-[var(--shadow-glow-warning)]",
   critical:  "shadow-[var(--shadow-glow-danger)]",
 };
