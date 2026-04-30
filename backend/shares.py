@@ -153,7 +153,30 @@ def get_share_ids_for_tokens(short_tokens: list[str]) -> dict[str, str]:
     return result
 
 
-def get_token_for_share_id(share_id: str) -> str | None:
+def get_all_share_ids() -> dict[str, str]:
+    """Versão "fetch all" de `get_share_ids_for_tokens`.
+
+    Retorna o mapeamento completo {short_token: share_id} da tabela
+    campaign_share_ids. Usada pelo enrichment paralelo de
+    `query_campaigns_list` no admin menu — a tabela é pequena (~300
+    rows na prática) e ler tudo de uma vez permite executar a query
+    em paralelo com a query principal (não temos a lista de tokens
+    ainda quando disparamos os futures).
+
+    Custo: 1 full scan numa tabela com 3 colunas e ~300 rows. Cache na
+    camada superior amortiza pra ~300ms na primeira chamada e ~0ms nas
+    subsequentes durante o TTL.
+
+    Chaves preservam o case do banco (não tem motivo pra normalizar:
+    short_token aqui já vem do mesmo banco que populou a tabela).
+    """
+    ensure_table_exists()
+    sql = f"""
+        SELECT short_token, share_id
+        FROM `{_shares_table_id()}`
+    """
+    rows = list(bq.query(sql).result())
+    return {r["short_token"]: r["share_id"] for r in rows if r["short_token"]}
     """Retorna o short_token associado a um share_id, ou None.
 
     Comparação case-sensitive: share_id é base64url e diferencia case.

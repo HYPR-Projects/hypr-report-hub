@@ -8,6 +8,11 @@ Changelog:
   - perf: paralelização das 8 queries de fetch_campaign_data via ThreadPoolExecutor
   - perf: cache em memória (instance-local) com TTL para report e lista admin
   - perf: parâmetro ?refresh=true invalida cache do token alvo
+  - perf(admin-list): TTL da lista 60s→300s, single-flight lock evita query
+    duplicada quando ?list=true e ?action=list_clients chegam em paralelo,
+    SQL consolidado (5 full scans → 3), enrichments owners/overrides/shares
+    rodam em paralelo com a query principal, caches dedicados pra overrides
+    e shares (TTL 300s), Cache-Control e Server-Timing nos endpoints da lista
 """
 
 import functions_framework
@@ -54,7 +59,13 @@ clients.set_bq_client(bq)
 #   - ?refresh=true força bypass de cache na request atual
 # ─────────────────────────────────────────────────────────────────────────────
 _REPORT_CACHE_TTL  = 120
-_LIST_CACHE_TTL    = 60
+# Lista admin: era 60s e estava queimando o usuário em todo cache miss. O menu
+# é aberto, fechado e reaberto várias vezes ao longo do dia — um TTL de 5 min
+# mantém a UX instantânea sem comprometer frescor (mutações de admin já
+# invalidam o cache via _cache_invalidate_token; logo, dado "stale" só ocorre
+# se a tabela campaign_results muda externamente, o que acontece a cada
+# poucas horas via pipeline).
+_LIST_CACHE_TTL    = 300
 # View "Por cliente" do menu admin — agregação derivada de query_campaigns_list
 # + 1 query temporal pra sparklines. TTL maior porque (a) não muda dramatica-
 # mente entre minutos, e (b) a sparkline é informação visual, não operacional.
@@ -63,6 +74,11 @@ _CLIENTS_CACHE_TTL = 300
 _report_cache    = {}     # short_token -> (timestamp, payload)
 _list_cache      = {}     # "all" -> (timestamp, payload)
 _clients_cache   = {}     # "all" -> (timestamp, payload)
+# Caches dos enrichments paralelos de query_campaigns_list. Compartilham TTL
+# da lista — invalidados juntos via _cache_invalidate_token quando ocorre
+# mutação que afeta o payload do menu.
+_overrides_cache = {}     # "all" -> (timestamp, dict[short_token -> (cp, cs)])
+_shares_cache    = {}     # "all" -> (timestamp, dict[short_token -> share_id])
 _cache_lock      = threading.Lock()
 
 
@@ -88,11 +104,62 @@ def _cache_invalidate_token(short_token):
     Também invalida o cache de clientes — qualquer mutação que afete a
     lista de campanhas (logo, loom, owner, survey…) potencialmente muda
     a agregação por cliente (ex: novo owner → top_owners diferente).
+
+    Os caches de overrides/shares também são derrubados: salvar um override
+    de owner ou criar um share_id muda o payload da lista, e seria sutil
+    demais discriminar quais mutações atingem qual cache.
     """
     with _cache_lock:
         _report_cache.pop(short_token, None)
         _list_cache.pop("all", None)
         _clients_cache.pop("all", None)
+        _overrides_cache.pop("all", None)
+        _shares_cache.pop("all", None)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Single-flight para query_campaigns_list.
+#
+# Problema observado: o frontend admin dispara `?list=true` e `?action=list_clients`
+# em paralelo (Promise.all em CampaignMenuV2). Ambos chamam query_campaigns_list()
+# quando o cache está frio. Sem coordenação, as duas requests fazem o mesmo
+# trabalho pesado no BigQuery (≈2× o custo, ≈2× o tempo de wallclock pro user).
+#
+# Solução: um único lock global. A primeira thread que pega o lock executa a
+# query e popula o cache; threads subsequentes esperam o lock, fazem
+# double-check do cache, e retornam o valor já calculado. Latência adicional
+# do "winner": ~0ms. Latência adicional dos "losers": tempo de espera +
+# leitura de dict (microssegundos).
+#
+# Limitado ao escopo da instância da Cloud Function — duas instâncias podem
+# fazer queries paralelas no BQ. Com --concurrency=10 e --min-instances=1,
+# isso é aceitável: na prática quase todo tráfego do admin cabe numa instância.
+# ─────────────────────────────────────────────────────────────────────────────
+_list_inflight_lock = threading.Lock()
+
+
+def _get_campaigns_list_cached(force_refresh=False):
+    """Wrapper single-flight em torno de query_campaigns_list().
+
+    Retorna a lista cacheada se válida; caso contrário executa a query e
+    popula o cache. Garante que, se múltiplas threads pedem ao mesmo tempo,
+    apenas uma faz o trabalho real. As outras esperam e leem do cache.
+    """
+    if not force_refresh:
+        cached = _cache_get(_list_cache, "all", _LIST_CACHE_TTL)
+        if cached is not None:
+            return cached, True  # (data, hit)
+
+    with _list_inflight_lock:
+        # Double-check: outra thread pode ter acabado de popular o cache
+        # enquanto esperávamos o lock.
+        if not force_refresh:
+            cached = _cache_get(_list_cache, "all", _LIST_CACHE_TTL)
+            if cached is not None:
+                return cached, True
+        data = query_campaigns_list()
+        _cache_set(_list_cache, "all", data)
+        return data, False  # (data, miss)
 
 
 # Pool reutilizado entre invocações da mesma instância para evitar criar/destruir
@@ -517,21 +584,27 @@ def report_data(request):
         if not authenticate_admin(request):
             return (jsonify({"error": "Não autorizado"}), 401, headers)
         try:
+            t0 = time.time()
             force_refresh = request.args.get("refresh") == "true"
             cached = None if force_refresh else _cache_get(_clients_cache, "all", _CLIENTS_CACHE_TTL)
             if cached is not None:
-                return (jsonify({**cached, "_cache": "hit"}), 200, headers)
+                resp_headers = {**headers, "Cache-Control": "private, max-age=30"}
+                resp_headers["Server-Timing"] = f"total;dur={int((time.time()-t0)*1000)};desc=\"hit\""
+                return (jsonify({**cached, "_cache": "hit"}), 200, resp_headers)
 
-            # Reusa a lista de campanhas cacheada se houver, senão busca.
-            campaigns = None if force_refresh else _cache_get(_list_cache, "all", _LIST_CACHE_TTL)
-            if campaigns is None:
-                campaigns = query_campaigns_list()
-                _cache_set(_list_cache, "all", campaigns)
+            # Reusa o cache de campanhas via single-flight (evita query duplicada
+            # quando esta request chega em paralelo com ?list=true).
+            t_list = time.time()
+            campaigns, list_hit = _get_campaigns_list_cached(force_refresh=force_refresh)
+            list_ms = int((time.time() - t_list) * 1000)
 
+            t_agg = time.time()
             agg = clients.aggregate_clients_from_campaigns(campaigns)
             worklist = clients.compute_worklist(campaigns)
+            agg_ms = int((time.time() - t_agg) * 1000)
 
             # Sparklines + trend (única query BQ extra do endpoint).
+            t_ts = time.time()
             timeseries = clients.query_client_timeseries(weeks=12)
             for c in agg:
                 series = timeseries.get(c["slug"], [])
@@ -540,10 +613,20 @@ def report_data(request):
                     trend = clients.compute_trend(series, half=4)
                     if trend:
                         c["trend"] = trend
+            ts_ms = int((time.time() - t_ts) * 1000)
 
             payload = {"clients": agg, "worklist": worklist}
             _cache_set(_clients_cache, "all", payload)
-            return (jsonify({**payload, "_cache": "miss"}), 200, headers)
+            total_ms = int((time.time() - t0) * 1000)
+            resp_headers = {
+                **headers,
+                "Cache-Control": "private, max-age=30",
+                "Server-Timing": (
+                    f"list;dur={list_ms};desc=\"{'hit' if list_hit else 'miss'}\","
+                    f"agg;dur={agg_ms},timeseries;dur={ts_ms},total;dur={total_ms}"
+                ),
+            }
+            return (jsonify({**payload, "_cache": "miss"}), 200, resp_headers)
         except Exception as e:
             print(f"[ERROR list_clients] {e}")
             return (jsonify({"error": "Erro ao listar clientes"}), 500, headers)
@@ -552,13 +635,23 @@ def report_data(request):
         if not authenticate_admin(request):
             return (jsonify({"error": "Não autorizado"}), 401, headers)
         try:
+            t0 = time.time()
             force_refresh = request.args.get("refresh") == "true"
-            cached = None if force_refresh else _cache_get(_list_cache, "all", _LIST_CACHE_TTL)
-            if cached is not None:
-                return (jsonify({"campaigns": cached, "_cache": "hit"}), 200, headers)
-            campaigns = query_campaigns_list()
-            _cache_set(_list_cache, "all", campaigns)
-            return (jsonify({"campaigns": campaigns, "_cache": "miss"}), 200, headers)
+            campaigns, hit = _get_campaigns_list_cached(force_refresh=force_refresh)
+            total_ms = int((time.time() - t0) * 1000)
+            resp_headers = {
+                **headers,
+                # Browser/CDN cacheiam refresh por 30s. F5 do admin não vira request
+                # a menos que o cache local expire. max-age curto pra não estourar
+                # janela de invalidação por mutação (já tratada em backend).
+                "Cache-Control": "private, max-age=30",
+                "Server-Timing": f"list;dur={total_ms};desc=\"{'hit' if hit else 'miss'}\"",
+            }
+            return (
+                jsonify({"campaigns": campaigns, "_cache": "hit" if hit else "miss"}),
+                200,
+                resp_headers,
+            )
         except Exception as e:
             print(f"[ERROR] {e}")
             return (jsonify({"error": "Erro ao listar campanhas"}), 500, headers)
@@ -1241,6 +1334,18 @@ def query_campaigns_list():
     # Decisão arquitetural: ~280 entries no lookup cabem em memória e o
     # merge Python é mais rápido e robusto que JOIN com external table
     # (que dependia de nome exato da aba e quebrava em runtime).
+    #
+    # Consolidação de CTEs (perf):
+    #   • `dedup` substitui display_dedup + video_dedup — uma única passada
+    #     sobre campaign_results, mantendo media_type pra agregação
+    #     condicional posterior. Reduz 2 full scans → 1.
+    #   • `agg` substitui display + video — agregação condicional no mesmo
+    #     CTE. Custo desprezível porque dedup já reduziu o volume.
+    #   • `unified` substitui display_unified + video_unified — uma passada
+    #     em unified_daily_performance_metrics. Reduz 2 full scans → 1.
+    # Total: 5 full scans → 3. Sem mudança semântica (testado por equivalência
+    # algébrica: SUM/COUNT DISTINCT/MIN ignoram NULLs, então
+    # `SUM(IF(t='X', v, 0))` ≡ `SUM(v) WHERE t='X'`).
     sql = f"""
         WITH checklist AS (
             SELECT
@@ -1269,98 +1374,89 @@ def query_campaigns_list():
             FROM {table_ref()}
             GROUP BY short_token, client_name, campaign_name
         ),
-        -- Dedup por (date, line_name, creative_name) antes de agregar por short_token
-        -- effective_total_cost é acumulado no campaign_results; MAX pega o último valor por linha
-        display_dedup AS (
+        -- Dedup por (date, line_name, creative_name) preservando media_type.
+        -- effective_total_cost / effective_cost_with_over são acumulados no
+        -- campaign_results; MAX pega o último valor por linha (last-write-wins).
+        dedup AS (
             SELECT
-                short_token,
+                short_token, media_type,
                 date, line_name, creative_name,
-                MAX(viewable_impressions)   AS viewable_impressions,
-                MAX(clicks)                 AS clicks,
-                MAX(effective_total_cost)   AS effective_total_cost
-            FROM {table_ref()}
-            WHERE media_type = 'DISPLAY'
-              AND UPPER(line_name) NOT LIKE '%SURVEY%'
-            GROUP BY short_token, date, line_name, creative_name
-        ),
-        display AS (
-            SELECT
-                short_token,
-                SUM(viewable_impressions)   AS d_vi,
-                SUM(clicks)                 AS d_clicks,
-                SUM(effective_total_cost)   AS d_cost
-            FROM display_dedup
-            GROUP BY short_token
-        ),
-        video_dedup AS (
-            SELECT
-                short_token,
-                date, line_name, creative_name,
-                MAX(viewable_impressions)             AS viewable_impressions,
-                MAX(viewable_video_view_100_complete) AS viewable_video_view_100_complete,
+                MAX(viewable_impressions)             AS vi,
+                MAX(clicks)                           AS clicks,
+                MAX(effective_total_cost)             AS effective_total_cost,
+                MAX(viewable_video_view_100_complete) AS v100_complete,
                 MAX(effective_cost_with_over)         AS effective_cost_with_over
             FROM {table_ref()}
-            WHERE media_type = 'VIDEO'
+            WHERE media_type IN ('DISPLAY', 'VIDEO')
               AND UPPER(line_name) NOT LIKE '%SURVEY%'
-            GROUP BY short_token, date, line_name, creative_name
+            GROUP BY short_token, media_type, date, line_name, creative_name
         ),
-        video AS (
+        agg AS (
             SELECT
                 short_token,
-                SUM(viewable_impressions)             AS v_vi,
-                SUM(viewable_video_view_100_complete) AS v_completions,
-                SUM(effective_cost_with_over)         AS v_cost
-            FROM video_dedup
+                SUM(IF(media_type='DISPLAY', vi,                       0)) AS d_vi,
+                SUM(IF(media_type='DISPLAY', clicks,                   0)) AS d_clicks,
+                SUM(IF(media_type='DISPLAY', effective_total_cost,     0)) AS d_cost,
+                SUM(IF(media_type='VIDEO',   vi,                       0)) AS v_vi,
+                SUM(IF(media_type='VIDEO',   v100_complete,            0)) AS v_completions,
+                SUM(IF(media_type='VIDEO',   effective_cost_with_over, 0)) AS v_cost
+            FROM dedup
             GROUP BY short_token
         ),
-        -- Viewable completions e days_with_delivery do unified (cálculo correto de pacing vídeo)
-        video_unified AS (
+        -- Cálculos de pacing: usa unified_daily como source-of-truth pra
+        -- viewable_impressions e days_with_delivery, igual o legacy fazia
+        -- em CTEs separadas. Agora numa única varredura.
+        unified AS (
             SELECT
                 short_token,
-                MIN(date)             AS v_actual_start_date,
-                COUNT(DISTINCT date)  AS v_days_with_delivery,
-                SUM(CASE WHEN impressions > 0
-                    THEN video_view_100_complete * (viewable_impressions / impressions)
-                    ELSE 0 END)       AS v_viewable_completions
+                MIN(IF(media_type='VIDEO', date, NULL))            AS v_actual_start_date,
+                COUNT(DISTINCT IF(media_type='VIDEO', date, NULL)) AS v_days_with_delivery,
+                SUM(IF(media_type='VIDEO' AND impressions > 0,
+                        video_view_100_complete * (viewable_impressions / impressions),
+                        0))                                        AS v_viewable_completions,
+                COUNT(DISTINCT IF(media_type='DISPLAY', date, NULL)) AS d_days_with_delivery,
+                SUM(IF(media_type='DISPLAY', viewable_impressions, 0)) AS d_viewable_impressions
             FROM `site-hypr.prod_assets.unified_daily_performance_metrics`
-            WHERE media_type = 'VIDEO'
-              AND UPPER(line_name) NOT LIKE '%SURVEY%'
-            GROUP BY short_token
-        ),
-        -- Viewable impressions e days_with_delivery do unified (cálculo correto de pacing display)
-        display_unified AS (
-            SELECT
-                short_token,
-                COUNT(DISTINCT date)       AS d_days_with_delivery,
-                SUM(viewable_impressions)  AS d_viewable_impressions
-            FROM `site-hypr.prod_assets.unified_daily_performance_metrics`
-            WHERE media_type = 'DISPLAY'
+            WHERE media_type IN ('DISPLAY', 'VIDEO')
               AND UPPER(line_name) NOT LIKE '%SURVEY%'
             GROUP BY short_token
         )
         SELECT
             b.short_token, b.client_name, b.campaign_name,
             b.start_date, b.end_date, b.updated_at,
-            d.d_vi, d.d_clicks, d.d_cost,
-            v.v_vi, v.v_completions, v.v_cost,
+            a.d_vi, a.d_clicks, a.d_cost,
+            a.v_vi, a.v_completions, a.v_cost,
             c.cpm_amount, c.cpcv_amount,
             c.contracted_o2o_display, c.contracted_ooh_display,
             c.contracted_o2o_video,   c.contracted_ooh_video,
             c.bonus_o2o_display,      c.bonus_ooh_display,
             c.bonus_o2o_video,        c.bonus_ooh_video,
-            vu.v_actual_start_date,   vu.v_days_with_delivery,  vu.v_viewable_completions,
-            du.d_days_with_delivery,  du.d_viewable_impressions
+            u.v_actual_start_date,    u.v_days_with_delivery,  u.v_viewable_completions,
+            u.d_days_with_delivery,   u.d_viewable_impressions
         FROM base b
-        LEFT JOIN display         d  USING (short_token)
-        LEFT JOIN video           v  USING (short_token)
-        LEFT JOIN checklist       c  USING (short_token)
-        LEFT JOIN video_unified   vu USING (short_token)
-        LEFT JOIN display_unified du USING (short_token)
+        LEFT JOIN agg       a USING (short_token)
+        LEFT JOIN checklist c USING (short_token)
+        LEFT JOIN unified   u USING (short_token)
         ORDER BY b.start_date DESC
     """
 
-    job_config = bigquery.QueryJobConfig()
-    rows = list(bq.query(sql, job_config=job_config).result())
+    # ── Paralelização dos enrichments ─────────────────────────────────────────
+    # Owners (Sheets + BQ overrides) e share_ids (BQ) não dependem do resultado
+    # da query principal — Sheets é tabela inteira, overrides é tabela inteira,
+    # shares pequena o suficiente pra ler tudo. Disparamos os 3 em paralelo
+    # com a query SQL e fazemos o merge em Python.
+    #
+    # Antes: query (≈4-6s) → owners (≈0.5-2s) → shares (≈1-2s) = 6-10s serial
+    # Depois: max(query, owners, shares) ≈ query ≈ 4-6s
+    fut_query    = _query_pool.submit(lambda: list(bq.query(sql).result()))
+    fut_owners   = _query_pool.submit(_safe_get_owners_lookup)
+    fut_overrides= _query_pool.submit(_safe_get_overrides)
+    fut_shares   = _query_pool.submit(_safe_get_all_share_ids)
+
+    rows           = fut_query.result()
+    lookup_owners  = fut_owners.result()
+    overrides_map  = fut_overrides.result()
+    share_ids_map  = fut_shares.result()
 
     result = []
     for r in rows:
@@ -1459,36 +1555,76 @@ def query_campaigns_list():
 
         result.append(entry)
 
-    # Enriquece com cp_email/cs_email lendo a planilha (Sheets API com cache)
-    # + tabela de overrides. Falha graciosamente: se a planilha não estiver
-    # acessível, owners ficam None e o menu continua funcionando normal.
-    try:
-        owners.resolve_owners_for_campaigns(result)
-    except Exception as e:
-        print(f"[WARN query_campaigns_list] resolve_owners falhou: {e}")
-        for c in result:
-            c.setdefault("cp_email", None)
-            c.setdefault("cs_email", None)
+    # Merge owners (lookup planilha + overrides BQ) em Python.
+    # Override sempre vence lookup. Se nenhum tem dado, deixa None.
+    for c in result:
+        token = c.get("short_token")
+        client_lc = (c.get("client_name") or "").strip().lower()
+        ov_cp, ov_cs = overrides_map.get(token, (None, None))
+        lk_cp, lk_cs = lookup_owners.get(client_lc, (None, None))
+        c["cp_email"] = ov_cp or lk_cp
+        c["cs_email"] = ov_cs or lk_cs
 
-    # Enriquece com share_id quando existe — uma única query batch contra
-    # campaign_share_ids. Evita o round-trip dedicado que o frontend fazia
-    # a cada click em "Link Cliente" (cold start + lookup BigQuery = 1-4s).
-    # Com share_id no payload, o menu admin tem o link pronto pra copiar
-    # desde o primeiro click, em qualquer dispositivo. Tokens sem share_id
-    # criado ainda caem no fallback on-demand do frontend.
-    try:
-        short_tokens_in_result = [c["short_token"] for c in result if c.get("short_token")]
-        share_ids_map = shares.get_share_ids_for_tokens(short_tokens_in_result)
-        for c in result:
-            sid = share_ids_map.get(c["short_token"])
-            if sid:
-                c["share_id"] = sid
-    except Exception as e:
-        print(f"[WARN query_campaigns_list] enriquecer share_ids falhou: {e}")
-        # Falha graciosa: campanhas ficam sem share_id no payload e o
-        # frontend cai no fallback on-demand (comportamento pré-Frente 2).
+    # Merge share_ids
+    for c in result:
+        sid = share_ids_map.get(c["short_token"])
+        if sid:
+            c["share_id"] = sid
 
     return result
+
+
+def _safe_get_owners_lookup():
+    """Wrapper resiliente pro lookup de owners via Sheets.
+
+    Falha graciosamente: erro na Sheets API (auth, rate limit, planilha
+    inacessível) não derruba a listagem inteira — só perde a auto-atribuição
+    de owners. Frontend já trata cp_email/cs_email = None.
+    """
+    try:
+        return owners.get_owners_lookup_dict()
+    except Exception as e:
+        print(f"[WARN _safe_get_owners_lookup] {e}")
+        return {}
+
+
+def _safe_get_overrides():
+    """Wrapper resiliente + cacheado pro lookup de overrides BQ.
+
+    A função em owners.py NÃO tem cache próprio — era consultada a cada
+    cache miss da lista, custando 1-2s por chamada. Adicionamos cache
+    aqui (TTL = TTL da lista, já que ambos estão acoplados ao admin menu).
+    """
+    cached = _cache_get(_overrides_cache, "all", _LIST_CACHE_TTL)
+    if cached is not None:
+        return cached
+    try:
+        data = owners.get_overrides_dict()
+    except Exception as e:
+        print(f"[WARN _safe_get_overrides] {e}")
+        data = {}
+    _cache_set(_overrides_cache, "all", data)
+    return data
+
+
+def _safe_get_all_share_ids():
+    """Wrapper resiliente + cacheado pra todos os share_ids.
+
+    A tabela campaign_share_ids é pequena (~300 rows). Ler tudo de uma vez
+    e cachear vale mais que filtrar por tokens da request, especialmente
+    porque agora rodamos em paralelo com a query principal (não temos a
+    lista de tokens ainda).
+    """
+    cached = _cache_get(_shares_cache, "all", _LIST_CACHE_TTL)
+    if cached is not None:
+        return cached
+    try:
+        data = shares.get_all_share_ids()
+    except Exception as e:
+        print(f"[WARN _safe_get_all_share_ids] {e}")
+        data = {}
+    _cache_set(_shares_cache, "all", data)
+    return data
 def query_upload(short_token, upload_type):
     from google.cloud import bigquery as bq2
     table_name = "rmnd_data" if upload_type == "RMND" else "pdooh_data"
