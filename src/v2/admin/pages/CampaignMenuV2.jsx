@@ -18,6 +18,12 @@
 //     dentro do CampaignDrawer que abre ao clicar no card
 
 import { useState, useEffect, useMemo, useCallback } from "react";
+// IMPORT CRÍTICO — sem isso o Tailwind+theme.css não chega no bundle do
+// admin (v2.css é onde @import "tailwindcss" e tokens HYPR vivem). O
+// ClientDashboardV2 já importa em outro chunk lazy, mas o admin é a
+// rota raiz, então precisa importar explicitamente aqui.
+import "../../v2.css";
+
 import { listCampaigns, listTeamMembers, listClients, getShareId, getCachedShareId } from "../../../lib/api";
 import { getTheme, setTheme, getOwnerFilter, setOwnerFilter as persistOwnerFilter } from "../../../shared/prefs";
 

@@ -12,6 +12,10 @@
 // Reusa CampaignCardV2 e CampaignDrawer pra manter coerência visual.
 
 import { useState, useEffect, useMemo, useCallback } from "react";
+// Mesmo motivo do CampaignMenuV2: precisa do v2.css explícito porque
+// é uma rota raiz acessada direto via /admin/client/:slug.
+import "../../v2.css";
+
 import { listCampaigns, listTeamMembers, getShareId, getCachedShareId } from "../../../lib/api";
 import { getTheme, setTheme } from "../../../shared/prefs";
 import { normalizeSlug } from "../lib/aggregation";
