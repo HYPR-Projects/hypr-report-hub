@@ -30,8 +30,12 @@ import {
  * Extrai o segundo-último token de um line_name "_-separado".
  * Convenção HYPR: o segmento antes do final identifica a audiência.
  * Ex.: "campaign_O2O_Heineken_DISPLAY" → "Heineken"
+ *
+ * Exportada porque componentes que enriquecem rows por audiência
+ * (ex.: FormatBreakdownTableV2 quando agrupa por audience) precisam
+ * resolver a chave do mesmo jeito que `groupByAudience` faz aqui.
  */
-const extractAudience = (lineName) => {
+export const extractAudience = (lineName) => {
   const parts = (lineName || "").split("_");
   return parts.length >= 2 ? parts[parts.length - 2] : "N/A";
 };

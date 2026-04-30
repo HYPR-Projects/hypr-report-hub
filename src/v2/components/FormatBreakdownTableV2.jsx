@@ -20,7 +20,7 @@
 // API
 //   <FormatBreakdownTableV2
 //     rows={view.bySize}                  // saída de groupBySize / groupByDuration
-//     groupKey="size"                     // "size" (default) | "duration" | etc
+//     groupKey="size"                     // "size" (default) | "duration" | "audience" | etc
 //     groupLabel="Formato"                // header da primeira coluna
 //     denomKey="viewable_impressions"     // métrica usada pra calcular share
 //     denomLabel="Imp. Visíveis"
@@ -30,6 +30,10 @@
 //     rateLabel="CTR"
 //     rateFormatter={(v) => v.toFixed(2) + "%"}
 //     extraRows={detailFiltered}          // rows brutos pra computar custo/CPM por formato
+//     getDetailGroupKey={(r) => r.creative_size}  // opcional — extrai chave de cada
+//                                                  // detail row pra match com rows.
+//                                                  // Default: r["creative_size"] (size) ou r[groupKey].
+//                                                  // Útil pra audience: passe (r) => extractAudience(r.line_name).
 //     mediaType="DISPLAY"                 // "DISPLAY" | "VIDEO" — controla coluna final
 //   />
 //
@@ -56,7 +60,9 @@ export function FormatBreakdownTableV2({
   rateLabel = "CTR",
   rateFormatter = (v) => `${(v || 0).toFixed(2)}%`,
   extraRows = null, // detail rows pra calcular custo/CPM (opcional)
+  getDetailGroupKey = null, // (row) => key — sobrepõe heurística default
   mediaType = "DISPLAY",
+  itemNoun = "formato", // singular — pluralização automática com "s"
   className,
 }) {
   // Junta cost / impressions brutas / clicks por chave de agrupamento se
@@ -69,12 +75,18 @@ export function FormatBreakdownTableV2({
 
     const totalDenom = rows.reduce((s, r) => s + (r[denomKey] || 0), 0);
 
+    // Resolver chave do detail row → grupo. Heurística default cobre
+    // size/duration; pra audience o consumidor passa getDetailGroupKey
+    // com extractAudience(line_name).
+    const resolveDetailKey =
+      getDetailGroupKey ||
+      ((r) => r[groupKey === "size" ? "creative_size" : groupKey] || "N/A");
+
     // Agrega cost + impressions + clicks por grupo a partir das rows brutas
     const extraByGroup = {};
     if (extraRows?.length) {
-      const detailKey = groupKey === "size" ? "creative_size" : groupKey;
       for (const r of extraRows) {
-        const k = r[detailKey] || "N/A";
+        const k = resolveDetailKey(r) || "N/A";
         if (!extraByGroup[k]) {
           extraByGroup[k] = { cost: 0, impressions: 0, clicks: 0 };
         }
@@ -108,7 +120,7 @@ export function FormatBreakdownTableV2({
       })
       .sort((a, b) => b.share - a.share)
       .slice(0, ROW_LIMIT);
-  }, [rows, groupKey, denomKey, extraRows]);
+  }, [rows, groupKey, denomKey, extraRows, getDetailGroupKey]);
 
   if (!enriched.length) {
     return (
@@ -129,7 +141,7 @@ export function FormatBreakdownTableV2({
           Distribuição por {groupLabel}
         </div>
         <div className="text-[10px] font-semibold uppercase tracking-wider text-fg-subtle">
-          {enriched.length} {enriched.length === 1 ? "formato" : "formatos"}
+          {enriched.length} {enriched.length === 1 ? itemNoun : `${itemNoun}s`}
         </div>
       </div>
 

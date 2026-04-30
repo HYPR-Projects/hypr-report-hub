@@ -26,6 +26,7 @@ import { useMemo } from "react";
 import {
   buildLineOptions,
   computeVideoKpis,
+  extractAudience,
   groupByDate,
   groupBySize,
   groupByAudience,
@@ -103,7 +104,7 @@ export default function VideoV2({
     return { totals, detailAll, detailFiltered, detailNormalized, lineOptions, kpis, daily, bySize, byAudience };
   }, [aggregates, tactic, lines]);
 
-  const { totals, detailFiltered, detailNormalized, lineOptions, kpis, daily, bySize, byAudience } = view;
+  const { totals, detailAll, detailFiltered, detailNormalized, lineOptions, kpis, daily, bySize, byAudience } = view;
 
   // Empty state: a tactic atual não tem entregas. Mantém a toolbar
   // visível pra o usuário poder voltar pra outra tactic — antes
@@ -154,6 +155,7 @@ export default function VideoV2({
           camp={camp}
           tactic={tactic}
           aggregates={aggregates}
+          detailAll={detailAll}
           detailFiltered={detailFiltered}
           detailNormalized={detailNormalized}
           kpis={kpis}
@@ -174,6 +176,7 @@ function VideoContent({
   camp,
   tactic,
   aggregates,
+  detailAll,
   detailFiltered,
   detailNormalized,
   kpis,
@@ -322,6 +325,30 @@ function VideoContent({
             />
           </div>
         </section>
+      )}
+
+      {/* ─── 8b. Tabela "Por Audiência" ──────────────────────────────────
+          Espelha a visão do gráfico (todas as audiências, ignorando o
+          filtro de audience selecionada). Última coluna pra Video é
+          CTR + Custo Ef. (mediaType="VIDEO").
+      */}
+      {byAudience.length > 0 && (
+        <FormatBreakdownTableV2
+          rows={byAudience}
+          groupKey="audience"
+          groupLabel="Audiência"
+          itemNoun="audiência"
+          denomKey="viewable_impressions"
+          denomLabel="Imp. Visíveis"
+          numeratorKey="video_view_100"
+          numeratorLabel="Views 100%"
+          rateKey="vtr"
+          rateLabel="VTR"
+          rateFormatter={fmtP2}
+          extraRows={detailAll}
+          getDetailGroupKey={(r) => extractAudience(r.line_name)}
+          mediaType="VIDEO"
+        />
       )}
 
       {/* ─── 9. Tabela "Por Dia" agregada ────────────────────────────── */}
