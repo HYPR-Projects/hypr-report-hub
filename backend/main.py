@@ -1587,51 +1587,40 @@ def query_campaigns_list():
             float(r["bonus_ooh_video"]      or 0)
         )
 
-        def pacing_calc(delivered, negotiated, sd, ed):
+        # Pacing canônico HYPR: "baseado na média diária de entrega,
+        # qual % do contrato a campanha vai entregar até o final".
+        # Equivale a: delivered / (negotiated × elapsed_calendar / total_days)
+        #
+        # Espelhado no front em `shared/aggregations.js#computeMediaPacing`.
+        # List view e report mostram exatamente o mesmo número.
+        #
+        # ANTES: usávamos `days_with_delivery` no denominador, o que
+        # inflava artificialmente o pacing de campanhas que entregaram
+        # tudo concentradamente em poucos dias (ex.: Diageo entregou
+        # tudo em 1 dia de 9 → expected minúsculo → pacing 230%).
+        #
+        # NÃO alinhei aqui o per-row pacing (campo `pacing` em totals),
+        # que é consumido pelo Resumo por mídia + Detalhamento e ainda
+        # usa days_with_delivery. Próximo PR.
+        def pacing_calc_calendar(delivered, negotiated, sd, ed):
             if negotiated <= 0 or not sd or not ed:
                 return None
             s = sd.date() if hasattr(sd, "date") else sd
             e = ed.date() if hasattr(ed, "date") else ed
             today = date.today()
-            if e < today:
-                return round(delivered / negotiated * 100, 1)
-            total_days   = (e - s).days + 1
-            elapsed_days = (today - s).days
-            if elapsed_days <= 0 or total_days <= 0:
+            total_days = (e - s).days + 1
+            if total_days <= 0:
+                return None
+            # Cap elapsed em total — após o end_date, expected = negotiated
+            # e pacing converge pra delivered/negotiated naturalmente.
+            elapsed_days = min(max(0, (today - s).days), total_days)
+            if elapsed_days <= 0:
                 return None
             expected = negotiated / total_days * elapsed_days
             return round(delivered / expected * 100, 1) if expected > 0 else None
 
-        # Display pacing: usa viewable_impressions e days_with_delivery do unified
-        def display_pacing_calc(viewable, negotiated, days_delivery, sd, ed):
-            if negotiated <= 0 or not sd or not ed or days_delivery <= 0:
-                return None
-            e = ed.date() if hasattr(ed, "date") else ed
-            s = sd.date() if hasattr(sd, "date") else sd
-            today = date.today()
-            total_days = (e - s).days + 1
-            if total_days <= 0:
-                return None
-            if e < today:
-                return round(viewable / negotiated * 100, 1)
-            expected = negotiated / total_days * days_delivery
-            return round(viewable / expected * 100, 1) if expected > 0 else None
-        display_pacing = display_pacing_calc(d_viewable_impr, d_neg, d_days_delivery, start_date, end_date)
-        # Video pacing: usa viewable completions e days_with_delivery (igual ao query_totals)
-        def video_pacing_calc(completions, negotiated, days_delivery, sd, ed):
-            if negotiated <= 0 or not sd or not ed or days_delivery <= 0:
-                return None
-            e = ed.date() if hasattr(ed, "date") else ed
-            s = sd.date() if hasattr(sd, "date") else sd
-            today = date.today()
-            total_days = (e - s).days + 1
-            if total_days <= 0:
-                return None
-            if e < today:
-                return round(completions / negotiated * 100, 1)
-            expected = negotiated / total_days * days_delivery
-            return round(completions / expected * 100, 1) if expected > 0 else None
-        video_pacing = video_pacing_calc(v_viewable_comp, v_neg, v_days_delivery, v_actual_start or start_date, end_date)
+        display_pacing = pacing_calc_calendar(d_viewable_impr, d_neg, start_date, end_date)
+        video_pacing   = pacing_calc_calendar(v_viewable_comp, v_neg, start_date, end_date)
         display_ctr    = round(float(r["d_clicks"] or 0) / d_vi * 100, 2) if d_vi > 0 else None
         video_vtr      = round(v_viewable_comp / v_vi * 100, 2)            if v_vi > 0 else None
 

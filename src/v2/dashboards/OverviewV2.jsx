@@ -29,6 +29,7 @@
 // presente) — TODO Fase 4.
 
 import { fmt, fmtR } from "../../shared/format";
+import { computeMediaPacing } from "../../shared/aggregations";
 
 import { KpiCardV2 } from "../components/KpiCardV2";
 import { HeroKpiCardV2 } from "../components/HeroKpiCardV2";
@@ -66,11 +67,18 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt 
     ? mergeCostSeries(chartDisplay, chartVideo).slice(-14).map((d) => d.cost)
     : [];
 
-  // Pacing helpers.
-  const pacingDisplay = computeDisplayPacing(display, camp);
-  const pacingVideo = video[0]?.pacing || 0;
+  // Pacing helpers — fórmula canônica calendar-elapsed pra Display E Video.
+  // ANTES: pacingVideo vinha de `video[0]?.pacing` (backend per-row,
+  // formula `days_with_delivery`), o que (a) usava fórmula diferente do
+  // Display e (b) só lia a PRIMEIRA linha de vídeo, escondendo over-
+  // delivery/under-delivery em campanhas com múltiplas linhas (O2O+OOH).
+  // Ex.: Diageo Johnnie Walker tinha VIDEO/OOH em 59% e VIDEO/O2O em 442%
+  // mas a barra mostrava só 59%, dando leitura otimista falsa.
+  const pacingDisplay = computeMediaPacing(display, camp, "DISPLAY");
+  const pacingVideo   = computeMediaPacing(video,   camp, "VIDEO");
 
-  // Pacing Geral % — média ponderada por budget de Display + Video.
+  // Pacing Geral % — média ponderada por budget de Display + Video,
+  // agora com Display E Video usando a mesma fórmula.
   const pacingGeral = computePacingGeral(display, video, camp);
 
   // Custo formatado pra hero (separa centavos pra estilo do mockup).
@@ -329,49 +337,17 @@ function splitCents(value) {
 }
 
 // Pacing display lógica idêntica à OverviewV2 anterior.
-function computeDisplayPacing(displayRows, camp) {
-  if (!displayRows.length || !camp.start_date || !camp.end_date) return 0;
-
-  const contracted = displayRows.reduce(
-    (s, r) =>
-      s +
-      (r.contracted_o2o_display_impressions || 0) +
-      (r.contracted_ooh_display_impressions || 0),
-    0,
-  );
-  const bonus = displayRows.reduce(
-    (s, r) =>
-      s +
-      (r.bonus_o2o_display_impressions || 0) +
-      (r.bonus_ooh_display_impressions || 0),
-    0,
-  );
-  const totalNeg = contracted + bonus;
-  if (!totalNeg) return 0;
-
-  const delivered = displayRows.reduce(
-    (s, r) => s + (r.viewable_impressions || 0),
-    0,
-  );
-
-  const [sy, sm, sd] = camp.start_date.split("-").map(Number);
-  const [ey, em, ed] = camp.end_date.split("-").map(Number);
-  const start = new Date(sy, sm - 1, sd);
-  const end = new Date(ey, em - 1, ed);
-  const now = new Date();
-
-  if (now > end) return (delivered / totalNeg) * 100;
-
-  const total = (end - start) / 864e5 + 1;
-  const elapsed = now < start ? 0 : Math.floor((now - start) / 864e5);
-  const expected = totalNeg * (elapsed / total);
-  return expected > 0 ? (delivered / expected) * 100 : 0;
-}
+// REMOVIDO: `computeDisplayPacing` local foi extraído pra
+// `shared/aggregations.js#computeMediaPacing` (parametrizado por
+// mediaType). Mantém compat 100% com o cálculo anterior.
 
 // Pacing geral % = média ponderada por budget contratado de Display + Video.
+// Ambos os pacings agora usam a mesma fórmula calendar-elapsed
+// (computeMediaPacing), eliminando a inconsistência anterior em que
+// Display vinha do front (calendar) e Video do backend (days_with_delivery).
 function computePacingGeral(display, video, camp) {
-  const dpacing = computeDisplayPacing(display, camp);
-  const vpacing = video[0]?.pacing || 0;
+  const dpacing = computeMediaPacing(display, camp, "DISPLAY");
+  const vpacing = computeMediaPacing(video,   camp, "VIDEO");
 
   const dbudget = display.reduce(
     (s, r) => s + (r.o2o_display_budget || 0) + (r.ooh_display_budget || 0),
