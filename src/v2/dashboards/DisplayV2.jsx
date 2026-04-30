@@ -94,18 +94,15 @@ export default function DisplayV2({
 
   const { totals, detailFiltered, lineOptions, kpis, daily, bySize, byAudience } = view;
 
-  // Sem dados de Display — render mínimo informativo
-  if (totals.length === 0 && view.detailAll.length === 0) {
-    return (
-      <div className="rounded-xl border border-border bg-surface p-8 text-center">
-        <p className="text-sm text-fg-muted">
-          Não há entrega Display nesta campanha.
-        </p>
-      </div>
-    );
-  }
+  // Empty state: a tactic atual não tem entregas. Antes a gente fazia
+  // early return aqui sem renderizar a toolbar — o usuário ficava preso
+  // sem conseguir voltar pra outra tactic. Agora a toolbar fica sempre
+  // visível e só substituímos o conteúdo abaixo.
+  const isEmpty = totals.length === 0 && view.detailAll.length === 0;
 
-  // Imp. contratadas e bonus por tactic (vêm do row[0] em totals)
+  // Imp. contratadas e bonus por tactic (vêm do row[0] em totals).
+  // Quando isEmpty, row0 é {} e tudo fica em 0 — irrelevante porque o
+  // ramo do JSX que usa esses valores não renderiza nesse caso.
   const row0 = totals[0] || {};
   const contractedImps =
     tactic === "O2O"
@@ -129,13 +126,56 @@ export default function DisplayV2({
             setLines([]);
           }}
         />
-        <AudienceFilterV2
-          lines={lineOptions}
-          selected={lines}
-          onChange={setLines}
-        />
+        {!isEmpty && (
+          <AudienceFilterV2
+            lines={lineOptions}
+            selected={lines}
+            onChange={setLines}
+          />
+        )}
       </div>
 
+      {isEmpty ? (
+        <div className="rounded-xl border border-border bg-surface p-8 text-center">
+          <p className="text-sm text-fg-muted">
+            Não há entrega Display {tactic} nesta campanha.
+          </p>
+        </div>
+      ) : (
+        <DisplayContent
+          camp={camp}
+          tactic={tactic}
+          aggregates={aggregates}
+          detailFiltered={detailFiltered}
+          kpis={kpis}
+          daily={daily}
+          bySize={bySize}
+          byAudience={byAudience}
+          contractedImps={contractedImps}
+          bonusImps={bonusImps}
+        />
+      )}
+    </div>
+  );
+}
+
+// Conteúdo "pesado" do Display — extraído pra fora pra evitar render
+// condicional gigante dentro do componente principal e simplificar o
+// fluxo de empty state.
+function DisplayContent({
+  camp,
+  tactic,
+  aggregates,
+  detailFiltered,
+  kpis,
+  daily,
+  bySize,
+  byAudience,
+  contractedImps,
+  bonusImps,
+}) {
+  return (
+    <>
       {/* ─── 2. Hero ComparisonCard ──────────────────────────────────── */}
       <ComparisonCardV2
         title={`CPM Display · ${tactic}`}
@@ -172,6 +212,7 @@ export default function DisplayV2({
           />
         </div>
       </section>
+
 
       {/* ─── 4. KPI grid performance ─────────────────────────────────── */}
       <section>
@@ -287,6 +328,6 @@ export default function DisplayV2({
           />
         </CollapsibleSectionV2>
       )}
-    </div>
+    </>
   );
 }
