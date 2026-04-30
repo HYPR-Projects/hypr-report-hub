@@ -67,7 +67,17 @@ from google.oauth2.credentials import Credentials
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 PROJECT_ID     = os.environ.get("GCP_PROJECT", "site-hypr")
-DATASET_ASSETS = "prod_assets"
+# Dataset onde a tabela de integrações fica.
+# IMPORTANTE: precisa ser um dataset REGIONAL na mesma região da Cloud
+# Function (southamerica-east1). Multi-region (US/EU) tem lag entre
+# DML INSERT e visibility nas DML UPDATE/DELETE — rows ficam em
+# streaming buffer por até 90min, fazendo "deletar agora" falhar com
+# "would affect rows in the streaming buffer".
+#
+# `prod_prod_hypr_reporthub` é southamerica-east1 (mesmo da campaign_results).
+# Histórico: a tabela viveu em `prod_assets` (US multi-region) por engano
+# antes de PR-fix-soft-delete-region.
+DATASET_ASSETS = os.environ.get("SHEETS_DATASET", "prod_prod_hypr_reporthub")
 TABLE_NAME     = "sheets_integrations"
 
 # OAuth Client ID — mesmo já usado pro login admin no frontend.
@@ -268,6 +278,7 @@ def get_integration(short_token: str) -> Optional[Dict]:
         last_error
     FROM `{_table_id()}`
     WHERE short_token = @short_token
+      AND status != 'deleted'
     LIMIT 1
     """
     job = _bq_client().query(
@@ -298,50 +309,63 @@ def get_integration(short_token: str) -> Optional[Dict]:
 
 def _upsert_integration(row: Dict) -> None:
     """
-    Insert ou update via DELETE+INSERT (1 sheet por campanha).
-    BigQuery não tem UPSERT nativo em DML simples; MERGE seria overkill
-    pra um caso de write-light. Como a tabela é small (1 linha por
-    campanha integrada) e operações são raras, esse padrão é OK.
+    Upsert via MERGE — atualiza row existente (mesmo short_token, qualquer
+    status incluindo 'deleted') ou insere nova. Tudo numa única operação
+    DML transacional.
 
-    IMPORTANTE: usa DML INSERT INTO em vez de insert_rows_json.
-    insert_rows_json é streaming insert e mantém linhas em streaming
-    buffer por 30-90min, durante os quais DELETE/UPDATE falham com
-    'would affect rows in the streaming buffer, which is not supported'.
-    DML INSERT vai direto pro storage permanente e permite mutação
-    imediata — necessário aqui porque o user pode criar e deletar
-    integração em janela curta.
+    Por que MERGE em vez de DELETE+INSERT
+    -------------------------------------
+    DELETE em row recém-criada cai em 'streaming buffer' error mesmo com
+    DML INSERT. MERGE evita esse caminho: faz UPDATE in-place se a row
+    existe (mesmo se ela está em buffer, o UPDATE não move da posição,
+    apenas muda valores).
+
+    Comportamento esperado
+    ----------------------
+    - Primeira ativação dessa campanha: INSERT
+    - Re-ativação após delete: UPDATE (status=deleted → status=active,
+      novos tokens, novo spreadsheet_id, etc.)
+    - Re-ativação de uma já ativa: UPDATE (rotação de tokens etc.)
     """
     ensure_table_exists()
-    short_token = row["short_token"]
-    client = _bq_client()
+    refresh_token_enc_bytes = _b64_to_bytes(row["refresh_token_enc"])
 
-    # 1) Apaga linha anterior se existir
-    delete_sql = f"DELETE FROM `{_table_id()}` WHERE short_token = @short_token"
-    client.query(
-        delete_sql,
-        job_config=bigquery.QueryJobConfig(
-            query_parameters=[
-                bigquery.ScalarQueryParameter("short_token", "STRING", short_token),
-            ],
-        ),
-    ).result()
-
-    # 2) Insere nova linha via DML
-    insert_sql = f"""
-    INSERT INTO `{_table_id()}` (
+    sql = f"""
+    MERGE INTO `{_table_id()}` T
+    USING (
+        SELECT
+            @short_token        AS short_token,
+            @spreadsheet_id     AS spreadsheet_id,
+            @spreadsheet_url    AS spreadsheet_url,
+            @created_by_email   AS created_by_email,
+            @refresh_token_enc  AS refresh_token_enc,
+            @created_at         AS created_at,
+            @last_synced_at     AS last_synced_at,
+            @sync_until         AS sync_until,
+            @status             AS status,
+            @last_error         AS last_error
+    ) S
+    ON T.short_token = S.short_token
+    WHEN MATCHED THEN UPDATE SET
+        spreadsheet_id     = S.spreadsheet_id,
+        spreadsheet_url    = S.spreadsheet_url,
+        created_by_email   = S.created_by_email,
+        refresh_token_enc  = S.refresh_token_enc,
+        created_at         = S.created_at,
+        last_synced_at     = S.last_synced_at,
+        sync_until         = S.sync_until,
+        status             = S.status,
+        last_error         = S.last_error
+    WHEN NOT MATCHED THEN INSERT (
         short_token, spreadsheet_id, spreadsheet_url, created_by_email,
         refresh_token_enc, created_at, last_synced_at, sync_until,
         status, last_error
     ) VALUES (
-        @short_token, @spreadsheet_id, @spreadsheet_url, @created_by_email,
-        @refresh_token_enc, @created_at, @last_synced_at, @sync_until,
-        @status, @last_error
+        S.short_token, S.spreadsheet_id, S.spreadsheet_url, S.created_by_email,
+        S.refresh_token_enc, S.created_at, S.last_synced_at, S.sync_until,
+        S.status, S.last_error
     )
     """
-    # refresh_token_enc chega como string base64 (linha de cima); o tipo
-    # da coluna é BYTES. BytesQueryParameter aceita bytes diretamente,
-    # então decodamos o b64 antes de passar.
-    refresh_token_enc_bytes = _b64_to_bytes(row["refresh_token_enc"])
 
     params = [
         bigquery.ScalarQueryParameter("short_token",       "STRING",    row["short_token"]),
@@ -355,8 +379,8 @@ def _upsert_integration(row: Dict) -> None:
         bigquery.ScalarQueryParameter("status",            "STRING",    row["status"]),
         bigquery.ScalarQueryParameter("last_error",        "STRING",    row["last_error"]),
     ]
-    client.query(
-        insert_sql,
+    _bq_client().query(
+        sql,
         job_config=bigquery.QueryJobConfig(query_parameters=params),
     ).result()
 
@@ -390,8 +414,33 @@ def _update_status(
 
 
 def delete_integration(short_token: str) -> None:
+    """
+    Soft delete: marca status='deleted' em vez de DELETE FROM.
+
+    Por que soft delete
+    -------------------
+    DELETE/UPDATE em rows recém-INSERT podem cair no erro do streaming
+    buffer ("would affect rows in the streaming buffer, which is not
+    supported"). Em datasets regionais isso é raro, mas ainda pode
+    acontecer em alta concorrência.
+
+    UPDATE numa row 'deleted' não toca a row no buffer (ela já foi
+    flushed quando o user clicou). Caso o flush ainda não tenha rolado,
+    documentamos que retry resolve. Pra usuário final, o card volta ao
+    estado "Conectar" assim que o status é 'deleted', então UX OK.
+
+    A re-criação subsequente (save_integration) usa MERGE — atualiza a
+    row existente ao invés de DELETE+INSERT, evitando outro caminho
+    pro mesmo erro.
+    """
     ensure_table_exists()
-    sql = f"DELETE FROM `{_table_id()}` WHERE short_token = @short_token"
+    sql = f"""
+    UPDATE `{_table_id()}`
+    SET status = 'deleted',
+        last_error = NULL
+    WHERE short_token = @short_token
+      AND status != 'deleted'
+    """
     _bq_client().query(
         sql,
         job_config=bigquery.QueryJobConfig(
