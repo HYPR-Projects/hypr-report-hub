@@ -93,17 +93,12 @@ export default function VideoV2({
 
   const { totals, detailFiltered, lineOptions, kpis, daily, bySize, byAudience } = view;
 
-  if (totals.length === 0 && view.detailAll.length === 0) {
-    return (
-      <div className="rounded-xl border border-border bg-surface p-8 text-center">
-        <p className="text-sm text-fg-muted">
-          Não há entrega Video {tactic} nesta campanha.
-        </p>
-      </div>
-    );
-  }
+  // Empty state: a tactic atual não tem entregas. Mantém a toolbar
+  // visível pra o usuário poder voltar pra outra tactic — antes
+  // ficava preso sem toggle.
+  const isEmpty = totals.length === 0 && view.detailAll.length === 0;
 
-  // Views contratadas e bonus por tactic (vêm do row[0] em totals)
+  // Views contratadas e bonus por tactic (vêm do row[0] em totals).
   const row0 = totals[0] || {};
   const contractedViews =
     tactic === "O2O"
@@ -127,13 +122,55 @@ export default function VideoV2({
             setLines([]);
           }}
         />
-        <AudienceFilterV2
-          lines={lineOptions}
-          selected={lines}
-          onChange={setLines}
-        />
+        {!isEmpty && (
+          <AudienceFilterV2
+            lines={lineOptions}
+            selected={lines}
+            onChange={setLines}
+          />
+        )}
       </div>
 
+      {isEmpty ? (
+        <div className="rounded-xl border border-border bg-surface p-8 text-center">
+          <p className="text-sm text-fg-muted">
+            Não há entrega Video {tactic} nesta campanha.
+          </p>
+        </div>
+      ) : (
+        <VideoContent
+          camp={camp}
+          tactic={tactic}
+          aggregates={aggregates}
+          detailFiltered={detailFiltered}
+          kpis={kpis}
+          daily={daily}
+          bySize={bySize}
+          byAudience={byAudience}
+          contractedViews={contractedViews}
+          bonusViews={bonusViews}
+        />
+      )}
+    </div>
+  );
+}
+
+// Conteúdo "pesado" do Video — extraído pra fora pra simplificar o
+// fluxo de empty state e não duplicar o JSX da toolbar.
+function VideoContent({
+  camp,
+  tactic,
+  aggregates,
+  detailFiltered,
+  kpis,
+  daily,
+  bySize,
+  byAudience,
+  contractedViews,
+  bonusViews,
+}) {
+  return (
+    <>
       {/* ─── 2. Hero ComparisonCard ──────────────────────────────────── */}
       <ComparisonCardV2
         title={`CPCV Video · ${tactic}`}
@@ -283,7 +320,6 @@ export default function VideoV2({
           />
         </CollapsibleSectionV2>
       )}
-
-    </div>
+    </>
   );
 }
