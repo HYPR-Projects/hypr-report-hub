@@ -537,50 +537,77 @@ def create_sheet_for_campaign(
             {"properties": {"title": "Base de Dados"}},
         ],
     }
+    # IMPORTANTE: incluir `sheets.properties.{sheetId,title}` em `fields`.
+    # O Google atribui sheetIds aleatórios na criação (não são 0,1,2...
+    # sequenciais como eu assumi inicialmente). Precisamos dos IDs reais
+    # pra usar no batchUpdate de formatação adiante.
     created = sheets_svc.spreadsheets().create(
         body=create_body,
-        fields="spreadsheetId,spreadsheetUrl",
+        fields="spreadsheetId,spreadsheetUrl,sheets.properties.sheetId,sheets.properties.title",
     ).execute()
     spreadsheet_id  = created["spreadsheetId"]
     spreadsheet_url = created["spreadsheetUrl"]
 
-    # Popula as 2 abas. README é estático; Base de Dados vem do detail.
-    payload = _build_sheet_payload(detail_rows)
-    sheets_svc.spreadsheets().values().batchUpdate(
-        spreadsheetId=spreadsheet_id,
-        body={
-            "valueInputOption": "RAW",
-            "data": [
-                {"range": "README!A1",        "values": README_TEXT},
-                {"range": "Base de Dados!A1", "values": payload},
-            ],
-        },
-    ).execute()
+    # Resolve sheetIds reais por título da aba.
+    sheet_id_by_title = {
+        s["properties"]["title"]: s["properties"]["sheetId"]
+        for s in created.get("sheets", [])
+    }
+    base_sheet_id = sheet_id_by_title.get("Base de Dados")
+    if base_sheet_id is None:
+        # Não deveria acontecer (acabamos de criar), mas se o Google mudou
+        # algo no payload, melhor falhar explícito do que estourar adiante.
+        _try_delete_spreadsheet(spreadsheet_id, access_token)
+        raise RuntimeError("Aba 'Base de Dados' não encontrada na sheet recém-criada")
 
-    # Negrito no header da Base de Dados (visual de tabela). Aba é sheetId=1
-    # porque criamos README primeiro (sheetId=0). Tomei a decisão consciente
-    # de não buscar o sheetId via API após o create — o ordering acima é
-    # determinístico (Google preserva a ordem de `sheets[]` no payload).
-    sheets_svc.spreadsheets().batchUpdate(
-        spreadsheetId=spreadsheet_id,
-        body={
-            "requests": [
-                {
-                    "repeatCell": {
-                        "range": {"sheetId": 1, "startRowIndex": 0, "endRowIndex": 1},
-                        "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}},
-                        "fields": "userEnteredFormat.textFormat.bold",
-                    }
-                },
-                {
-                    "updateSheetProperties": {
-                        "properties": {"sheetId": 1, "gridProperties": {"frozenRowCount": 1}},
-                        "fields": "gridProperties.frozenRowCount",
-                    }
-                },
-            ],
-        },
-    ).execute()
+    # A partir daqui, qualquer falha deixa a sheet órfã no Drive do usuário.
+    # Envolvemos o resto em try/except pra deletar nesse caso — UX
+    # melhor que acumular sheets vazias quando o user clica de novo.
+    try:
+        # Popula as 2 abas. README é estático; Base de Dados vem do detail.
+        payload = _build_sheet_payload(detail_rows)
+        sheets_svc.spreadsheets().values().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={
+                "valueInputOption": "RAW",
+                "data": [
+                    {"range": "README!A1",        "values": README_TEXT},
+                    {"range": "Base de Dados!A1", "values": payload},
+                ],
+            },
+        ).execute()
+
+        # Negrito no header da Base de Dados + frozen row.
+        sheets_svc.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={
+                "requests": [
+                    {
+                        "repeatCell": {
+                            "range": {
+                                "sheetId": base_sheet_id,
+                                "startRowIndex": 0,
+                                "endRowIndex": 1,
+                            },
+                            "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}},
+                            "fields": "userEnteredFormat.textFormat.bold",
+                        }
+                    },
+                    {
+                        "updateSheetProperties": {
+                            "properties": {
+                                "sheetId": base_sheet_id,
+                                "gridProperties": {"frozenRowCount": 1},
+                            },
+                            "fields": "gridProperties.frozenRowCount",
+                        }
+                    },
+                ],
+            },
+        ).execute()
+    except Exception:
+        _try_delete_spreadsheet(spreadsheet_id, access_token)
+        raise
 
     # Persiste a integração no BQ.
     sync_until = (end_date + timedelta(days=SYNC_GRACE_DAYS)) if end_date else None
@@ -684,6 +711,19 @@ def _bytes_to_b64(b: bytes) -> str:
 def _b64_to_bytes(s: str) -> bytes:
     import base64
     return base64.b64decode(s)
+
+
+def _try_delete_spreadsheet(spreadsheet_id: str, access_token: str) -> None:
+    """
+    Best-effort cleanup de uma sheet criada que falhou no setup posterior.
+    Evita acumular sheets órfãs no Drive do usuário a cada retry.
+    Falha silenciosamente — não queremos mascarar a exceção original.
+    """
+    try:
+        drive_svc = _build_drive_client(access_token)
+        drive_svc.files().delete(fileId=spreadsheet_id).execute()
+    except Exception as e:
+        print(f"[WARN _try_delete_spreadsheet {spreadsheet_id}] {e}")
 
 
 def status_for_response(short_token: str, *, is_admin: bool) -> Optional[Dict]:
