@@ -25,7 +25,8 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import "../../v2.css";
 
 import { listCampaigns, listTeamMembers, listClients, getShareId, getCachedShareId } from "../../../lib/api";
-import { getTheme, setTheme, getOwnerFilter, setOwnerFilter as persistOwnerFilter } from "../../../shared/prefs";
+import { getOwnerFilter, setOwnerFilter as persistOwnerFilter } from "../../../shared/prefs";
+import { useTheme } from "../../hooks/useTheme";
 
 import HyprReportCenterLogo from "../../../components/HyprReportCenterLogo";
 import NewCampaignModal from "../../../components/modals/NewCampaignModal";
@@ -36,6 +37,7 @@ import OwnerModal from "../../../components/modals/OwnerModal";
 
 import { Button } from "../../../ui/Button";
 import { Skeleton } from "../../../ui/Skeleton";
+import { ThemeToggleV2 } from "../../components/ThemeToggleV2";
 
 import { LayoutToggle } from "../components/LayoutToggle";
 import { ToolbarV2 } from "../components/ToolbarV2";
@@ -83,9 +85,12 @@ export default function CampaignMenuV2({ user, onLogout, onOpenReport, onOpenCli
   const [logoModal, setLogoModal]         = useState(null);
   const [ownerModal, setOwnerModal]       = useState(null);
 
-  // Theme toggle
-  const [isDark, setIsDark] = useState(() => getTheme() === "dark");
-  useEffect(() => { setTheme(isDark ? "dark" : "light"); }, [isDark]);
+  // Theme — single source of truth via hook V2 (aplica data-theme no
+  // <html>, persiste em localStorage com a key correta 'hypr_theme',
+  // e sincroniza com prefers-color-scheme do OS quando user não tem
+  // preferência salva).
+  const [theme] = useTheme();
+  const isDark = theme === "dark";
 
   // Persistência
   useEffect(() => { persistOwnerFilter(ownerFilter); }, [ownerFilter]);
@@ -261,13 +266,7 @@ export default function CampaignMenuV2({ user, onLogout, onOpenReport, onOpenCli
             <HyprReportCenterLogo height={20} />
           </div>
           <div className="flex items-center gap-3">
-            <button
-              onClick={() => setIsDark((v) => !v)}
-              title={isDark ? "Modo claro" : "Modo escuro"}
-              className="w-8 h-8 inline-flex items-center justify-center rounded-md bg-surface border border-border text-fg-muted hover:text-fg hover:bg-surface-strong transition-colors"
-            >
-              {isDark ? "☀" : "☾"}
-            </button>
+            <ThemeToggleV2 />
             {user?.picture && (
               <img
                 src={user.picture}

@@ -17,7 +17,7 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import "../../v2.css";
 
 import { listCampaigns, listTeamMembers, getShareId, getCachedShareId } from "../../../lib/api";
-import { getTheme, setTheme } from "../../../shared/prefs";
+import { useTheme } from "../../hooks/useTheme";
 import { normalizeSlug } from "../lib/aggregation";
 
 import HyprReportCenterLogo from "../../../components/HyprReportCenterLogo";
@@ -28,6 +28,7 @@ import OwnerModal from "../../../components/modals/OwnerModal";
 
 import { Card } from "../../../ui/Card";
 import { Skeleton } from "../../../ui/Skeleton";
+import { ThemeToggleV2 } from "../../components/ThemeToggleV2";
 
 import { ToolbarV2 } from "../components/ToolbarV2";
 import { CampaignCardV2 } from "../components/CampaignCardV2";
@@ -54,8 +55,9 @@ export default function ClientDetailPage({ slug, user, onLogout, onBack, onOpenR
   const [logoModal, setLogoModal]           = useState(null);
   const [ownerModal, setOwnerModal]         = useState(null);
 
-  const [isDark, setIsDark] = useState(() => getTheme() === "dark");
-  useEffect(() => { setTheme(isDark ? "dark" : "light"); }, [isDark]);
+  // Theme — single source of truth via hook V2 (ver CampaignMenuV2).
+  const [theme] = useTheme();
+  const isDark = theme === "dark";
 
   const teamMap = useMemo(() => {
     const m = {};
@@ -183,12 +185,7 @@ export default function ClientDetailPage({ slug, user, onLogout, onBack, onOpenR
             <HyprReportCenterLogo height={20} />
           </div>
           <div className="flex items-center gap-3">
-            <button
-              onClick={() => setIsDark((v) => !v)}
-              className="w-8 h-8 inline-flex items-center justify-center rounded-md bg-surface border border-border text-fg-muted hover:text-fg hover:bg-surface-strong transition-colors"
-            >
-              {isDark ? "☀" : "☾"}
-            </button>
+            <ThemeToggleV2 />
             {user?.picture && (
               <img src={user.picture} alt="" referrerPolicy="no-referrer" className="w-7 h-7 rounded-full ring-2 ring-signature" />
             )}
