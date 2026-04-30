@@ -313,19 +313,16 @@ export default function ClientDetailPage({ slug, user, onLogout, onBack, onOpenR
         teamMap={teamMap}
       />
 
-      {loomModal   && <LoomModal   shortToken={loomModal}   onClose={() => setLoomModal(null)}   modalTheme={legacyModalTheme(isDark)} />}
-      {surveyModal && <SurveyModal shortToken={surveyModal} onClose={() => setSurveyModal(null)} modalTheme={legacyModalTheme(isDark)} />}
-      {logoModal   && <LogoModal   shortToken={logoModal}   onClose={() => setLogoModal(null)}   modalTheme={legacyModalTheme(isDark)} />}
+      {loomModal   && <LoomModal   shortToken={loomModal}   onClose={() => setLoomModal(null)}   theme={legacyModalTheme(isDark)} />}
+      {surveyModal && <SurveyModal shortToken={surveyModal} onClose={() => setSurveyModal(null)} theme={legacyModalTheme(isDark)} />}
+      {logoModal   && <LogoModal   shortToken={logoModal}   onClose={() => setLogoModal(null)}   theme={legacyModalTheme(isDark)} />}
       {ownerModal  && (
         <OwnerModal
-          shortToken={ownerModal.short_token}
-          clientName={ownerModal.client_name}
-          initialCpEmail={ownerModal.cp_email}
-          initialCsEmail={ownerModal.cs_email}
+          campaign={ownerModal}
           teamMembers={teamMembers}
-          onSave={handleOwnerSaved}
+          onSaved={handleOwnerSaved}
           onClose={() => setOwnerModal(null)}
-          modalTheme={legacyModalTheme(isDark)}
+          theme={legacyModalTheme(isDark)}
         />
       )}
     </div>

@@ -404,28 +404,25 @@ export default function CampaignMenuV2({ user, onLogout, onOpenReport, onOpenCli
         <NewCampaignModal
           onClose={() => setShowNewCampaign(false)}
           onConfirm={handleNewCampaignConfirm}
-          modalTheme={legacyModalTheme(isDark)}
+          theme={legacyModalTheme(isDark)}
         />
       )}
       {loomModal && (
-        <LoomModal shortToken={loomModal} onClose={() => setLoomModal(null)} modalTheme={legacyModalTheme(isDark)} />
+        <LoomModal shortToken={loomModal} onClose={() => setLoomModal(null)} theme={legacyModalTheme(isDark)} />
       )}
       {surveyModal && (
-        <SurveyModal shortToken={surveyModal} onClose={() => setSurveyModal(null)} modalTheme={legacyModalTheme(isDark)} />
+        <SurveyModal shortToken={surveyModal} onClose={() => setSurveyModal(null)} theme={legacyModalTheme(isDark)} />
       )}
       {logoModal && (
-        <LogoModal shortToken={logoModal} onClose={() => setLogoModal(null)} modalTheme={legacyModalTheme(isDark)} />
+        <LogoModal shortToken={logoModal} onClose={() => setLogoModal(null)} theme={legacyModalTheme(isDark)} />
       )}
       {ownerModal && (
         <OwnerModal
-          shortToken={ownerModal.short_token}
-          clientName={ownerModal.client_name}
-          initialCpEmail={ownerModal.cp_email}
-          initialCsEmail={ownerModal.cs_email}
+          campaign={ownerModal}
           teamMembers={teamMembers}
-          onSave={handleOwnerSaved}
+          onSaved={handleOwnerSaved}
           onClose={() => setOwnerModal(null)}
-          modalTheme={legacyModalTheme(isDark)}
+          theme={legacyModalTheme(isDark)}
         />
       )}
     </div>
