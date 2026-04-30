@@ -222,14 +222,17 @@ function aggregateMetrics(set) {
   const dViewable  = sumField(set, "display_viewable_impressions");
   const dExpected  = sumField(set, "display_expected_impressions");
   const vCompl     = sumField(set, "video_viewable_completions");
-  const vImpr      = sumField(set, "video_impressions");
+  // VTR usa viewable/viewable (não total). Antes usávamos video_impressions
+  // (total) como denominador, o que dava VTR > 100% por descasamento de
+  // fontes no backend (numerador vinha de unified, denom de agg/dedup).
+  const vViewable  = sumField(set, "video_viewable_impressions");
   const vExpected  = sumField(set, "video_expected_completions");
   const cost       = sumField(set, "admin_total_cost");
   const impr       = sumField(set, "admin_impressions");
 
   return {
     ctr:        dImpr     > 0 ? (dClicks   / dImpr)     * 100  : meanOfField(set, "display_ctr"),
-    vtr:        vImpr     > 0 ? (vCompl    / vImpr)     * 100  : meanOfField(set, "video_vtr"),
+    vtr:        vViewable > 0 ? (vCompl    / vViewable) * 100  : meanOfField(set, "video_vtr"),
     dsp_pacing: dExpected > 0 ? (dViewable / dExpected) * 100  : meanOfField(set, "display_pacing"),
     vid_pacing: vExpected > 0 ? (vCompl    / vExpected) * 100  : meanOfField(set, "video_pacing"),
     ecpm:       impr      > 0 ? (cost      / impr)      * 1000 : null,

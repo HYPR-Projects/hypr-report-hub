@@ -224,11 +224,11 @@ def aggregate_clients_from_campaigns(campaigns):
         sum_d_viewable     = sum(int(c.get("display_viewable_impressions",    0) or 0) for c in active)
         sum_d_expected     = sum(int(c.get("display_expected_impressions",    0) or 0) for c in active)
         sum_v_completions  = sum(int(c.get("video_viewable_completions",      0) or 0) for c in active)
-        sum_v_impr         = sum(int(c.get("video_impressions",               0) or 0) for c in active)
+        sum_v_viewable     = sum(int(c.get("video_viewable_impressions",      0) or 0) for c in active)
         sum_v_expected     = sum(int(c.get("video_expected_completions",      0) or 0) for c in active)
 
         avg_ctr        = round(sum_d_clicks      / sum_d_impr      * 100, 2) if sum_d_impr      > 0 else None
-        avg_vtr        = round(sum_v_completions / sum_v_impr      * 100, 2) if sum_v_impr      > 0 else None
+        avg_vtr        = round(sum_v_completions / sum_v_viewable  * 100, 2) if sum_v_viewable  > 0 else None
         display_pacing = round(sum_d_viewable    / sum_d_expected  * 100, 1) if sum_d_expected  > 0 else None
         video_pacing   = round(sum_v_completions / sum_v_expected  * 100, 1) if sum_v_expected  > 0 else None
 

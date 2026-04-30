@@ -1712,6 +1712,7 @@ def query_campaigns_list():
                 SUM(IF(media_type='VIDEO' AND impressions > 0,
                         video_view_100_complete * (viewable_impressions / impressions),
                         0))                                        AS v_viewable_completions,
+                SUM(IF(media_type='VIDEO', viewable_impressions, 0)) AS v_viewable_impressions,
                 COUNT(DISTINCT IF(media_type='DISPLAY', date, NULL)) AS d_days_with_delivery,
                 SUM(IF(media_type='DISPLAY', viewable_impressions, 0)) AS d_viewable_impressions,
                 -- ADMIN-ONLY: custo cru do DSP (sem margem/over) + impressions
@@ -1736,6 +1737,7 @@ def query_campaigns_list():
             c.bonus_o2o_display,      c.bonus_ooh_display,
             c.bonus_o2o_video,        c.bonus_ooh_video,
             u.v_actual_start_date,    u.v_days_with_delivery,  u.v_viewable_completions,
+            u.v_viewable_impressions,
             u.d_days_with_delivery,   u.d_viewable_impressions,
             u.admin_total_cost,       u.admin_impressions
         FROM base b
@@ -1775,6 +1777,7 @@ def query_campaigns_list():
         v_cost            = float(r["v_cost"]                 or 0)
         v_days_delivery   = int(r["v_days_with_delivery"]     or 0)
         v_viewable_comp   = float(r["v_viewable_completions"] or 0)
+        v_viewable_impr   = float(r["v_viewable_impressions"] or 0)
         v_actual_start    = r["v_actual_start_date"]
         if v_actual_start and hasattr(v_actual_start, "date"):
             v_actual_start = v_actual_start.date()
@@ -1835,10 +1838,14 @@ def query_campaigns_list():
         d_expected = pacing_expected_to_date(d_neg, start_date, end_date)
         v_expected = pacing_expected_to_date(v_neg, start_date, end_date)
 
-        display_pacing = round(d_viewable_impr / d_expected * 100, 1) if d_expected and d_expected > 0 else None
-        video_pacing   = round(v_viewable_comp  / v_expected * 100, 1) if v_expected and v_expected > 0 else None
-        display_ctr    = round(d_clicks         / d_vi       * 100, 2) if d_vi > 0       else None
-        video_vtr      = round(v_viewable_comp  / v_vi       * 100, 2) if v_vi > 0       else None
+        display_pacing = round(d_viewable_impr / d_expected     * 100, 1) if d_expected and d_expected > 0 else None
+        video_pacing   = round(v_viewable_comp  / v_expected    * 100, 1) if v_expected and v_expected > 0 else None
+        display_ctr    = round(d_clicks         / d_vi          * 100, 2) if d_vi             > 0       else None
+        # VTR: viewable_completions / viewable_impressions (mesma fonte —
+        # CTE `unified`). ANTES o denominador era v_vi (total impressions
+        # vindo da CTE `agg`/dedup), o que descasava com o numerador e dava
+        # VTR > 100% pra campanhas com alta diferença entre as duas fontes.
+        video_vtr      = round(v_viewable_comp  / v_viewable_impr * 100, 2) if v_viewable_impr > 0       else None
 
         entry = {
             "short_token":   r["short_token"],
@@ -1862,7 +1869,9 @@ def query_campaigns_list():
         if d_clicks          > 0: entry["display_clicks"]                 = int(d_clicks)
         if d_viewable_impr   > 0: entry["display_viewable_impressions"]   = int(d_viewable_impr)
         if d_expected and d_expected > 0: entry["display_expected_impressions"] = int(d_expected)
-        if v_vi              > 0: entry["video_impressions"]              = int(v_vi)
+        # Pra VTR usamos viewable/viewable (não total). v_viewable_impr é o
+        # denominador correto vindo da mesma fonte do numerador (v_viewable_comp).
+        if v_viewable_impr   > 0: entry["video_viewable_impressions"]     = int(v_viewable_impr)
         if v_viewable_comp   > 0: entry["video_viewable_completions"]     = int(v_viewable_comp)
         if v_expected and v_expected > 0: entry["video_expected_completions"]  = int(v_expected)
 
