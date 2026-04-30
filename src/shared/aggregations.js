@@ -225,6 +225,78 @@ export const computeVideoKpis = ({ rows, detail, tactic }) => {
 
 /**
  * ─────────────────────────────────────────────────────────────────────
+ * computeMediaPacing — pacing canônico da Visão Geral
+ * ─────────────────────────────────────────────────────────────────────
+ *
+ * Definição (alinhada com o que a HYPR reporta pro cliente):
+ *   "Baseado na média diária de entrega até agora, qual % do contrato
+ *    a campanha vai entregar até o final?"
+ *
+ * Equivale matematicamente a:
+ *     pacing = delivered / (negotiated × elapsed_calendar / total_days) × 100
+ *
+ * Após o end_date a fórmula naturalmente convergiria pra delivered/neg
+ * (porque elapsed = total), mas pra evitar divisões esquisitas com
+ * elapsed > total quando today já passou de end, capamos elapsed em
+ * total. Resultado idêntico ao "short-circuit" do legacy, sem o salto
+ * não-monotônico que disparava no LAST day.
+ *
+ * Bug latente corrigido (PRINCIPAL):
+ *   `contracted_*` e `bonus_*` são DENORMALIZADOS no backend — todas as
+ *   linhas de uma mesma campanha carregam os mesmos valores (cada row
+ *   tem o2o E ooh contratado da campanha inteira, não só o do tactic
+ *   daquela linha). O legacy `computeDisplayPacing` somava esses campos
+ *   across rows e DOBRAVA o contrato em campanhas com 2 tactics
+ *   (O2O+OOH), fazendo o pacing aparecer como METADE do real.
+ *   Ex.: Diageo Johnnie Walker mostrava 12.8% quando o pacing real era
+ *   ~28%. Pegamos de `rows[0]` apenas (mesma estratégia que
+ *   `computeDisplayKpis` já usa).
+ *
+ * @param {Array} rows         totals filtrados por media_type
+ * @param {object} camp        data.campaign (start_date, end_date)
+ * @param {"DISPLAY"|"VIDEO"} mediaType
+ * @returns {number} pacing em % (ex.: 87.4 = 87.4%)
+ */
+export function computeMediaPacing(rows, camp, mediaType) {
+  if (!rows?.length || !camp?.start_date || !camp?.end_date) return 0;
+
+  const r0 = rows[0];
+  const isVideo = mediaType === "VIDEO";
+
+  const totalNeg = isVideo
+    ? (r0.contracted_o2o_video_completions || 0)
+      + (r0.contracted_ooh_video_completions || 0)
+      + (r0.bonus_o2o_video_completions      || 0)
+      + (r0.bonus_ooh_video_completions      || 0)
+    : (r0.contracted_o2o_display_impressions || 0)
+      + (r0.contracted_ooh_display_impressions || 0)
+      + (r0.bonus_o2o_display_impressions      || 0)
+      + (r0.bonus_ooh_display_impressions      || 0);
+  if (!totalNeg) return 0;
+
+  const delivered = isVideo
+    ? rows.reduce((s, r) => s + (r.viewable_video_view_100_complete || r.completions || 0), 0)
+    : rows.reduce((s, r) => s + (r.viewable_impressions || 0), 0);
+
+  const [sy, sm, sd] = camp.start_date.split("-").map(Number);
+  const [ey, em, ed] = camp.end_date.split("-").map(Number);
+  const start = new Date(sy, sm - 1, sd);
+  const end   = new Date(ey, em - 1, ed);
+  const now   = new Date();
+
+  // total_days inclui ambos os limites (start E end), por isso o +1.
+  // elapsed é capado em total — após o end_date, expected = negotiated
+  // e pacing = delivered/negotiated naturalmente.
+  const total   = (end - start) / 864e5 + 1;
+  const rawElapsed = now < start ? 0 : Math.floor((now - start) / 864e5);
+  const elapsed = Math.min(rawElapsed, total);
+  const expected = totalNeg * (elapsed / total);
+  return expected > 0 ? (delivered / expected) * 100 : 0;
+}
+
+
+/**
+ * ─────────────────────────────────────────────────────────────────────
  * computeAggregates — agregação master consumida pelo ClientDashboard
  *                     Legacy e pelo ClientDashboardV2.
  * ─────────────────────────────────────────────────────────────────────
@@ -370,12 +442,49 @@ export function computeAggregates(data, mainRange) {
 
   const daily  = daily0;
   const detail = enrichDetailCosts(detail0, totals);
-  const chartDisplay = daily.filter(r=>r.media_type==="DISPLAY").map(r=>({...r,ctr:r.viewable_impressions>0?(r.clicks||0)/r.viewable_impressions*100:0}));
-  const chartVideo   = daily.filter(r=>r.media_type==="VIDEO").map(r=>{
-    const v100 = r.video_view_100||r.completions||r.viewable_video_view_100_complete||0;
-    const vi   = r.viewable_impressions||0;
-    return {...r, video_view_100: v100, completions: v100, vtr: vi>0 ? v100/vi*100 : 0};
-  });
+
+  // ─── Agregação por data pros charts diários ────────────────────────────
+  // O backend (`query_daily`) agrupa por (date, media_type, tactic_type),
+  // então um mesmo (date, media_type) pode ter até 2 linhas (uma O2O, uma
+  // OOH). Pros charts da Visão Geral, queremos UMA barra por data —
+  // somando tactics. Sem essa agregação, o chart mostra barras duplicadas
+  // no mesmo dia (e a tooltip do recharts se confunde com x-values
+  // duplicados, parecendo "travada").
+  //
+  // O DisplayV2/VideoV2 (tabs específicas) usam `groupByDate` aplicado em
+  // detail (não daily), então não tinham esse bug.
+  const aggregateDailyByDate = (rows) => {
+    const m = new Map();
+    for (const r of rows) {
+      if (!r.date) continue;
+      const e = m.get(r.date) || {
+        date: r.date,
+        media_type: r.media_type,
+        impressions: 0,
+        viewable_impressions: 0,
+        clicks: 0,
+        video_view_100: 0,
+      };
+      e.impressions          += Number(r.impressions          || 0);
+      e.viewable_impressions += Number(r.viewable_impressions || 0);
+      e.clicks               += Number(r.clicks               || 0);
+      e.video_view_100       += Number(r.video_view_100 || r.completions || r.viewable_video_view_100_complete || 0);
+      m.set(r.date, e);
+    }
+    return Array.from(m.values()).sort((a, b) => a.date.localeCompare(b.date));
+  };
+
+  const chartDisplay = aggregateDailyByDate(daily.filter(r => r.media_type === "DISPLAY"))
+    .map(r => ({
+      ...r,
+      ctr: r.viewable_impressions > 0 ? (r.clicks / r.viewable_impressions) * 100 : 0,
+    }));
+  const chartVideo = aggregateDailyByDate(daily.filter(r => r.media_type === "VIDEO"))
+    .map(r => ({
+      ...r,
+      completions: r.video_view_100,
+      vtr: r.viewable_impressions > 0 ? (r.video_view_100 / r.viewable_impressions) * 100 : 0,
+    }));
 
   const enrich = (rows) => rows.map(r=>({
     ...r,
