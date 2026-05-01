@@ -63,7 +63,7 @@ export function MergeGroupCardV2({ members, onOpen, onOpenReport, teamMap = {} }
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-[10px] uppercase tracking-[0.18em] font-bold text-signature">
-              Mesclado
+              Agrupado
             </span>
             <span className="text-fg-subtle text-[10px]">·</span>
             <span className="text-[12.5px] font-semibold text-fg truncate">
@@ -82,9 +82,9 @@ export function MergeGroupCardV2({ members, onOpen, onOpenReport, teamMap = {} }
         </div>
         <span
           className="hidden md:inline-flex shrink-0 items-center gap-1 px-2 py-1 rounded-md bg-signature/10 border border-signature/30 text-[10px] font-bold text-signature uppercase tracking-wider"
-          title="Esses tokens compartilham um único link de report unificado"
+          title="Esses tokens compartilham um único link de report"
         >
-          1 link unificado
+          1 link único
         </span>
       </header>
 

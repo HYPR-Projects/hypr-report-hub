@@ -132,14 +132,14 @@ export function CampaignDrawer({
       <DrawerContent>
         <DrawerHeader title={client_name} subtitle={`${campaign_name}  ·  ${short_token}`} />
         <DrawerBody>
-          {/* Badge "mesclado" — sinaliza que ações como Loom/Logo/Survey
+          {/* Badge "agrupado" — sinaliza que ações como Loom/Logo/Survey
               continuam afetando ESTE token, mas o report público mostra
               dados unificados de todos os membros do grupo. */}
           {merge_id && (
             <div className="mb-4 px-3 py-2 rounded-lg bg-signature/8 border border-signature/30 flex items-center gap-2">
               <span className="text-signature shrink-0">{ICON.merge}</span>
               <p className="text-xs text-fg-muted leading-snug">
-                <span className="text-fg font-semibold">Mesclado</span> com outros tokens deste cliente.
+                <span className="text-fg font-semibold">Agrupado</span> com outros tokens deste cliente.
                 O link do report mostra a visão unificada.
               </p>
             </div>
@@ -202,7 +202,7 @@ export function CampaignDrawer({
             <ActionButton icon={ICON.owner}  label="Gerenciar owner (CP/CS)" onClick={() => onOwner?.(campaign)} />
             <ActionButton
               icon={ICON.merge}
-              label={merge_id ? "Gerenciar merge (mesclado)" : "Mesclar com outros tokens"}
+              label={merge_id ? "Gerenciar agrupamento" : "Agrupar com outros tokens"}
               variant={merge_id ? "highlight" : "default"}
               onClick={() => onMerge?.(campaign)}
             />

@@ -17,14 +17,14 @@
 //      - tokens novos selecionados → mergeTokens
 //      - tokens existentes desmarcados → unmergeToken individual
 //      - settings mudaram (e grupo persistiu) → updateMergeSettings
-// 5. "Sair do grupo" (só visível se base já está em grupo) → unmerge do
-//    próprio token base, dissolvendo se sobrar 1.
+// 5. "Desfazer grupo" (só visível se base já está em grupo) → dissolve o
+//    grupo inteiro, todos os tokens voltam a ser reports independentes.
 //
 // Decisões de UX
 // --------------
-// • Token BASE não é desmarcável na UI — pra sair do grupo usa o botão
-//   destacado "Sair do grupo". Reduz o risco de admin desfazer merge sem
-//   intenção e mantém a ação "destrutiva" separada do save.
+// • Token BASE não é desmarcável na UI — pra desfazer o agrupamento usa
+//   o botão destacado "Desfazer grupo". Reduz o risco de admin dissolver
+//   o grupo sem intenção e mantém a ação destrutiva separada do save.
 // • Settings ficam num bloco recolhível ("Avançado"); default 'merge'
 //   para ambos cobre o caso comum.
 // • Lista vazia (sem tokens elegíveis) mostra estado vazio amigável em
@@ -152,18 +152,28 @@ const MergeModal = ({ campaign, onClose, onSaved, theme }) => {
     }
   };
 
-  // ── Sair do grupo (botão destacado) ────────────────────────────────────
-  const handleLeaveGroup = async () => {
+  // ── Desfazer grupo (botão destacado) ────────────────────────────────────
+  // Itera todos os membros e remove cada um — dissolve o grupo INTEIRO.
+  // Backend unmergeToken é idempotente (no-op se o token já não está em
+  // grupo), então mesmo após a auto-dissolução do grupo de 2 tokens as
+  // chamadas restantes são seguras.
+  const handleDissolveGroup = async () => {
     if (!confirm(
-      "Tem certeza que deseja remover esta campanha do grupo? " +
-      "Os outros tokens permanecem unificados (se sobrar mais de 1)."
+      "Tem certeza que deseja desfazer o grupo? " +
+      "Todos os tokens voltam a ser reports independentes."
     )) return;
     setSaving(true);
     try {
-      await unmergeToken(baseToken);
+      // Calcula a lista de membros a partir dos candidates já carregados
+      // (todos com already_in_group=true) + o próprio token base.
+      const memberTokens = [
+        baseToken,
+        ...candidates.filter((c) => c.already_in_group).map((c) => c.short_token),
+      ];
+      await Promise.all(memberTokens.map((t) => unmergeToken(t).catch(() => null)));
       onSaved?.();
     } catch (e) {
-      alert("Erro ao sair do grupo: " + (e.message || e));
+      alert("Erro ao desfazer grupo: " + (e.message || e));
     } finally {
       setSaving(false);
     }
@@ -198,7 +208,7 @@ const MergeModal = ({ campaign, onClose, onSaved, theme }) => {
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="text-[10px] uppercase tracking-[0.18em] font-bold text-fg-subtle">
-                Mesclar Reports
+                Agrupar Reports
               </div>
               <h2 className="text-xl font-bold tracking-tight mt-1 truncate">
                 {campaign.client_name}
@@ -246,8 +256,8 @@ const MergeModal = ({ campaign, onClose, onSaved, theme }) => {
               <div className="text-3xl mb-2 opacity-50">∅</div>
               <p className="text-sm text-fg">Sem campanhas elegíveis</p>
               <p className="text-xs text-fg-muted mt-1 max-w-[360px] mx-auto leading-relaxed">
-                Não encontrei outros tokens deste cliente para mesclar.
-                Para mesclar, é preciso ter ao menos 2 reports do mesmo
+                Não encontrei outros tokens deste cliente para agrupar.
+                Para agrupar, é preciso ter ao menos 2 reports do mesmo
                 cliente registrados.
               </p>
             </div>
@@ -342,11 +352,11 @@ const MergeModal = ({ campaign, onClose, onSaved, theme }) => {
           {baseInGroup && (
             <button
               type="button"
-              onClick={handleLeaveGroup}
-              disabled={saving}
-              className="text-xs font-semibold px-3 h-9 rounded-md text-danger border border-danger/30 hover:bg-danger-soft hover:border-danger/50 transition-colors disabled:opacity-50"
+              onClick={handleDissolveGroup}
+              disabled={saving || loading}
+              className="text-xs font-semibold px-3 h-9 rounded-md text-danger border border-danger/30 hover:bg-danger-soft hover:border-danger/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Sair do grupo
+              Desfazer grupo
             </button>
           )}
           <div className="ml-auto flex items-center gap-2">
@@ -368,7 +378,7 @@ const MergeModal = ({ campaign, onClose, onSaved, theme }) => {
                 ? "Salvando…"
                 : baseInGroup
                   ? "Salvar mudanças"
-                  : `Mesclar ${diff.toAdd.length || ""}`.trim()}
+                  : `Agrupar ${diff.toAdd.length || ""}`.trim()}
             </button>
           </div>
         </footer>
@@ -429,7 +439,7 @@ function CandidateRow({
           )}
           {alreadyMerged && !isBase && (
             <span className="text-[9px] uppercase tracking-widest font-bold text-success">
-              mesclado
+              agrupado
             </span>
           )}
           {disabledReason && (
@@ -458,7 +468,7 @@ function ModeRadioGroup({ label, value, onChange }) {
         <ModeRadio
           checked={value === "merge"}
           onChange={() => onChange("merge")}
-          title="Mesclar"
+          title="Agrupar"
           subtitle="Une dados de todos os meses"
         />
         <ModeRadio

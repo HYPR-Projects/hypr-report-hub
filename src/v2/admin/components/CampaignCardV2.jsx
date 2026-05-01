@@ -276,16 +276,16 @@ function Divider() {
 }
 
 /**
- * Badge "MESCLADO" — pinta no header do card pra deixar claro que esse
- * token faz parte de um grupo Merge Reports. Sutil (signature soft, não
- * gritando) porque a campanha continua existindo enquanto admin — só o
- * report público é que é unificado.
+ * Badge "AGRUPADO" — pinta no header do card pra deixar claro que esse
+ * token faz parte de um grupo. Sutil (signature soft, não gritando)
+ * porque a campanha continua existindo enquanto admin — só o report
+ * público é que é unificado.
  */
 function MergedBadge() {
   return (
     <span
       className="inline-flex items-center gap-1 text-[9px] uppercase tracking-widest font-bold text-signature px-1.5 py-0.5 rounded bg-signature/8 border border-signature/30"
-      title="Pertence a um grupo de Merge Reports — o link do report unifica os tokens"
+      title="Pertence a um grupo — o link do report unifica os tokens"
     >
       <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
         <circle cx="6"  cy="6"  r="2.5" />
@@ -293,7 +293,7 @@ function MergedBadge() {
         <circle cx="18" cy="12" r="2.5" />
         <path d="M9 6c4 0 6 2 6 6M9 18c4 0 6-2 6-6" />
       </svg>
-      mesclado
+      agrupado
     </span>
   );
 }

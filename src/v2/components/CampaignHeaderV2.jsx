@@ -154,14 +154,14 @@ export function CampaignHeaderV2({
                 <span className="text-fg-subtle">·</span>
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-signature-soft border border-signature/40 text-signature text-[11px] font-bold tracking-wider">
                   <MergeIcon className="size-3" />
-                  {mergeMeta.members.length} reports unificados
+                  {mergeMeta.members.length} reports agrupados
                 </span>
               </>
             )}
           </div>
 
           {/* Filtro de visão (Merge Reports) — pills com "Visão agregada"
-              + cada membro. Aparece apenas quando o report é mesclado.
+              + cada membro. Aparece apenas quando o report é agrupado.
               Default = agregada. Click em outro pill faz refetch via
               ?view=<token> e renderiza dados single-token. */}
           {isMerged && (

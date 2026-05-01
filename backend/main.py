@@ -1146,6 +1146,19 @@ def report_data(request):
         data, hit = _get_report_cached(target_token, force_refresh=force_refresh)
         if data is None:
             return (jsonify({"error": "Campanha não encontrada"}), 404, headers)
+
+        # Quando o token base pertence a um grupo mas o caller pediu
+        # ?view=<token>, ainda anexamos merge_meta no payload single-token —
+        # senão o frontend perde os pills do switcher e o usuário fica
+        # "preso" na visão por mês sem conseguir voltar pra agregada.
+        if merge_info and view_param:
+            try:
+                meta = _get_merge_meta_only(merge_info["merge_id"])
+                if meta:
+                    data = {**data, "merge_meta": meta}
+            except Exception as e:
+                print(f"[WARN attach merge_meta to single-token view] {e}")
+
         total_ms = int((time.time() - t0) * 1000)
         resp_headers = {
             **headers,
@@ -1608,6 +1621,65 @@ def compose_merged_report(group, force_refresh=False):
         "survey":             None,
         "sheets_integration": sheets,
         "merge_meta":         merge_meta,
+    }
+
+
+def _get_merge_meta_only(merge_id):
+    """Constrói APENAS o merge_meta sem rodar a composição completa.
+
+    Usado quando o caller pediu ?view=<token> num token que pertence a um
+    grupo: o backend devolve o payload single-token, mas ainda precisamos
+    anexar merge_meta pra que o frontend renderize os pills do switcher
+    (Visão agregada / Jan / Fev). Sem isso, o usuário fica "preso" na
+    visão por mês sem conseguir voltar.
+
+    Reaproveita _get_report_cached por membro (cache warm na maioria dos
+    casos — o usuário acabou de vir da visão agregada). Não precisa rodar
+    _compose_totals nem outras agregações pesadas.
+    """
+    group = merges.get_merge_group(merge_id)
+    if not group:
+        return None
+    members = group.get("members") or []
+    tokens = [m["short_token"] for m in members if m.get("short_token")]
+    if not tokens:
+        return None
+
+    futures = {t: _query_pool.submit(_get_report_cached, t) for t in tokens}
+    per_token = {}
+    for t in tokens:
+        try:
+            data, _hit = futures[t].result()
+        except Exception as e:
+            print(f"[WARN _get_merge_meta_only] fetch token={t} falhou: {e}")
+            continue
+        if data is not None:
+            per_token[t] = data
+    if not per_token:
+        return None
+
+    active_token = _pick_active_token(per_token)
+    members_sorted = sorted(
+        per_token.keys(),
+        key=lambda t: _parse_iso_date_safe(
+            (per_token[t].get("campaign") or {}).get("start_date")
+        ) or date.min,
+    )
+    return {
+        "merge_id":     group["merge_id"],
+        "active_token": active_token,
+        "rmnd_mode":    group.get("rmnd_mode")  or merges.DEFAULT_ASSET_MODE,
+        "pdooh_mode":   group.get("pdooh_mode") or merges.DEFAULT_ASSET_MODE,
+        "members": [
+            {
+                "short_token":   t,
+                "campaign_name": (per_token[t].get("campaign") or {}).get("campaign_name"),
+                "start_date":    (per_token[t].get("campaign") or {}).get("start_date"),
+                "end_date":      (per_token[t].get("campaign") or {}).get("end_date"),
+                "is_active":     t == active_token,
+            }
+            for t in members_sorted
+        ],
     }
 
 

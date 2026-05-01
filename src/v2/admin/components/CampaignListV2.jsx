@@ -170,9 +170,9 @@ function Row({ campaign, onOpen, onOpenReport, teamMap }) {
           {merge_id && (
             <span
               className="text-[8.5px] uppercase tracking-widest font-bold text-signature px-1 rounded bg-signature/10"
-              title="Pertence a um grupo de Merge Reports"
+              title="Pertence a um grupo agrupado"
             >
-              merge
+              grupo
             </span>
           )}
         </div>
