@@ -411,6 +411,7 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
                 data={data}
                 aggregates={aggregates}
                 token={token}
+                view={view}
                 isAdmin={isAdmin}
                 adminJwt={adminJwt}
               />

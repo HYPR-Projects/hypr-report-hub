@@ -95,7 +95,12 @@ async function postAdmin(action, body, adminJwt) {
 // ─── Component ───────────────────────────────────────────────────────────────
 /**
  * @param {object}  props
- * @param {string}  props.token                short_token da campanha
+ * @param {string}  props.token                short_token da campanha (compat —
+ *                                              quando targetType/targetId não
+ *                                              vem, usa este como token-target)
+ * @param {string?} props.targetType           "token" | "merge" — defaults a "token"
+ * @param {string?} props.targetId             id do alvo (token ou merge_id) —
+ *                                              se omitido, usa props.token
  * @param {boolean} props.isAdmin
  * @param {string}  props.adminJwt
  * @param {object?} props.initialIntegration   payload.sheets_integration vindo
@@ -105,10 +110,16 @@ async function postAdmin(action, body, adminJwt) {
  */
 export default function SheetsIntegrationCardV2({
   token,
+  targetType: targetTypeProp,
+  targetId:   targetIdProp,
   isAdmin,
   adminJwt,
   initialIntegration,
 }) {
+  // target_type/target_id efetivos (compat: cai em token/{token} se não passado)
+  const targetType = targetTypeProp || "token";
+  const targetId   = targetIdProp   || token;
+
   const [integration, setIntegration] = useState(initialIntegration || null);
   const [busy, setBusy]               = useState(false);
   const [error, setError]             = useState(null);
@@ -116,17 +127,30 @@ export default function SheetsIntegrationCardV2({
   // objeto = mostrando UI de confirm com flag deleteSheet
   const [confirmDelete, setConfirmDelete] = useState(null);
 
+  // Quando o target muda (ex.: alterna entre Visão agregada e mês X), reseta
+  // pro initialIntegration daquele contexto. Sem isso, o card carregaria
+  // sempre a integração do primeiro target visto.
+  useEffect(() => {
+    setIntegration(initialIntegration || null);
+    setError(null);
+    setConfirmDelete(null);
+  }, [targetType, targetId, initialIntegration]);
+
   // Quando admin loga e o payload trouxe view pública, busca view completa
   // pra ter created_by, last_synced_at, etc.
   useEffect(() => {
-    if (!isAdmin || !adminJwt) return;
+    if (!isAdmin || !adminJwt || !targetId) return;
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(
-          `${API_URL}?action=sheets_status&token=${encodeURIComponent(token)}`,
-          { headers: adminAuthHeaders(adminJwt) },
-        );
+        const qs = new URLSearchParams({
+          action:      "sheets_status",
+          target_type: targetType,
+          target_id:   targetId,
+        }).toString();
+        const res = await fetch(`${API_URL}?${qs}`, {
+          headers: adminAuthHeaders(adminJwt),
+        });
         if (!res.ok) return;
         const json = await res.json();
         if (!cancelled) setIntegration(json.integration || null);
@@ -135,7 +159,7 @@ export default function SheetsIntegrationCardV2({
       }
     })();
     return () => { cancelled = true; };
-  }, [isAdmin, adminJwt, token]);
+  }, [isAdmin, adminJwt, targetType, targetId]);
 
   const handleConnect = useCallback(async () => {
     setError(null);
@@ -145,14 +169,22 @@ export default function SheetsIntegrationCardV2({
       const code = await requestOAuthCode();
       const res = await postAdmin(
         "sheets_create",
-        { short_token: token, code, redirect_uri: "postmessage" },
+        {
+          target_type:  targetType,
+          target_id:    targetId,
+          code,
+          redirect_uri: "postmessage",
+        },
         adminJwt,
       );
-      // Refetch pra trazer view admin completa
-      const status = await fetch(
-        `${API_URL}?action=sheets_status&token=${encodeURIComponent(token)}`,
-        { headers: adminAuthHeaders(adminJwt) },
-      ).then((r) => r.json());
+      const qs = new URLSearchParams({
+        action:      "sheets_status",
+        target_type: targetType,
+        target_id:   targetId,
+      }).toString();
+      const status = await fetch(`${API_URL}?${qs}`, {
+        headers: adminAuthHeaders(adminJwt),
+      }).then((r) => r.json());
       setIntegration(status.integration || {
         spreadsheet_url: res.spreadsheet_url,
         status: "active",
@@ -162,20 +194,24 @@ export default function SheetsIntegrationCardV2({
     } finally {
       setBusy(false);
     }
-  }, [token, adminJwt]);
+  }, [targetType, targetId, adminJwt]);
 
   const handleSyncNow = useCallback(async () => {
     setError(null);
     setBusy(true);
     try {
-      const res = await postAdmin("sheets_sync_now", { short_token: token }, adminJwt);
+      const res = await postAdmin(
+        "sheets_sync_now",
+        { target_type: targetType, target_id: targetId },
+        adminJwt,
+      );
       setIntegration(res.integration || integration);
     } catch (e) {
       setError(e.message || "Erro ao sincronizar");
     } finally {
       setBusy(false);
     }
-  }, [token, adminJwt, integration]);
+  }, [targetType, targetId, adminJwt, integration]);
 
   const handleDeleteClick = useCallback(() => {
     // Abre UI inline de confirmação. Default: NÃO deletar a sheet do Drive
@@ -191,7 +227,11 @@ export default function SheetsIntegrationCardV2({
     try {
       await postAdmin(
         "sheets_delete",
-        { short_token: token, delete_sheet: confirmDelete.deleteSheet },
+        {
+          target_type:  targetType,
+          target_id:    targetId,
+          delete_sheet: confirmDelete.deleteSheet,
+        },
         adminJwt,
       );
       setIntegration(null);
@@ -201,7 +241,7 @@ export default function SheetsIntegrationCardV2({
     } finally {
       setBusy(false);
     }
-  }, [token, adminJwt, confirmDelete]);
+  }, [targetType, targetId, adminJwt, confirmDelete]);
 
   const handleCancelDelete = useCallback(() => {
     setConfirmDelete(null);
@@ -215,19 +255,21 @@ export default function SheetsIntegrationCardV2({
 
   // ── Admin sem integração: estado "vazio" ──────────────────────────────────
   if (isAdmin && !integration) {
+    const isMerge = targetType === "merge";
     return (
       <Card>
         <div className="flex items-start gap-4">
           <SheetIcon />
           <div className="flex-1 min-w-0">
             <div className="text-sm font-semibold text-fg">
-              Sincronizar com Google Sheets
+              {isMerge
+                ? "Sincronizar Visão Agregada com Google Sheets"
+                : "Sincronizar com Google Sheets"}
             </div>
             <p className="text-xs text-fg-muted mt-1 max-w-2xl">
-              Cria uma planilha no seu Drive com a Base de Dados completa,
-              atualizada diariamente às 06:00 BRT. Compartilhe com o cliente
-              como faria com qualquer planilha. Sync automático para 30 dias
-              após o término da campanha.
+              {isMerge
+                ? "Cria uma planilha no seu Drive com a base unificada de todos os tokens do grupo (com colunas extras Mês e Token), atualizada diariamente às 06:00 BRT."
+                : "Cria uma planilha no seu Drive com a Base de Dados completa, atualizada diariamente às 06:00 BRT. Compartilhe com o cliente como faria com qualquer planilha. Sync automático para 30 dias após o término da campanha."}
             </p>
             {error && <ErrorLine msg={error} />}
           </div>
@@ -237,7 +279,11 @@ export default function SheetsIntegrationCardV2({
             disabled={busy}
             className="shrink-0 inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-lg bg-signature text-canvas hover:opacity-90 disabled:opacity-50 transition"
           >
-            {busy ? "Conectando..." : "Conectar Google Sheets"}
+            {busy
+              ? "Conectando..."
+              : isMerge
+                ? "Conectar sheet do agregado"
+                : "Conectar Google Sheets"}
           </button>
         </div>
       </Card>

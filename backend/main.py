@@ -394,14 +394,19 @@ def report_data(request):
         admin_email = admin.get("email") or "unknown"
         try:
             body = request.get_json(silent=True) or {}
-            short_token = (body.get("short_token") or "").strip()
+            target_type = (body.get("target_type") or "token").strip()
+            # Compat: se target_type não veio, usa short_token como token-target.
+            target_id   = (body.get("target_id") or body.get("short_token")
+                           or body.get("merge_id") or "").strip()
             code        = (body.get("code") or "").strip()
             # ux_mode='popup' do GIS exige redirect_uri='postmessage'.
             # Mantemos como parâmetro pra deixar o backend agnóstico ao
             # modo (caso queiramos suportar redirect mode no futuro).
             redirect_uri = (body.get("redirect_uri") or "postmessage").strip()
-            if not short_token or not code:
-                return (jsonify({"error": "short_token e code são obrigatórios"}), 400, headers)
+            if not target_id or not code:
+                return (jsonify({"error": "target_id e code são obrigatórios"}), 400, headers)
+            if target_type not in ("token", "merge"):
+                return (jsonify({"error": "target_type inválido (use 'token' ou 'merge')"}), 400, headers)
 
             # 1) Troca code por tokens
             tokens = sheets_integration.exchange_code_for_tokens(code, redirect_uri)
@@ -415,17 +420,6 @@ def report_data(request):
                     400, headers,
                 )
 
-            # 2) Carrega dados da campanha pra popular a sheet.
-            # _get_report_cached retorna tupla (data, was_cached) — só queremos data.
-            payload, _ = _get_report_cached(short_token, force_refresh=False)
-            if not payload:
-                return (jsonify({"error": "Campanha não encontrada"}), 404, headers)
-            detail_rows  = payload.get("detail") or []
-            totals_rows  = payload.get("totals") or []
-            campaign     = payload.get("campaign") or {}
-            campaign_name = campaign.get("campaign_name") or short_token
-            client_name   = campaign.get("client_name")
-
             def _parse_iso_date(v):
                 if not v:
                     return None
@@ -434,28 +428,80 @@ def report_data(request):
                 except Exception:
                     return None
 
-            start_date_obj = _parse_iso_date(campaign.get("start_date"))
-            end_date_obj   = _parse_iso_date(campaign.get("end_date"))
+            if target_type == "merge":
+                # Carrega membros do grupo + detail/totals de cada um.
+                group = merges.get_merge_group(target_id)
+                if not group or not (group.get("members") or []):
+                    return (jsonify({"error": "Grupo não encontrado ou vazio"}), 404, headers)
+                members_payload = []
+                client_name_pick = None
+                campaign_name_pick = None
+                for m in group["members"]:
+                    st = m.get("short_token")
+                    if not st:
+                        continue
+                    pl, _ = _get_report_cached(st, force_refresh=False)
+                    if not pl:
+                        continue
+                    camp = pl.get("campaign") or {}
+                    if not client_name_pick:
+                        client_name_pick = camp.get("client_name")
+                    if not campaign_name_pick:
+                        campaign_name_pick = camp.get("campaign_name")
+                    members_payload.append({
+                        "short_token": st,
+                        "detail_rows": pl.get("detail") or [],
+                        "totals_rows": pl.get("totals") or [],
+                        "start_date":  _parse_iso_date(camp.get("start_date")),
+                        "end_date":    _parse_iso_date(camp.get("end_date")),
+                    })
+                if not members_payload:
+                    return (jsonify({"error": "Nenhum membro do grupo retornou dados"}), 404, headers)
 
-            # 3) Cria sheet + persiste
-            result = sheets_integration.create_sheet_for_campaign(
-                short_token=short_token,
-                refresh_token=refresh_token,
-                member_email=admin_email,
-                detail_rows=detail_rows,
-                totals_rows=totals_rows,
-                campaign_name=campaign_name,
-                client_name=client_name,
-                start_date=start_date_obj,
-                end_date=end_date_obj,
-            )
+                result = sheets_integration.create_sheet_for_merge(
+                    merge_id=target_id,
+                    refresh_token=refresh_token,
+                    member_email=admin_email,
+                    members=members_payload,
+                    client_name=client_name_pick,
+                    campaign_name=campaign_name_pick,
+                )
+                # Invalida cache de TODOS os tokens do grupo + do merged.
+                for m in group["members"]:
+                    if m.get("short_token"):
+                        _cache_invalidate_token(m["short_token"])
+                _merged_report_cache.pop(target_id, None)
+            else:
+                # token-target
+                payload, _ = _get_report_cached(target_id, force_refresh=False)
+                if not payload:
+                    return (jsonify({"error": "Campanha não encontrada"}), 404, headers)
+                detail_rows  = payload.get("detail") or []
+                totals_rows  = payload.get("totals") or []
+                campaign     = payload.get("campaign") or {}
+                campaign_name = campaign.get("campaign_name") or target_id
+                client_name   = campaign.get("client_name")
 
-            # Invalida cache do report pra próxima leitura trazer
-            # spreadsheet_url no payload pública.
-            _cache_invalidate_token(short_token)
+                start_date_obj = _parse_iso_date(campaign.get("start_date"))
+                end_date_obj   = _parse_iso_date(campaign.get("end_date"))
+
+                result = sheets_integration.create_sheet_for_campaign(
+                    short_token=target_id,
+                    refresh_token=refresh_token,
+                    member_email=admin_email,
+                    detail_rows=detail_rows,
+                    totals_rows=totals_rows,
+                    campaign_name=campaign_name,
+                    client_name=client_name,
+                    start_date=start_date_obj,
+                    end_date=end_date_obj,
+                )
+                _cache_invalidate_token(target_id)
 
             return (jsonify({
                 "status":          "active",
+                "target_type":     target_type,
+                "target_id":       target_id,
                 "spreadsheet_id":  result["spreadsheet_id"],
                 "spreadsheet_url": result["spreadsheet_url"],
             }), 200, headers)
@@ -468,10 +514,17 @@ def report_data(request):
         if not authenticate_admin(request):
             return (jsonify({"error": "Não autorizado"}), 401, headers)
         try:
-            short_token = (request.args.get("token") or "").strip()
-            if not short_token:
-                return (jsonify({"error": "token obrigatório"}), 400, headers)
-            status = sheets_integration.status_for_response(short_token, is_admin=True)
+            target_type = (request.args.get("target_type") or "token").strip()
+            target_id   = (request.args.get("target_id")
+                           or request.args.get("token")
+                           or request.args.get("merge_id") or "").strip()
+            if not target_id:
+                return (jsonify({"error": "target_id obrigatório"}), 400, headers)
+            if target_type not in ("token", "merge"):
+                return (jsonify({"error": "target_type inválido"}), 400, headers)
+            status = sheets_integration.status_for_response(
+                target_id, is_admin=True, target_type=target_type,
+            )
             return (jsonify({"integration": status}), 200, headers)
         except Exception as e:
             print(f"[ERROR sheets_status] {e}")
@@ -485,22 +538,58 @@ def report_data(request):
             return (jsonify({"error": "Não autorizado"}), 401, headers)
         try:
             body = request.get_json(silent=True) or {}
-            short_token = (body.get("short_token") or "").strip()
-            if not short_token:
-                return (jsonify({"error": "short_token obrigatório"}), 400, headers)
+            target_type = (body.get("target_type") or "token").strip()
+            target_id   = (body.get("target_id") or body.get("short_token")
+                           or body.get("merge_id") or "").strip()
+            if not target_id:
+                return (jsonify({"error": "target_id obrigatório"}), 400, headers)
+            if target_type not in ("token", "merge"):
+                return (jsonify({"error": "target_type inválido"}), 400, headers)
 
-            # _get_report_cached retorna tupla (data, was_cached).
-            payload, _ = _get_report_cached(short_token, force_refresh=True)
-            if not payload:
-                return (jsonify({"error": "Campanha não encontrada"}), 404, headers)
-            detail_rows = payload.get("detail") or []
-            totals_rows = payload.get("totals") or []
+            if target_type == "merge":
+                group = merges.get_merge_group(target_id)
+                if not group:
+                    return (jsonify({"error": "Grupo não encontrado"}), 404, headers)
 
-            sheets_integration.sync_sheet(short_token, detail_rows, totals_rows)
+                def _parse_iso_date(v):
+                    if not v: return None
+                    try: return datetime.fromisoformat(str(v)[:10]).date()
+                    except Exception: return None
 
-            # Atualiza payload pra refletir last_synced_at recente
-            _cache_invalidate_token(short_token)
-            status = sheets_integration.status_for_response(short_token, is_admin=True)
+                members_payload = []
+                for m in (group.get("members") or []):
+                    st = m.get("short_token")
+                    if not st: continue
+                    pl, _ = _get_report_cached(st, force_refresh=True)
+                    if not pl: continue
+                    camp = pl.get("campaign") or {}
+                    members_payload.append({
+                        "short_token": st,
+                        "detail_rows": pl.get("detail") or [],
+                        "totals_rows": pl.get("totals") or [],
+                        "start_date":  _parse_iso_date(camp.get("start_date")),
+                        "end_date":    _parse_iso_date(camp.get("end_date")),
+                    })
+                sheets_integration.sync_merge_sheet(target_id, members_payload)
+                # Invalida caches afetados
+                for m in (group.get("members") or []):
+                    if m.get("short_token"):
+                        _cache_invalidate_token(m["short_token"])
+                _merged_report_cache.pop(target_id, None)
+            else:
+                payload, _ = _get_report_cached(target_id, force_refresh=True)
+                if not payload:
+                    return (jsonify({"error": "Campanha não encontrada"}), 404, headers)
+                sheets_integration.sync_sheet(
+                    target_id,
+                    payload.get("detail") or [],
+                    payload.get("totals") or [],
+                )
+                _cache_invalidate_token(target_id)
+
+            status = sheets_integration.status_for_response(
+                target_id, is_admin=True, target_type=target_type,
+            )
             return (jsonify({"integration": status}), 200, headers)
         except Exception as e:
             print(f"[ERROR sheets_sync_now] {e}")
@@ -517,15 +606,40 @@ def report_data(request):
         if not expected or not hmac.compare_digest(provided, expected):
             return (jsonify({"error": "Não autorizado"}), 401, headers)
         try:
-            def _detail_loader(short_token):
+            def _token_loader(short_token):
                 # _get_report_cached retorna tupla (data, was_cached).
-                # sync_all_due espera (detail, totals).
                 payload, _ = _get_report_cached(short_token, force_refresh=True)
                 if not payload:
                     return ([], [])
                 return (payload.get("detail") or [], payload.get("totals") or [])
 
-            summary = sheets_integration.sync_all_due(_detail_loader)
+            def _parse_iso_date(v):
+                if not v: return None
+                try: return datetime.fromisoformat(str(v)[:10]).date()
+                except Exception: return None
+
+            def _merge_loader(merge_id):
+                # Carrega grupo + detail/totals de cada membro, anotado com
+                # start_date/end_date pra a coluna `Mês` da sheet agregada.
+                group = merges.get_merge_group(merge_id)
+                if not group: return []
+                out = []
+                for m in (group.get("members") or []):
+                    st = m.get("short_token")
+                    if not st: continue
+                    pl, _ = _get_report_cached(st, force_refresh=True)
+                    if not pl: continue
+                    camp = pl.get("campaign") or {}
+                    out.append({
+                        "short_token": st,
+                        "detail_rows": pl.get("detail") or [],
+                        "totals_rows": pl.get("totals") or [],
+                        "start_date":  _parse_iso_date(camp.get("start_date")),
+                        "end_date":    _parse_iso_date(camp.get("end_date")),
+                    })
+                return out
+
+            summary = sheets_integration.sync_all_due(_token_loader, _merge_loader)
             return (jsonify({"summary": summary}), 200, headers)
         except Exception as e:
             print(f"[ERROR sheets_sync_all] {e}")
@@ -540,15 +654,28 @@ def report_data(request):
             return (jsonify({"error": "Não autorizado"}), 401, headers)
         try:
             body = request.get_json(silent=True) or {}
-            short_token = (body.get("short_token") or "").strip()
-            if not short_token:
-                return (jsonify({"error": "short_token obrigatório"}), 400, headers)
-            # Flag opcional: se True, deleta também o arquivo do Drive
-            # (não só o registro). Default False = comportamento histórico
-            # (sheet permanece no Drive como histórico).
+            target_type = (body.get("target_type") or "token").strip()
+            target_id   = (body.get("target_id") or body.get("short_token")
+                           or body.get("merge_id") or "").strip()
+            if not target_id:
+                return (jsonify({"error": "target_id obrigatório"}), 400, headers)
+            if target_type not in ("token", "merge"):
+                return (jsonify({"error": "target_type inválido"}), 400, headers)
+            # Flag opcional: se True, deleta também o arquivo do Drive.
             delete_sheet = bool(body.get("delete_sheet"))
-            result = sheets_integration.delete_integration(short_token, delete_sheet=delete_sheet)
-            _cache_invalidate_token(short_token)
+            result = sheets_integration.delete_integration(
+                target_id, delete_sheet=delete_sheet, target_type=target_type,
+            )
+            # Invalidação de cache:
+            #   token  → invalida o token; merge → invalida todos os membros + merged
+            if target_type == "merge":
+                group = merges.get_merge_group(target_id)
+                for m in (group.get("members") or []) if group else []:
+                    if m.get("short_token"):
+                        _cache_invalidate_token(m["short_token"])
+                _merged_report_cache.pop(target_id, None)
+            else:
+                _cache_invalidate_token(target_id)
             return (jsonify({"status": "deleted", **result}), 200, headers)
         except Exception as e:
             print(f"[ERROR sheets_delete] {e}")
@@ -1586,8 +1713,18 @@ def compose_merged_report(group, force_refresh=False):
     rmnd  = _compose_asset_payload(per_token, active_token, rmnd_mode,  "rmnd",  members_sorted)
     pdooh = _compose_asset_payload(per_token, active_token, pdooh_mode, "pdooh", members_sorted)
 
-    # Sheets integration: ativo (per-token estado de upload de planilha)
-    sheets = active_data.get("sheets_integration")
+    # Sheets integration na visão agregada: prioriza a integração do
+    # MERGE (1 sheet com a base unificada). Se não existe, fallback pro
+    # token ativo (comportamento legado).
+    sheets = None
+    try:
+        sheets = sheets_integration.status_for_response(
+            group["merge_id"], is_admin=False, target_type="merge",
+        )
+    except Exception as e:
+        print(f"[WARN compose_merged_report sheets_integration merge] {e}")
+    if not sheets:
+        sheets = active_data.get("sheets_integration")
 
     merge_meta = {
         "merge_id":     group["merge_id"],

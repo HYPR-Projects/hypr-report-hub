@@ -32,16 +32,29 @@ rotação automática anual, audit log completo. Custo trivial (~$0.06/mês).
 Schema da tabela
 ----------------
 `{PROJECT_ID}.{DATASET_ASSETS}.sheets_integrations`:
-    short_token        STRING NOT NULL  -- chave da campanha (1 sheet por campanha)
+    short_token        STRING NOT NULL  -- target_id (column name é histórico —
+                                          quando target_type='token' guarda o
+                                          short_token da campanha; quando
+                                          target_type='merge' guarda o merge_id)
+    target_type        STRING           -- 'token' | 'merge' (default 'token'
+                                          via backfill — coluna adicionada
+                                          em PR-merge-sheets)
     spreadsheet_id     STRING           -- id da sheet criada
     spreadsheet_url    STRING           -- url pra abrir
     created_by_email   STRING           -- membro HYPR que ativou
     refresh_token_enc  BYTES            -- KMS-encrypted refresh_token
     created_at         TIMESTAMP
     last_synced_at     TIMESTAMP
-    sync_until         DATE             -- end_date + 30 dias
+    sync_until         DATE             -- end_date + 30 dias (token: do próprio
+                                          token; merge: maior end_date do grupo)
     status             STRING           -- active | paused | revoked | error
     last_error         STRING           -- detalhe do último erro de sync
+
+Chave lógica: (target_type, short_token). A coluna `short_token` mantém o
+nome por compat — funcionalmente é o "target_id". Pra um cliente, podem
+existir simultaneamente:
+  - 1 row (target_type='merge', short_token=<merge_id>)         → sheet do agregado
+  - N rows (target_type='token', short_token=<short_token_X>)   → 1 sheet por mês
 
 Tabela criada idempotentemente via `ensure_table_exists` na primeira
 chamada de qualquer endpoint de sheets.
@@ -147,6 +160,12 @@ def ensure_table_exists() -> None:
     """
     Cria a tabela `sheets_integrations` se ainda não existe. Idempotente.
     Chamada antes de qualquer leitura/escrita.
+
+    Migra schema antigo (sem target_type) adicionando a coluna e backfilling
+    rows existentes com target_type='token'. ALTER TABLE ADD COLUMN é
+    no-op se a coluna já existe (BQ ignora silenciosamente via
+    `IF NOT EXISTS`-like behavior usando try/except — BQ DDL não suporta
+    a sintaxe `IF NOT EXISTS` em ADD COLUMN ainda).
     """
     global _table_ensured
     if _table_ensured:
@@ -157,6 +176,7 @@ def ensure_table_exists() -> None:
         sql = f"""
         CREATE TABLE IF NOT EXISTS `{_table_id()}` (
             short_token        STRING NOT NULL,
+            target_type        STRING,
             spreadsheet_id     STRING,
             spreadsheet_url    STRING,
             created_by_email   STRING,
@@ -169,6 +189,21 @@ def ensure_table_exists() -> None:
         )
         """
         _bq_client().query(sql).result()
+        # Migration: adiciona target_type em tabelas pré-existentes.
+        # ADD COLUMN IF NOT EXISTS é suportado em BQ desde 2023.
+        try:
+            _bq_client().query(
+                f"ALTER TABLE `{_table_id()}` ADD COLUMN IF NOT EXISTS target_type STRING"
+            ).result()
+        except Exception as e:
+            print(f"[WARN ensure_table_exists ADD COLUMN target_type] {e}")
+        # Backfill rows legacy onde target_type ficou NULL.
+        try:
+            _bq_client().query(
+                f"UPDATE `{_table_id()}` SET target_type = 'token' WHERE target_type IS NULL"
+            ).result()
+        except Exception as e:
+            print(f"[WARN ensure_table_exists backfill target_type] {e}")
         _table_ensured = True
 
 
@@ -261,12 +296,29 @@ def _build_sheets_client(access_token: str):
 
 
 # ─── BigQuery row ops ────────────────────────────────────────────────────────
-def get_integration(short_token: str) -> Optional[Dict]:
-    """Busca a integração ativa de uma campanha. None se não existe."""
+TARGET_TOKEN = "token"
+TARGET_MERGE = "merge"
+_VALID_TARGETS = (TARGET_TOKEN, TARGET_MERGE)
+
+
+def _validate_target_type(target_type: str) -> str:
+    if target_type not in _VALID_TARGETS:
+        raise ValueError(f"target_type inválido: {target_type!r}. Use 'token' ou 'merge'.")
+    return target_type
+
+
+def get_integration(target_id: str, target_type: str = TARGET_TOKEN) -> Optional[Dict]:
+    """Busca a integração ativa de uma target (token ou merge). None se não existe.
+
+    Compat: chamadas antigas com `get_integration(short_token)` continuam
+    válidas — default target_type='token' preserva o comportamento original.
+    """
+    _validate_target_type(target_type)
     ensure_table_exists()
     sql = f"""
     SELECT
         short_token,
+        target_type,
         spreadsheet_id,
         spreadsheet_url,
         created_by_email,
@@ -277,7 +329,8 @@ def get_integration(short_token: str) -> Optional[Dict]:
         status,
         last_error
     FROM `{_table_id()}`
-    WHERE short_token = @short_token
+    WHERE short_token = @target_id
+      AND COALESCE(target_type, 'token') = @target_type
       AND status != 'deleted'
     LIMIT 1
     """
@@ -285,7 +338,8 @@ def get_integration(short_token: str) -> Optional[Dict]:
         sql,
         job_config=bigquery.QueryJobConfig(
             query_parameters=[
-                bigquery.ScalarQueryParameter("short_token", "STRING", short_token),
+                bigquery.ScalarQueryParameter("target_id",   "STRING", target_id),
+                bigquery.ScalarQueryParameter("target_type", "STRING", target_type),
             ],
         ),
     )
@@ -294,6 +348,11 @@ def get_integration(short_token: str) -> Optional[Dict]:
         return None
     r = rows[0]
     return {
+        "target_id":        r["short_token"],
+        "target_type":      r["target_type"] or TARGET_TOKEN,
+        # Alias retrocompat: muitos callers ainda leem "short_token".
+        # Pra target_type='merge' isso será o merge_id (consistente com a
+        # semântica nova do campo).
         "short_token":      r["short_token"],
         "spreadsheet_id":   r["spreadsheet_id"],
         "spreadsheet_url":  r["spreadsheet_url"],
@@ -309,9 +368,9 @@ def get_integration(short_token: str) -> Optional[Dict]:
 
 def _upsert_integration(row: Dict) -> None:
     """
-    Upsert via MERGE — atualiza row existente (mesmo short_token, qualquer
-    status incluindo 'deleted') ou insere nova. Tudo numa única operação
-    DML transacional.
+    Upsert via MERGE — atualiza row existente (mesma chave (target_type,
+    target_id), qualquer status incluindo 'deleted') ou insere nova. Tudo
+    numa única operação DML transacional.
 
     Por que MERGE em vez de DELETE+INSERT
     -------------------------------------
@@ -322,19 +381,26 @@ def _upsert_integration(row: Dict) -> None:
 
     Comportamento esperado
     ----------------------
-    - Primeira ativação dessa campanha: INSERT
+    - Primeira ativação desse target: INSERT
     - Re-ativação após delete: UPDATE (status=deleted → status=active,
       novos tokens, novo spreadsheet_id, etc.)
     - Re-ativação de uma já ativa: UPDATE (rotação de tokens etc.)
     """
     ensure_table_exists()
     refresh_token_enc_bytes = _b64_to_bytes(row["refresh_token_enc"])
+    target_type = _validate_target_type(row.get("target_type", TARGET_TOKEN))
+    # `target_id` é a string opaca persistida na coluna `short_token`.
+    # Aceita tanto a chave nova quanto o legado pra simplificar callsites.
+    target_id = row.get("target_id") or row.get("short_token")
+    if not target_id:
+        raise ValueError("_upsert_integration: target_id é obrigatório")
 
     sql = f"""
     MERGE INTO `{_table_id()}` T
     USING (
         SELECT
-            @short_token        AS short_token,
+            @target_id          AS short_token,
+            @target_type        AS target_type,
             @spreadsheet_id     AS spreadsheet_id,
             @spreadsheet_url    AS spreadsheet_url,
             @created_by_email   AS created_by_email,
@@ -346,7 +412,9 @@ def _upsert_integration(row: Dict) -> None:
             @last_error         AS last_error
     ) S
     ON T.short_token = S.short_token
+       AND COALESCE(T.target_type, 'token') = S.target_type
     WHEN MATCHED THEN UPDATE SET
+        target_type        = S.target_type,
         spreadsheet_id     = S.spreadsheet_id,
         spreadsheet_url    = S.spreadsheet_url,
         created_by_email   = S.created_by_email,
@@ -357,18 +425,19 @@ def _upsert_integration(row: Dict) -> None:
         status             = S.status,
         last_error         = S.last_error
     WHEN NOT MATCHED THEN INSERT (
-        short_token, spreadsheet_id, spreadsheet_url, created_by_email,
+        short_token, target_type, spreadsheet_id, spreadsheet_url, created_by_email,
         refresh_token_enc, created_at, last_synced_at, sync_until,
         status, last_error
     ) VALUES (
-        S.short_token, S.spreadsheet_id, S.spreadsheet_url, S.created_by_email,
+        S.short_token, S.target_type, S.spreadsheet_id, S.spreadsheet_url, S.created_by_email,
         S.refresh_token_enc, S.created_at, S.last_synced_at, S.sync_until,
         S.status, S.last_error
     )
     """
 
     params = [
-        bigquery.ScalarQueryParameter("short_token",       "STRING",    row["short_token"]),
+        bigquery.ScalarQueryParameter("target_id",         "STRING",    target_id),
+        bigquery.ScalarQueryParameter("target_type",       "STRING",    target_type),
         bigquery.ScalarQueryParameter("spreadsheet_id",    "STRING",    row["spreadsheet_id"]),
         bigquery.ScalarQueryParameter("spreadsheet_url",   "STRING",    row["spreadsheet_url"]),
         bigquery.ScalarQueryParameter("created_by_email",  "STRING",    row["created_by_email"]),
@@ -386,15 +455,20 @@ def _upsert_integration(row: Dict) -> None:
 
 
 def _update_status(
-    short_token: str,
+    target_id: str,
     *,
+    target_type: str = TARGET_TOKEN,
     status: Optional[str] = None,
     last_synced_at: Optional[datetime] = None,
     last_error: Optional[str] = None,
 ) -> None:
     """Atualiza apenas campos de status/erro/sync. Não toca refresh_token."""
+    _validate_target_type(target_type)
     sets = []
-    params = [bigquery.ScalarQueryParameter("short_token", "STRING", short_token)]
+    params = [
+        bigquery.ScalarQueryParameter("target_id",   "STRING", target_id),
+        bigquery.ScalarQueryParameter("target_type", "STRING", target_type),
+    ]
     if status is not None:
         sets.append("status = @status")
         params.append(bigquery.ScalarQueryParameter("status", "STRING", status))
@@ -406,14 +480,22 @@ def _update_status(
         params.append(bigquery.ScalarQueryParameter("last_error", "STRING", last_error))
     if not sets:
         return
-    sql = f"UPDATE `{_table_id()}` SET {', '.join(sets)} WHERE short_token = @short_token"
+    sql = (
+        f"UPDATE `{_table_id()}` SET {', '.join(sets)} "
+        f"WHERE short_token = @target_id "
+        f"  AND COALESCE(target_type, 'token') = @target_type"
+    )
     _bq_client().query(
         sql,
         job_config=bigquery.QueryJobConfig(query_parameters=params),
     ).result()
 
 
-def delete_integration(short_token: str, delete_sheet: bool = False) -> Dict:
+def delete_integration(
+    target_id: str,
+    delete_sheet: bool = False,
+    target_type: str = TARGET_TOKEN,
+) -> Dict:
     """
     Soft delete: marca status='deleted' em vez de DELETE FROM.
 
@@ -443,13 +525,14 @@ def delete_integration(short_token: str, delete_sheet: bool = False) -> Dict:
     row existente ao invés de DELETE+INSERT, evitando outro caminho
     pro mesmo erro.
     """
+    _validate_target_type(target_type)
     ensure_table_exists()
     sheet_deleted = False
 
     if delete_sheet:
         # Pega a row antes de marcar como deleted — precisamos do
         # refresh_token e spreadsheet_id pra deletar via Drive API.
-        integ = get_integration(short_token)
+        integ = get_integration(target_id, target_type=target_type)
         if integ and integ.get("spreadsheet_id"):
             try:
                 refresh_token = _decrypt(integ["refresh_token_enc"])
@@ -460,20 +543,22 @@ def delete_integration(short_token: str, delete_sheet: bool = False) -> Dict:
                 # Best-effort. Continua o soft delete da row mesmo se a
                 # deleção do arquivo falhou (ex.: file já apagado manual,
                 # token expirado etc.). Logamos pra investigação.
-                print(f"[WARN delete_integration drive {short_token}] {e}")
+                print(f"[WARN delete_integration drive {target_type}/{target_id}] {e}")
 
     sql = f"""
     UPDATE `{_table_id()}`
     SET status = 'deleted',
         last_error = NULL
-    WHERE short_token = @short_token
+    WHERE short_token = @target_id
+      AND COALESCE(target_type, 'token') = @target_type
       AND status != 'deleted'
     """
     _bq_client().query(
         sql,
         job_config=bigquery.QueryJobConfig(
             query_parameters=[
-                bigquery.ScalarQueryParameter("short_token", "STRING", short_token),
+                bigquery.ScalarQueryParameter("target_id",   "STRING", target_id),
+                bigquery.ScalarQueryParameter("target_type", "STRING", target_type),
             ],
         ),
     ).result()
@@ -484,10 +569,18 @@ def list_active_integrations() -> List[Dict]:
     """
     Retorna todas as integrações que ainda devem sincronizar
     (status='active' AND sync_until >= today). Usado pelo cron diário.
+
+    Cada item traz target_type/target_id pra que `sync_all_due` saiba se
+    é uma integração token ou merge e roteie pro loader correto.
     """
     ensure_table_exists()
     sql = f"""
-    SELECT short_token, spreadsheet_id, refresh_token_enc, created_by_email
+    SELECT
+        short_token,
+        COALESCE(target_type, 'token') AS target_type,
+        spreadsheet_id,
+        refresh_token_enc,
+        created_by_email
     FROM `{_table_id()}`
     WHERE status = 'active'
       AND sync_until >= CURRENT_DATE("America/Sao_Paulo")
@@ -495,6 +588,9 @@ def list_active_integrations() -> List[Dict]:
     rows = list(_bq_client().query(sql).result())
     return [
         {
+            "target_id":         r["short_token"],
+            "target_type":       r["target_type"],
+            # Compat retro:
             "short_token":       r["short_token"],
             "spreadsheet_id":    r["spreadsheet_id"],
             "refresh_token_enc": r["refresh_token_enc"],
@@ -511,22 +607,38 @@ def list_expired_integrations() -> List[Dict]:
     """
     ensure_table_exists()
     sql = f"""
-    SELECT short_token
+    SELECT
+        short_token,
+        COALESCE(target_type, 'token') AS target_type
     FROM `{_table_id()}`
     WHERE status = 'active'
       AND sync_until < CURRENT_DATE("America/Sao_Paulo")
     """
     rows = list(_bq_client().query(sql).result())
-    return [{"short_token": r["short_token"]} for r in rows]
+    return [
+        {
+            "target_id":   r["short_token"],
+            "target_type": r["target_type"],
+            "short_token": r["short_token"],  # compat
+        }
+        for r in rows
+    ]
 
 
-def sync_all_due(detail_loader) -> Dict:
+def sync_all_due(token_loader, merge_loader=None) -> Dict:
     """
     Roda o sync de todas as integrações elegíveis. Chamado pelo cron diário.
 
-    `detail_loader` é um callable `(short_token) -> (detail_rows, totals_rows)`
-    que carrega as rows necessárias. Injetado por dependency injection pra
-    evitar import circular (módulo sheets_integration não pode importar main).
+    Args
+    ----
+    token_loader : callable
+        `(short_token) -> (detail_rows, totals_rows)` — carrega as rows do
+        token único. Injetado por DI pra evitar import circular.
+    merge_loader : callable | None
+        `(merge_id) -> list[(short_token, detail_rows, totals_rows, member_meta)]`
+        — carrega rows de cada membro do grupo já anotadas com a
+        identificação do mês/token. Se None, integrações com
+        target_type='merge' são puladas com warning.
 
     Retorna sumário com contagens. Erros individuais não interrompem o loop —
     cada falha é registrada em last_error/status do registro afetado.
@@ -539,36 +651,54 @@ def sync_all_due(detail_loader) -> Dict:
       (3) Sequencial é mais fácil de debugar e dá retry granular natural.
     """
     summary = {
-        "synced":      0,
-        "revoked":     0,
-        "errors":      0,
-        "paused":      0,
+        "synced":       0,
+        "revoked":      0,
+        "errors":       0,
+        "paused":       0,
         "total_active": 0,
     }
 
     # Pausa primeiro as expiradas (não tenta sync nelas).
     for row in list_expired_integrations():
         try:
-            _update_status(row["short_token"], status="paused")
+            _update_status(
+                row["target_id"],
+                target_type=row.get("target_type", TARGET_TOKEN),
+                status="paused",
+            )
             summary["paused"] += 1
         except Exception as e:
-            print(f"[WARN sheets sync_all_due pause {row['short_token']}] {e}")
+            print(
+                f"[WARN sheets sync_all_due pause "
+                f"{row.get('target_type','token')}/{row['target_id']}] {e}"
+            )
 
     active = list_active_integrations()
     summary["total_active"] = len(active)
 
     for integ in active:
-        short_token = integ["short_token"]
+        target_id   = integ["target_id"]
+        target_type = integ.get("target_type", TARGET_TOKEN)
         try:
-            detail_rows, totals_rows = detail_loader(short_token)
-            sync_sheet(short_token, detail_rows or [], totals_rows or [])
+            if target_type == TARGET_MERGE:
+                if merge_loader is None:
+                    print(
+                        f"[WARN sheets sync_all_due] merge_loader não fornecido — "
+                        f"pulando merge_id={target_id}"
+                    )
+                    continue
+                members = merge_loader(target_id) or []
+                sync_merge_sheet(target_id, members)
+            else:
+                detail_rows, totals_rows = token_loader(target_id)
+                sync_sheet(target_id, detail_rows or [], totals_rows or [])
             summary["synced"] += 1
         except PermissionError:
             summary["revoked"] += 1
-            print(f"[INFO sheets sync_all_due] {short_token} revoked")
+            print(f"[INFO sheets sync_all_due] {target_type}/{target_id} revoked")
         except Exception as e:
             summary["errors"] += 1
-            print(f"[ERROR sheets sync_all_due {short_token}] {e}")
+            print(f"[ERROR sheets sync_all_due {target_type}/{target_id}] {e}")
 
     return summary
 
@@ -597,6 +727,15 @@ SHEET_COLUMNS = [
     ("video_view_100",            "100%"),
     ("effective_total_cost",      "Custo Efetivo"),
     ("effective_cost_with_over",  "Custo Ef. + Over"),
+]
+
+# Colunas extras pra sheet de merge (1 linha por dia × line × criativo
+# de CADA token do grupo). `_token_label` é o nome legível do mês
+# (ex.: "Abr 2026") + short_token entre parênteses pra desambiguar
+# quando dois tokens compartilham mês.
+SHEET_COLUMNS_MERGE_PREFIX = [
+    ("_token_label",  "Mês"),
+    ("_short_token",  "Token"),
 ]
 
 # README escrito na primeira aba como informativo. Cliente abre, vê o
@@ -628,14 +767,38 @@ def _format_cell(key: str, value) -> str:
     return value
 
 
-def _build_sheet_payload(detail_rows: List[Dict]) -> List[List]:
-    """Monta a matriz de cells da aba Base de Dados a partir do detail."""
-    header = [label for _, label in SHEET_COLUMNS]
+def _build_sheet_payload(detail_rows: List[Dict], *, merged: bool = False) -> List[List]:
+    """Monta a matriz de cells da aba Base de Dados a partir do detail.
+
+    Quando `merged=True`, prepende as colunas `Mês` / `Token` —
+    `detail_rows` precisam vir com `_token_label` e `_short_token`
+    populados (anotação feita em `_annotate_merge_rows`).
+    """
+    cols = (SHEET_COLUMNS_MERGE_PREFIX + SHEET_COLUMNS) if merged else SHEET_COLUMNS
+    header = [label for _, label in cols]
     body = [
-        [_format_cell(key, row.get(key)) for key, _ in SHEET_COLUMNS]
+        [_format_cell(key, row.get(key)) for key, _ in cols]
         for row in detail_rows
     ]
     return [header] + body
+
+
+def _annotate_merge_rows(
+    short_token: str,
+    detail_rows: List[Dict],
+    start_date: Optional[date],
+    end_date: Optional[date],
+) -> List[Dict]:
+    """Anota cada row do detail com `_token_label` (mês legível) +
+    `_short_token` pra escrita na sheet merged. Não muta o input."""
+    label = _format_period(start_date, end_date) or short_token
+    out = []
+    for r in detail_rows:
+        nr = dict(r)
+        nr["_token_label"] = label
+        nr["_short_token"] = short_token
+        out.append(nr)
+    return out
 
 
 def _enrich_detail_costs(detail_rows: List[Dict], totals_rows: List[Dict]) -> List[Dict]:
@@ -755,39 +918,41 @@ def _build_sheet_title(
     return " - ".join(parts)
 
 
-def create_sheet_for_campaign(
-    short_token: str,
-    refresh_token: str,
-    member_email: str,
-    detail_rows: List[Dict],
-    totals_rows: List[Dict],
-    campaign_name: str,
+def _build_merge_sheet_title(
+    merge_id: str,
     client_name: Optional[str],
-    start_date: Optional[date],
-    end_date: Optional[date],
-) -> Dict:
+    campaign_name: Optional[str],
+    earliest_start: Optional[date],
+    latest_end: Optional[date],
+) -> str:
+    """Título da sheet agregada — mesma estrutura, mas marca '(agrupado)'
+    pra cliente diferenciar do mês individual no Drive."""
+    parts = ["HYPR"]
+    if client_name:
+        parts.append(client_name.strip())
+    if campaign_name:
+        parts.append(campaign_name.strip())
+    period = _format_period(earliest_start, latest_end)
+    if period:
+        parts.append(period)
+    parts.append("agrupado")
+    return " - ".join(parts)
+
+
+def _create_spreadsheet_with_payload(
+    *,
+    title: str,
+    payload: List[List],
+    access_token: str,
+) -> Tuple[str, str]:
+    """Cria spreadsheet com 2 abas (README + Base de Dados), popula, formata
+    header bold + frozen row, move pra pasta HYPR (best-effort) e seta
+    permissão de link público (best-effort). Retorna (id, url).
+
+    Em caso de falha pós-criação, deleta a sheet pra não deixar órfã.
     """
-    Cria uma sheet nova no Drive do membro que ativou (via refresh_token),
-    popula com README + Base de Dados, e persiste a integração.
-    Retorna dict com spreadsheet_id e spreadsheet_url.
+    sheets_svc = _build_sheets_client(access_token)
 
-    detail_rows é enriquecido internamente via _enrich_detail_costs(detail, totals)
-    pra reproduzir os mesmos números do dash (que faz o enrich no frontend).
-    """
-    ensure_table_exists()
-    detail_rows = _enrich_detail_costs(detail_rows, totals_rows)
-    access_token = _refresh_access_token(refresh_token)
-    sheets_svc   = _build_sheets_client(access_token)
-
-    title = _build_sheet_title(
-        short_token=short_token,
-        client_name=client_name,
-        campaign_name=campaign_name,
-        start_date=start_date,
-        end_date=end_date,
-    )
-
-    # Cria spreadsheet com 2 abas: "README" e "Base de Dados"
     create_body = {
         "properties": {"title": title},
         "sheets": [
@@ -806,24 +971,16 @@ def create_sheet_for_campaign(
     spreadsheet_id  = created["spreadsheetId"]
     spreadsheet_url = created["spreadsheetUrl"]
 
-    # Resolve sheetIds reais por título da aba.
     sheet_id_by_title = {
         s["properties"]["title"]: s["properties"]["sheetId"]
         for s in created.get("sheets", [])
     }
     base_sheet_id = sheet_id_by_title.get("Base de Dados")
     if base_sheet_id is None:
-        # Não deveria acontecer (acabamos de criar), mas se o Google mudou
-        # algo no payload, melhor falhar explícito do que estourar adiante.
         _try_delete_spreadsheet(spreadsheet_id, access_token)
         raise RuntimeError("Aba 'Base de Dados' não encontrada na sheet recém-criada")
 
-    # A partir daqui, qualquer falha deixa a sheet órfã no Drive do usuário.
-    # Envolvemos o resto em try/except pra deletar nesse caso — UX
-    # melhor que acumular sheets vazias quando o user clica de novo.
     try:
-        # Popula as 2 abas. README é estático; Base de Dados vem do detail.
-        payload = _build_sheet_payload(detail_rows)
         sheets_svc.spreadsheets().values().batchUpdate(
             spreadsheetId=spreadsheet_id,
             body={
@@ -835,7 +992,6 @@ def create_sheet_for_campaign(
             },
         ).execute()
 
-        # Negrito no header da Base de Dados + frozen row.
         sheets_svc.spreadsheets().batchUpdate(
             spreadsheetId=spreadsheet_id,
             body={
@@ -867,13 +1023,10 @@ def create_sheet_for_campaign(
         _try_delete_spreadsheet(spreadsheet_id, access_token)
         raise
 
-    # Move pra pasta compartilhada do Drive HYPR (se configurada).
-    # Best-effort: se falhar (ex.: usuário sem acesso à pasta), mantém
-    # a sheet no My Drive raiz dele e segue. Não é fatal.
+    # Move pra pasta compartilhada (best-effort)
     if DRIVE_FOLDER_ID:
         try:
             drive_svc = _build_drive_client(access_token)
-            # Pega parents atuais pra remover (geralmente "root" do user).
             file_meta = drive_svc.files().get(
                 fileId=spreadsheet_id, fields="parents",
             ).execute()
@@ -887,20 +1040,7 @@ def create_sheet_for_campaign(
         except Exception as e:
             print(f"[WARN move sheet to folder {spreadsheet_id}] {e}")
 
-    # Setar permissão "anyone with link can view" — necessário pra o
-    # cliente final abrir o link a partir do report público (ele não
-    # tem account HYPR e não vai ser convidado individualmente).
-    #
-    # Trade-off: qualquer pessoa que descobrir a URL consegue ver.
-    # URL é UUID-like (44 chars random), não enumerable. Mesmo padrão
-    # que "Compartilhar com link" no Drive UI. Aceitável pro caso de
-    # uso (relatórios de campanha já são compartilhados via link
-    # público do dash). Cliente que quiser restringir pode editar
-    # manual no Drive ("Restrito" + adicionar emails específicos).
-    #
-    # Best-effort: se falhar (ex.: política de admin do tenant proíbe
-    # link sharing externo), loga warning e segue. Membro pode
-    # compartilhar manualmente nesse caso.
+    # Permissão de link público (best-effort)
     try:
         drive_svc = _build_drive_client(access_token)
         drive_svc.permissions().create(
@@ -911,15 +1051,52 @@ def create_sheet_for_campaign(
     except Exception as e:
         print(f"[WARN set anyone-link permission {spreadsheet_id}] {e}")
 
-    # Persiste a integração no BQ.
+    return spreadsheet_id, spreadsheet_url
+
+
+def create_sheet_for_campaign(
+    short_token: str,
+    refresh_token: str,
+    member_email: str,
+    detail_rows: List[Dict],
+    totals_rows: List[Dict],
+    campaign_name: str,
+    client_name: Optional[str],
+    start_date: Optional[date],
+    end_date: Optional[date],
+) -> Dict:
+    """
+    Cria uma sheet nova no Drive do membro que ativou (via refresh_token),
+    popula com README + Base de Dados, e persiste a integração.
+    Retorna dict com spreadsheet_id e spreadsheet_url.
+
+    detail_rows é enriquecido internamente via _enrich_detail_costs(detail, totals)
+    pra reproduzir os mesmos números do dash (que faz o enrich no frontend).
+    """
+    ensure_table_exists()
+    detail_rows = _enrich_detail_costs(detail_rows, totals_rows)
+    access_token = _refresh_access_token(refresh_token)
+
+    title = _build_sheet_title(
+        short_token=short_token,
+        client_name=client_name,
+        campaign_name=campaign_name,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    payload = _build_sheet_payload(detail_rows)
+    spreadsheet_id, spreadsheet_url = _create_spreadsheet_with_payload(
+        title=title, payload=payload, access_token=access_token,
+    )
+
     sync_until = (end_date + timedelta(days=SYNC_GRACE_DAYS)) if end_date else None
     now = datetime.now(timezone.utc)
     _upsert_integration({
-        "short_token":       short_token,
+        "target_id":         short_token,
+        "target_type":       TARGET_TOKEN,
         "spreadsheet_id":    spreadsheet_id,
         "spreadsheet_url":   spreadsheet_url,
         "created_by_email":  member_email,
-        # BQ JSON insert aceita BYTES como base64. Encodamos pra string base64.
         "refresh_token_enc": _bytes_to_b64(_encrypt(refresh_token)),
         "created_at":        now.isoformat(),
         "last_synced_at":    now.isoformat(),
@@ -934,74 +1111,197 @@ def create_sheet_for_campaign(
     }
 
 
+def create_sheet_for_merge(
+    merge_id: str,
+    refresh_token: str,
+    member_email: str,
+    members: List[Dict],
+    client_name: Optional[str],
+    campaign_name: Optional[str],
+) -> Dict:
+    """Cria sheet agregada (1 row por dia × line × criativo de cada token
+    do grupo, com colunas extras `Mês`/`Token`). Persiste com
+    target_type='merge', short_token=merge_id.
+
+    `members` é uma lista de dicts:
+       {"short_token": str, "detail_rows": [...], "totals_rows": [...],
+        "start_date": date|None, "end_date": date|None}
+    Já enriquecidos? Não — esta função enriquece cada membro internamente,
+    pra manter consistência com o caminho single-token.
+    """
+    ensure_table_exists()
+    if not members:
+        raise ValueError("create_sheet_for_merge: members vazio")
+    access_token = _refresh_access_token(refresh_token)
+
+    annotated_rows: List[Dict] = []
+    starts: List[date] = []
+    ends:   List[date] = []
+    for m in members:
+        st = m.get("short_token") or ""
+        detail = _enrich_detail_costs(m.get("detail_rows") or [], m.get("totals_rows") or [])
+        s_d = m.get("start_date")
+        e_d = m.get("end_date")
+        if s_d: starts.append(s_d)
+        if e_d: ends.append(e_d)
+        annotated_rows.extend(_annotate_merge_rows(st, detail, s_d, e_d))
+
+    earliest_start = min(starts) if starts else None
+    latest_end     = max(ends)   if ends   else None
+
+    title = _build_merge_sheet_title(
+        merge_id=merge_id,
+        client_name=client_name,
+        campaign_name=campaign_name,
+        earliest_start=earliest_start,
+        latest_end=latest_end,
+    )
+    payload = _build_sheet_payload(annotated_rows, merged=True)
+    spreadsheet_id, spreadsheet_url = _create_spreadsheet_with_payload(
+        title=title, payload=payload, access_token=access_token,
+    )
+
+    sync_until = (latest_end + timedelta(days=SYNC_GRACE_DAYS)) if latest_end else None
+    now = datetime.now(timezone.utc)
+    _upsert_integration({
+        "target_id":         merge_id,
+        "target_type":       TARGET_MERGE,
+        "spreadsheet_id":    spreadsheet_id,
+        "spreadsheet_url":   spreadsheet_url,
+        "created_by_email":  member_email,
+        "refresh_token_enc": _bytes_to_b64(_encrypt(refresh_token)),
+        "created_at":        now.isoformat(),
+        "last_synced_at":    now.isoformat(),
+        "sync_until":        sync_until.isoformat() if sync_until else None,
+        "status":            "active",
+        "last_error":        None,
+    })
+
+    return {
+        "spreadsheet_id":  spreadsheet_id,
+        "spreadsheet_url": spreadsheet_url,
+    }
+
+
+def _resolve_refresh_token(integ: Dict, target_id: str, target_type: str) -> str:
+    """Decifra o refresh_token a partir da row de integração. Atualiza
+    status='error' em caso de falha de decrypt e propaga a exceção."""
+    refresh_token_enc = integ["refresh_token_enc"]
+    if not refresh_token_enc:
+        raise ValueError(f"refresh_token_enc vazio para {target_type}/{target_id}")
+    try:
+        if isinstance(refresh_token_enc, str):
+            refresh_token_enc = _b64_to_bytes(refresh_token_enc)
+        return _decrypt(refresh_token_enc)
+    except Exception as e:
+        _update_status(target_id, target_type=target_type, status="error", last_error=f"decrypt failed: {e}")
+        raise
+
+
+def _exchange_or_mark(refresh_token: str, target_id: str, target_type: str) -> str:
+    """Troca refresh_token por access_token. Marca revoked/error se falhar."""
+    try:
+        return _refresh_access_token(refresh_token)
+    except PermissionError:
+        _update_status(target_id, target_type=target_type, status="revoked",
+                       last_error="refresh_token revogado pelo usuário")
+        raise
+    except Exception as e:
+        _update_status(target_id, target_type=target_type, status="error", last_error=str(e)[:500])
+        raise
+
+
+def _write_base_de_dados(
+    sheets_svc, spreadsheet_id: str, payload: List[List],
+    target_id: str, target_type: str,
+) -> None:
+    """Limpa + reescreve a aba 'Base de Dados'. Marca status corretamente
+    em caso de HttpError (403/404 = revoked; resto = error)."""
+    try:
+        sheets_svc.spreadsheets().values().clear(
+            spreadsheetId=spreadsheet_id,
+            range="Base de Dados!A:Z",
+        ).execute()
+        sheets_svc.spreadsheets().values().update(
+            spreadsheetId=spreadsheet_id,
+            range="Base de Dados!A1",
+            valueInputOption="RAW",
+            body={"values": payload},
+        ).execute()
+    except HttpError as e:
+        msg = f"HTTP {e.resp.status}: {str(e)[:300]}"
+        status = "error"
+        if e.resp.status in (403, 404):
+            status = "revoked"
+        _update_status(target_id, target_type=target_type, status=status, last_error=msg)
+        raise
+
+
 def sync_sheet(
     short_token: str,
     detail_rows: List[Dict],
     totals_rows: List[Dict],
 ) -> Dict:
     """
-    Re-popula a aba Base de Dados de uma sheet existente. Usa refresh_token
-    salvo. Atualiza last_synced_at; em caso de erro de auth, marca como
-    revoked; outros erros marcam como error.
-
-    detail_rows é enriquecido via _enrich_detail_costs antes da escrita —
-    garante consistência com o dash.
+    Re-popula a aba Base de Dados de uma sheet single-token existente.
+    Usa refresh_token salvo. Atualiza last_synced_at; em caso de erro de
+    auth, marca como revoked; outros erros marcam como error.
     """
     detail_rows = _enrich_detail_costs(detail_rows, totals_rows)
-    integ = get_integration(short_token)
+    integ = get_integration(short_token, target_type=TARGET_TOKEN)
     if not integ:
-        raise ValueError(f"Integração não encontrada para {short_token}")
+        raise ValueError(f"Integração token não encontrada para {short_token}")
 
-    refresh_token_enc = integ["refresh_token_enc"]
-    if not refresh_token_enc:
-        raise ValueError(f"refresh_token_enc vazio para {short_token}")
+    refresh_token = _resolve_refresh_token(integ, short_token, TARGET_TOKEN)
+    access_token  = _exchange_or_mark(refresh_token, short_token, TARGET_TOKEN)
+    sheets_svc    = _build_sheets_client(access_token)
+    payload       = _build_sheet_payload(detail_rows)
 
-    try:
-        # BQ retorna BYTES como bytes Python — não precisa b64 decode aqui.
-        # Mas se inseriu via JSON como base64, o read traz bytes diretos
-        # (BQ faz o decode). Em caso de discrepância, esse cast resolve.
-        if isinstance(refresh_token_enc, str):
-            refresh_token_enc = _b64_to_bytes(refresh_token_enc)
-        refresh_token = _decrypt(refresh_token_enc)
-    except Exception as e:
-        _update_status(short_token, status="error", last_error=f"decrypt failed: {e}")
-        raise
-
-    try:
-        access_token = _refresh_access_token(refresh_token)
-    except PermissionError:
-        _update_status(short_token, status="revoked", last_error="refresh_token revogado pelo usuário")
-        raise
-    except Exception as e:
-        _update_status(short_token, status="error", last_error=str(e)[:500])
-        raise
-
-    sheets_svc = _build_sheets_client(access_token)
-    payload = _build_sheet_payload(detail_rows)
-
-    try:
-        # Limpa primeiro pra não deixar rows residuais se a base diminuiu
-        sheets_svc.spreadsheets().values().clear(
-            spreadsheetId=integ["spreadsheet_id"],
-            range="Base de Dados!A:Z",
-        ).execute()
-        sheets_svc.spreadsheets().values().update(
-            spreadsheetId=integ["spreadsheet_id"],
-            range="Base de Dados!A1",
-            valueInputOption="RAW",
-            body={"values": payload},
-        ).execute()
-    except HttpError as e:
-        # 404 = sheet deletada pelo usuário. 403 = permissão revogada.
-        msg = f"HTTP {e.resp.status}: {str(e)[:300]}"
-        status = "error"
-        if e.resp.status in (403, 404):
-            status = "revoked"
-        _update_status(short_token, status=status, last_error=msg)
-        raise
+    _write_base_de_dados(sheets_svc, integ["spreadsheet_id"], payload,
+                         short_token, TARGET_TOKEN)
 
     _update_status(
-        short_token,
+        short_token, target_type=TARGET_TOKEN,
+        status="active",
+        last_synced_at=datetime.now(timezone.utc),
+        last_error=None,
+    )
+    return {"spreadsheet_id": integ["spreadsheet_id"]}
+
+
+def sync_merge_sheet(merge_id: str, members: List[Dict]) -> Dict:
+    """
+    Re-popula a aba Base de Dados de uma sheet AGREGADA existente.
+    `members` é a mesma lista de `create_sheet_for_merge`.
+    """
+    integ = get_integration(merge_id, target_type=TARGET_MERGE)
+    if not integ:
+        raise ValueError(f"Integração merge não encontrada para {merge_id}")
+    if not members:
+        # Grupo ficou vazio (todos os tokens removidos). Marca paused
+        # pra que o cron pare de tentar; admin decide se exclui.
+        _update_status(merge_id, target_type=TARGET_MERGE, status="paused",
+                       last_error="grupo sem membros")
+        return {"spreadsheet_id": integ["spreadsheet_id"], "skipped": True}
+
+    refresh_token = _resolve_refresh_token(integ, merge_id, TARGET_MERGE)
+    access_token  = _exchange_or_mark(refresh_token, merge_id, TARGET_MERGE)
+    sheets_svc    = _build_sheets_client(access_token)
+
+    annotated_rows: List[Dict] = []
+    for m in members:
+        st = m.get("short_token") or ""
+        detail = _enrich_detail_costs(m.get("detail_rows") or [], m.get("totals_rows") or [])
+        annotated_rows.extend(_annotate_merge_rows(
+            st, detail, m.get("start_date"), m.get("end_date"),
+        ))
+    payload = _build_sheet_payload(annotated_rows, merged=True)
+
+    _write_base_de_dados(sheets_svc, integ["spreadsheet_id"], payload,
+                         merge_id, TARGET_MERGE)
+
+    _update_status(
+        merge_id, target_type=TARGET_MERGE,
         status="active",
         last_synced_at=datetime.now(timezone.utc),
         last_error=None,
@@ -1033,17 +1333,24 @@ def _try_delete_spreadsheet(spreadsheet_id: str, access_token: str) -> None:
         print(f"[WARN _try_delete_spreadsheet {spreadsheet_id}] {e}")
 
 
-def status_for_response(short_token: str, *, is_admin: bool) -> Optional[Dict]:
+def status_for_response(
+    target_id: str,
+    *,
+    is_admin: bool,
+    target_type: str = TARGET_TOKEN,
+) -> Optional[Dict]:
     """
     Monta o objeto de status pro frontend consumir. Cliente vê apenas
     campos não-sensíveis (url da sheet); admin vê tudo.
     """
-    integ = get_integration(short_token)
+    _validate_target_type(target_type)
+    integ = get_integration(target_id, target_type=target_type)
     if not integ:
         return None
     public = {
         "spreadsheet_url": integ["spreadsheet_url"],
         "status":          integ["status"],
+        "target_type":     integ["target_type"],
     }
     if not is_admin:
         # Cliente só vê o link se está ativa (não vê erros internos).

@@ -25,11 +25,18 @@
 //   - todos com integração ativa: link "Abrir no Google Sheets"
 //   - admin com erro/revogada: banner de reconexão
 //   Cliente sem integração ativa não vê o card.
+//
+//   Merge Reports — escolhe o target da integração baseado na visão atual:
+//     - Visão agregada (sem ?view=, com merge_meta) → target=(merge, merge_id)
+//       1 sheet com a base unificada de todos os tokens do grupo.
+//     - Visão por mês (?view=X) ou token sem grupo → target=(token, X)
+//       1 sheet só daquele token, ideal pra faturamento mensal.
+//   Os dois podem coexistir e sincronizam independentes no cron diário.
 
 import { DataTableV2 } from "../components/DataTableV2";
 import SheetsIntegrationCardV2 from "../components/SheetsIntegrationCardV2";
 
-export default function DetalhamentoV2({ data, aggregates, token, isAdmin, adminJwt }) {
+export default function DetalhamentoV2({ data, aggregates, token, view, isAdmin, adminJwt }) {
   const camp = data.campaign;
   const { detail } = aggregates;
 
@@ -40,6 +47,16 @@ export default function DetalhamentoV2({ data, aggregates, token, isAdmin, admin
       </div>
     );
   }
+
+  // Decide o target da integração:
+  //   - aggregate view (token base pertence a grupo + view não setado) → merge
+  //   - single-token view (?view=X), ou token sem grupo                → token
+  // Quando o target é token e estamos em visão de mês (?view=X), usamos
+  // o token do mês como target_id (não o token base do URL).
+  const mergeMeta = data?.merge_meta || null;
+  const isAggregatedMerge = !!mergeMeta && !view;
+  const targetType = isAggregatedMerge ? "merge" : "token";
+  const targetId   = isAggregatedMerge ? mergeMeta.merge_id : (view || token);
 
   return (
     <div className="space-y-6 pb-12">
@@ -52,7 +69,10 @@ export default function DetalhamentoV2({ data, aggregates, token, isAdmin, admin
         </p>
       </div>
       <SheetsIntegrationCardV2
+        key={`${targetType}:${targetId}`}
         token={token}
+        targetType={targetType}
+        targetId={targetId}
         isAdmin={isAdmin}
         adminJwt={adminJwt}
         initialIntegration={data?.sheets_integration || null}
