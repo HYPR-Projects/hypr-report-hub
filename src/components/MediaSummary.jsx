@@ -1,5 +1,5 @@
 import { C } from "../shared/theme";
-import { fmt, fmtP, fmtR } from "../shared/format";
+import { fmt, fmtP, fmtP2, fmtR } from "../shared/format";
 
 const MediaSummary = ({ rows, type, theme, detail0, camp }) => {
   const filtered = rows.filter(r => r.media_type === type);
@@ -48,7 +48,7 @@ const MediaSummary = ({ rows, type, theme, detail0, camp }) => {
           <>
             <div><div style={{fontSize:10,color:mt,textTransform:"uppercase",letterSpacing:1}}>CPM Efetivo</div><div style={{fontSize:16,fontWeight:700,marginTop:4,color:C.blue}}>{fmtR(cpm_ef)}</div></div>
             <div><div style={{fontSize:10,color:mt,textTransform:"uppercase",letterSpacing:1}}>CPC</div><div style={{fontSize:16,fontWeight:700,marginTop:4,color:txt}}>{fmtR(cpc)}</div></div>
-            <div><div style={{fontSize:10,color:mt,textTransform:"uppercase",letterSpacing:1}}>CTR</div><div style={{fontSize:16,fontWeight:700,marginTop:4,color:C.blue}}>{fmtP(ctr)}</div></div>
+            <div><div style={{fontSize:10,color:mt,textTransform:"uppercase",letterSpacing:1}}>CTR</div><div style={{fontSize:16,fontWeight:700,marginTop:4,color:C.blue}}>{fmtP2(ctr)}</div></div>
           </>
         ) : (
           <>
