@@ -190,10 +190,7 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt 
             <PacingBarV2
               label="Pacing Display"
               pacing={pacingDisplay}
-              budget={display.reduce(
-                (s, r) => s + (r.o2o_display_budget || 0) + (r.ooh_display_budget || 0),
-                0,
-              )}
+              budget={(display[0]?.o2o_display_budget || 0) + (display[0]?.ooh_display_budget || 0)}
               cost={display.reduce((s, r) => s + (r.effective_total_cost || 0), 0)}
             />
           )}
@@ -201,10 +198,7 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt 
             <PacingBarV2
               label="Pacing Video"
               pacing={pacingVideo}
-              budget={video.reduce(
-                (s, r) => s + (r.o2o_video_budget || 0) + (r.ooh_video_budget || 0),
-                0,
-              )}
+              budget={(video[0]?.o2o_video_budget || 0) + (video[0]?.ooh_video_budget || 0)}
               cost={video.reduce((s, r) => s + (r.effective_total_cost || 0), 0)}
             />
           )}
@@ -349,14 +343,11 @@ function computePacingGeral(display, video, camp) {
   const dpacing = computeMediaPacing(display, camp, "DISPLAY");
   const vpacing = computeMediaPacing(video,   camp, "VIDEO");
 
-  const dbudget = display.reduce(
-    (s, r) => s + (r.o2o_display_budget || 0) + (r.ooh_display_budget || 0),
-    0,
-  );
-  const vbudget = video.reduce(
-    (s, r) => s + (r.o2o_video_budget || 0) + (r.ooh_video_budget || 0),
-    0,
-  );
+  // Campos *_budget são denormalizados: cada row carrega o2o E ooh da
+  // campanha inteira. Pegar de rows[0] evita duplicação quando há 2
+  // tactics (O2O+OOH) — mesmo padrão de computeMediaPacing.
+  const dbudget = (display[0]?.o2o_display_budget || 0) + (display[0]?.ooh_display_budget || 0);
+  const vbudget = (video[0]?.o2o_video_budget || 0) + (video[0]?.ooh_video_budget || 0);
   const total = dbudget + vbudget;
   if (!total) return 0;
 
