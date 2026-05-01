@@ -44,19 +44,22 @@ import { Card, CardBody } from "../../ui/Card";
 // onde o flex-wrap quebra o delta pra outra linha numa cell e em outras
 // não, o border-l do divide-x ficava com altura inconsistente).
 function StatCell({ label, value, accent = false, delta = null }) {
+  const hasDelta = delta !== null && delta !== undefined;
   return (
     <div className="px-5 py-4 min-w-0 h-full flex flex-col">
-      <div className="flex items-baseline gap-2 flex-wrap">
-        <span
-          className={cn(
-            "text-[22px] font-semibold tabular-nums leading-tight truncate",
-            accent ? "text-signature" : "text-fg",
-          )}
-        >
-          {value}
-        </span>
-        {delta !== null && delta !== undefined && <Delta rentab={delta} />}
-      </div>
+      <span
+        className={cn(
+          "text-[22px] font-semibold tabular-nums leading-tight truncate",
+          accent ? "text-signature" : "text-fg",
+        )}
+      >
+        {value}
+      </span>
+      {hasDelta && (
+        <div className="mt-0.5">
+          <Delta rentab={delta} />
+        </div>
+      )}
       <div className="text-[11px] text-fg-muted mt-1.5 truncate">{label}</div>
     </div>
   );
@@ -146,6 +149,7 @@ export function MediaSummaryV2({ type, rows, compact = false }) {
         { label: "CPCV efetivo",  value: fmtR(effCpcv),                                accent: true,  delta: rentab },
         { label: "Imp. visíveis", value: fmtBig(totals.vi) },
         { label: "Views 100%",    value: fmtBig(totals.v100) },
+        { label: "CTR",           value: ctr == null ? "—" : fmtP2(ctr),               accent: true },
         { label: "VTR",           value: vtr == null ? "—" : fmtP2(vtr),               accent: true },
       ];
 
