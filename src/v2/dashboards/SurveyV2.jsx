@@ -21,17 +21,56 @@ import SurveyTab from "../../dashboards/SurveyTab";
 import { useTheme } from "../hooks/useTheme";
 import { legacyThemeObj } from "../legacyThemeBridge";
 
+// Heurística pra decidir se um JSON de survey é "renderizável".
+// Caso típico de rejeição: admin abriu o modal e salvou sem preencher,
+// resultando em entries com ctrlUrl/expUrl vazios — o SurveyTab tenta
+// buscar e mostra "URL do Typeform inválida". Em vez de mostrar esse
+// erro pro cliente, escondemos a seção inteira.
+//
+// Modelo legado (CSV pré-Typeform): sem URLs, mas com `questions` —
+// também é renderizável.
+function isRenderableSurvey(json) {
+  if (!json) return false;
+  let parsed;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return false;
+  }
+  if (Array.isArray(parsed)) {
+    return parsed.some((q) => {
+      if (!q) return false;
+      // Modelo Typeform: precisa de pelo menos uma URL não-vazia
+      const hasTypeformUrls = !!(q.ctrlUrl?.trim() || q.expUrl?.trim());
+      // Modelo legado: tem `questions` array
+      const hasLegacy = Array.isArray(q.questions) && q.questions.length > 0;
+      return hasTypeformUrls || hasLegacy;
+    });
+  }
+  // Objeto único (legado puro)
+  return !!(parsed && Array.isArray(parsed.questions) && parsed.questions.length);
+}
+
 export default function SurveyV2({ token, data, isAdmin, adminJwt }) {
   const [theme] = useTheme();
   const legacyTheme = legacyThemeObj(theme);
 
   const sv = data?.survey;
 
-  // Sem survey cadastrado — placeholder consistente com tom V2
-  const isEmpty =
-    !sv ||
-    (typeof sv === "object" && sv.merged && (!sv.items || sv.items.length === 0));
-  if (isEmpty) {
+  // Detecta shape de merged report
+  const isMerged = typeof sv === "object" && sv && sv.merged && Array.isArray(sv.items);
+  const rawItems = isMerged
+    ? sv.items
+    : sv
+      ? [{ short_token: token, label: null, survey: sv }]
+      : [];
+
+  // Filtra itens com JSON ausente/inválido (ex.: token de mês que não
+  // teve survey contratada) — não mostramos erro pro cliente, só omitimos.
+  const items = rawItems.filter((it) => isRenderableSurvey(it?.survey));
+
+  // Sem survey cadastrado (ou todos os itens inválidos) — placeholder V2
+  if (items.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center text-center py-20">
         <ClipboardIcon className="size-12 text-fg-subtle mb-4" />
@@ -47,12 +86,6 @@ export default function SurveyV2({ token, data, isAdmin, adminJwt }) {
       </div>
     );
   }
-
-  // Detecta shape de merged report
-  const isMerged = typeof sv === "object" && sv.merged && Array.isArray(sv.items);
-  const items = isMerged
-    ? sv.items
-    : [{ short_token: token, label: null, survey: sv }];
 
   return (
     <div className="space-y-6">
