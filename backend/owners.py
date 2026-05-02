@@ -42,6 +42,7 @@ Owners são dados internos da HYPR. Os endpoints expostos para clientes
 admin `?list=true` (já protegido por JWT) traz essa informação.
 """
 
+import logging
 import os
 import re
 import time
@@ -50,6 +51,9 @@ from typing import Dict, List, Optional, Tuple
 from google.cloud import bigquery
 from google.auth import default as google_auth_default
 from googleapiclient.discovery import build as build_google_api
+
+
+logger = logging.getLogger(__name__)
 
 
 PROJECT_ID = os.environ.get("GCP_PROJECT", "site-hypr")
@@ -240,14 +244,14 @@ def _load_sheet_data() -> dict:
     # 3) Stale-while-error
     if cached and (now - cached_ts) < CACHE_STALE_MAX:
         age = int(now - cached_ts)
-        print(
+        logger.warning(
             f"[owners] sheets fetch falhou após {SHEETS_RETRIES + 1} tentativas, "
             f"servindo stale cache (idade={age}s). Erro: {last_exc}"
         )
         return cached  # type: ignore
 
     # 4) Sem cache utilizável — propaga
-    print(f"[owners] sheets fetch falhou e não há cache stale válido. Erro: {last_exc}")
+    logger.error(f"[owners] sheets fetch falhou e não há cache stale válido. Erro: {last_exc}")
     raise last_exc if last_exc else RuntimeError("sheets fetch falhou")
 
 
@@ -427,7 +431,7 @@ def get_aliases_dict() -> Dict[str, str]:
     try:
         rows = list(bq.query(sql).result())
     except Exception as e:
-        print(f"[WARN get_aliases_dict] {e}")
+        logger.warning(f"[WARN get_aliases_dict] {e}")
         return {}
     return {r["alias_normalized"]: r["canonical_normalized"] for r in rows}
 
@@ -446,7 +450,7 @@ def list_aliases() -> List[dict]:
     try:
         rows = list(bq.query(sql).result())
     except Exception as e:
-        print(f"[WARN list_aliases] {e}")
+        logger.warning(f"[WARN list_aliases] {e}")
         return []
     out = []
     for r in rows:
@@ -558,7 +562,7 @@ def get_overrides_dict() -> Dict[str, Tuple[Optional[str], Optional[str]]]:
         rows = list(bq.query(sql).result())
     except Exception as e:
         # Tabela não existe ainda? Loga e segue.
-        print(f"[WARN get_overrides_dict] {e}")
+        logger.warning(f"[WARN get_overrides_dict] {e}")
         return {}
 
     return {
@@ -585,7 +589,7 @@ def resolve_owners_for_campaigns(campaigns: List[dict]) -> None:
     try:
         lookup = get_owners_lookup_dict()
     except Exception as e:
-        print(f"[WARN resolve_owners] lookup falhou, sem auto-attrib: {e}")
+        logger.warning(f"[WARN resolve_owners] lookup falhou, sem auto-attrib: {e}")
         lookup = {}
 
     overrides = get_overrides_dict()

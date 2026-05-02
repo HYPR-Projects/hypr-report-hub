@@ -31,10 +31,13 @@ Decisões arquiteturais
   então não tem ponto de falha próprio.
 """
 
+import logging
 import re
 import unicodedata
 from collections import Counter, defaultdict
 from datetime import date, timedelta
+
+logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Normalização
@@ -440,7 +443,7 @@ def query_client_timeseries(weeks=12):
     try:
         rows = list(bq.query(sql).result())
     except Exception as e:
-        print(f"[WARN query_client_timeseries] {e}")
+        logger.warning(f"[WARN query_client_timeseries] {e}")
         return {}
 
     # Constrói série completa: precisa de N semanas exatas, com 0 pros gaps

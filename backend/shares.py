@@ -36,11 +36,14 @@ EXISTS), chamado em todo `get_or_create_share_id`. Custo: zero quando
 a tabela já existe.
 """
 
+import logging
 import os
 import secrets
 import threading
 
 from google.cloud import bigquery
+
+logger = logging.getLogger(__name__)
 
 bq = bigquery.Client()
 
@@ -282,7 +285,7 @@ def _password_matches_merge_member(short_token: str, pw_upper: str) -> bool:
         # Falha em consultar merges não deve negar acesso silenciosamente
         # se a senha direta for válida — mas como esse helper só é
         # chamado quando a senha direta JÁ falhou, basta rejeitar.
-        print(f"[WARN _password_matches_merge_member {short_token}] {e}")
+        logger.warning(f"[WARN _password_matches_merge_member {short_token}] {e}")
     return False
 
 

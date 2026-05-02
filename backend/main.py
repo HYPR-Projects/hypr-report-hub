@@ -22,6 +22,7 @@ Changelog:
 import functions_framework
 from flask import jsonify, request
 from google.cloud import bigquery
+import logging
 import os
 import re
 import json
@@ -44,6 +45,8 @@ import shares
 import clients
 import merges
 import sheets_integration
+
+logger = logging.getLogger(__name__)
 
 bq = bigquery.Client()
 # Injeta o client BQ no módulo clients (evita import circular — clients
@@ -321,7 +324,7 @@ def report_data(request):
             jwt = issue_admin_jwt(info["email"])
             return (jsonify({"token": jwt, "email": info["email"], "ttl": 300}), 200, headers)
         except Exception as e:
-            print(f"[ERROR issue_admin_token] {e}")
+            logger.error(f"[ERROR issue_admin_token] {e}")
             return (jsonify({"error": "Erro ao emitir token"}), 500, headers)
 
     # ── Endpoint: resolver credenciais do cliente → short_token ──────────────
@@ -341,7 +344,7 @@ def report_data(request):
                 return (jsonify({"error": "Código inválido"}), 401, headers)
             return (jsonify({"short_token": short_token}), 200, headers)
         except Exception as e:
-            print(f"[ERROR resolve_share] {e}")
+            logger.error(f"[ERROR resolve_share] {e}")
             return (jsonify({"error": "Erro ao validar código"}), 500, headers)
 
     # ── Endpoint: obter share_id de uma campanha (admin) ─────────────────────
@@ -357,7 +360,7 @@ def report_data(request):
             share_id = shares.get_or_create_share_id(short_token)
             return (jsonify({"share_id": share_id, "short_token": short_token}), 200, headers)
         except Exception as e:
-            print(f"[ERROR get_share_id] {e}")
+            logger.error(f"[ERROR get_share_id] {e}")
             return (jsonify({"error": "Erro ao obter share_id"}), 500, headers)
 
     # ── Endpoint: resolver share_id → short_token sem senha (admin) ──────────
@@ -378,7 +381,7 @@ def report_data(request):
                 return (jsonify({"error": "share_id não encontrado"}), 404, headers)
             return (jsonify({"short_token": short_token}), 200, headers)
         except Exception as e:
-            print(f"[ERROR lookup_share] {e}")
+            logger.error(f"[ERROR lookup_share] {e}")
             return (jsonify({"error": "Erro ao buscar share_id"}), 500, headers)
 
     # ── Endpoint: trocar OAuth code por refresh_token e criar sheet ─────────
@@ -498,7 +501,7 @@ def report_data(request):
                 "spreadsheet_url": result["spreadsheet_url"],
             }), 200, headers)
         except Exception as e:
-            print(f"[ERROR sheets_create] {e}")
+            logger.error(f"[ERROR sheets_create] {e}")
             return (jsonify({"error": f"Erro ao criar sheet: {e}"}), 500, headers)
 
     # ── Endpoint: status da integração (admin vê tudo) ──────────────────────
@@ -519,7 +522,7 @@ def report_data(request):
             )
             return (jsonify({"integration": status}), 200, headers)
         except Exception as e:
-            print(f"[ERROR sheets_status] {e}")
+            logger.error(f"[ERROR sheets_status] {e}")
             return (jsonify({"error": "Erro ao buscar status"}), 500, headers)
 
     # ── Endpoint: sync manual de uma sheet (admin) ──────────────────────────
@@ -579,7 +582,7 @@ def report_data(request):
             )
             return (jsonify({"integration": status}), 200, headers)
         except Exception as e:
-            print(f"[ERROR sheets_sync_now] {e}")
+            logger.error(f"[ERROR sheets_sync_now] {e}")
             return (jsonify({"error": f"Erro ao sincronizar: {e}"}), 500, headers)
 
     # ── Endpoint: sync de TODAS as integrações ativas (cron) ────────────────
@@ -624,7 +627,7 @@ def report_data(request):
             summary = sheets_integration.sync_all_due(_token_loader, _merge_loader)
             return (jsonify({"summary": summary}), 200, headers)
         except Exception as e:
-            print(f"[ERROR sheets_sync_all] {e}")
+            logger.error(f"[ERROR sheets_sync_all] {e}")
             return (jsonify({"error": "Erro no sync diário"}), 500, headers)
 
     # ── Endpoint: deletar integração (admin) ────────────────────────────────
@@ -660,7 +663,7 @@ def report_data(request):
                 _cache_invalidate_token(target_id)
             return (jsonify({"status": "deleted", **result}), 200, headers)
         except Exception as e:
-            print(f"[ERROR sheets_delete] {e}")
+            logger.error(f"[ERROR sheets_delete] {e}")
             return (jsonify({"error": "Erro ao deletar integração"}), 500, headers)
 
     # ── Endpoint: salvar logo ─────────────────────────────────────────────────
@@ -677,7 +680,7 @@ def report_data(request):
             _cache_invalidate_token(short_token)
             return (jsonify({"ok": True}), 200, headers)
         except Exception as e:
-            print(f"[ERROR save_logo] {e}")
+            logger.error(f"[ERROR save_logo] {e}")
             return (jsonify({"error": "Erro ao salvar logo"}), 500, headers)
 
     # ── Endpoint: salvar link Loom ───────────────────────────────────────────
@@ -694,7 +697,7 @@ def report_data(request):
             _cache_invalidate_token(short_token)
             return (jsonify({"ok": True}), 200, headers)
         except Exception as e:
-            print(f"[ERROR save_loom] {e}")
+            logger.error(f"[ERROR save_loom] {e}")
             return (jsonify({"error": "Erro ao salvar loom"}), 500, headers)
 
     # ── Endpoint: salvar survey ──────────────────────────────────────────────
@@ -711,7 +714,7 @@ def report_data(request):
             _cache_invalidate_token(short_token)
             return (jsonify({"ok": True}), 200, headers)
         except Exception as e:
-            print(f"[ERROR save_survey] {e}")
+            logger.error(f"[ERROR save_survey] {e}")
             return (jsonify({"error": "Erro ao salvar survey"}), 500, headers)
 
     # ── Endpoint: proxy Typeform API (evita CORS) ────────────────────────────
@@ -791,7 +794,7 @@ def report_data(request):
                 "form_id": form_id,
             }), 200, headers)
         except urllib.error.HTTPError as e:
-            print(f"[ERROR typeform_proxy] HTTP {e.code} for form {form_id}: {e.reason}")
+            logger.error(f"[ERROR typeform_proxy] HTTP {e.code} for form {form_id}: {e.reason}")
             msg = {
                 401: "TYPEFORM_TOKEN inválido ou expirado",
                 403: "Sem permissão para acessar este form",
@@ -799,7 +802,7 @@ def report_data(request):
             }.get(e.code, f"Erro Typeform: HTTP {e.code}")
             return (jsonify({"error": msg, "form_id": form_id}), 502, headers)
         except Exception as e:
-            print(f"[ERROR typeform_proxy] {e}")
+            logger.error(f"[ERROR typeform_proxy] {e}")
             return (jsonify({"error": str(e)}), 502, headers)
 
     # ── Endpoint: salvar comentário ──────────────────────────────────────────
@@ -822,7 +825,7 @@ def report_data(request):
             save_comment(short_token, metric_name, author, comment)
             return (jsonify({"ok": True}), 200, headers)
         except Exception as e:
-            print(f"[ERROR save_comment] {e}")
+            logger.error(f"[ERROR save_comment] {e}")
             return (jsonify({"error": "Erro ao salvar comentário"}), 500, headers)
 
     # ── Endpoint: buscar comentários ─────────────────────────────────────────
@@ -834,7 +837,7 @@ def report_data(request):
             comments = query_comments(short_token)
             return (jsonify({"comments": comments}), 200, headers)
         except Exception as e:
-            print(f"[ERROR get_comments] {e}")
+            logger.error(f"[ERROR get_comments] {e}")
             return (jsonify({"error": "Erro ao buscar comentários"}), 500, headers)
 
     # ── Endpoint: salvar upload RMND/PDOOH ───────────────────────────────────
@@ -854,7 +857,7 @@ def report_data(request):
             _cache_invalidate_token(short_token)
             return (jsonify({"ok": True}), 200, headers)
         except Exception as e:
-            print(f"[ERROR save_upload] {e}")
+            logger.error(f"[ERROR save_upload] {e}")
             return (jsonify({"error": "Erro ao salvar upload"}), 500, headers)
 
     # ── Endpoint: setup da tabela de overrides (admin, idempotente) ──────────
@@ -870,7 +873,7 @@ def report_data(request):
             res = owners.setup_schema()
             return (jsonify({"ok": True, "tables": res}), 200, headers)
         except Exception as e:
-            print(f"[ERROR setup_owners_schema] {e}")
+            logger.error(f"[ERROR setup_owners_schema] {e}")
             return (jsonify({"error": str(e)}), 500, headers)
 
     # ── Endpoint: lista de membros HYPR (admin) ───────────────────────────────
@@ -887,7 +890,7 @@ def report_data(request):
             # Não é erro fatal — se a Sheets API falhou (quota, perda de
             # acesso da SA), devolvemos listas vazias e logamos. O frontend
             # continua funcionando (chips/filtro/modal vazios).
-            print(f"[WARN list_team_members] {e}")
+            logger.warning(f"[WARN list_team_members] {e}")
             return (jsonify({"cps": [], "css": [], "_warning": str(e)}), 200, headers)
 
     # ── Endpoint: salvar override de owner para um report (admin) ─────────────
@@ -913,7 +916,7 @@ def report_data(request):
             _cache_invalidate_token(short_token)
             return (jsonify({"ok": True}), 200, headers)
         except Exception as e:
-            print(f"[ERROR save_report_owner] {e}")
+            logger.error(f"[ERROR save_report_owner] {e}")
             return (jsonify({"error": str(e)}), 500, headers)
 
     # ── Endpoint: aliases de cliente (admin) ──────────────────────────────────
@@ -936,7 +939,7 @@ def report_data(request):
             data = owners.list_aliases()
             return (jsonify({"aliases": data}), 200, headers)
         except Exception as e:
-            print(f"[ERROR list_aliases] {e}")
+            logger.error(f"[ERROR list_aliases] {e}")
             return (jsonify({"error": str(e)}), 500, headers)
 
     if request.method == "POST" and request.args.get("action") == "save_alias":
@@ -963,7 +966,7 @@ def report_data(request):
         except ValueError as e:
             return (jsonify({"error": str(e)}), 400, headers)
         except Exception as e:
-            print(f"[ERROR save_alias] {e}")
+            logger.error(f"[ERROR save_alias] {e}")
             return (jsonify({"error": str(e)}), 500, headers)
 
     if request.method == "POST" and request.args.get("action") == "delete_alias":
@@ -981,7 +984,7 @@ def report_data(request):
                 _aliases_cache.pop("all", None)
             return (jsonify({"ok": True}), 200, headers)
         except Exception as e:
-            print(f"[ERROR delete_alias] {e}")
+            logger.error(f"[ERROR delete_alias] {e}")
             return (jsonify({"error": str(e)}), 500, headers)
 
     # ── Endpoints: Merge Reports (admin) ──────────────────────────────────────
@@ -1012,7 +1015,7 @@ def report_data(request):
         except merges.MergeError as e:
             return (jsonify({"error": str(e)}), e.code, headers)
         except Exception as e:
-            print(f"[ERROR list_mergeable_tokens] {e}")
+            logger.error(f"[ERROR list_mergeable_tokens] {e}")
             return (jsonify({"error": "Erro ao listar tokens elegíveis"}), 500, headers)
 
     if request.method == "GET" and request.args.get("action") == "get_merge_group":
@@ -1027,7 +1030,7 @@ def report_data(request):
                 return (jsonify({"error": "Grupo não encontrado"}), 404, headers)
             return (jsonify({"group": group}), 200, headers)
         except Exception as e:
-            print(f"[ERROR get_merge_group] {e}")
+            logger.error(f"[ERROR get_merge_group] {e}")
             return (jsonify({"error": "Erro ao buscar grupo"}), 500, headers)
 
     if request.method == "POST" and request.args.get("action") == "merge_tokens":
@@ -1054,7 +1057,7 @@ def report_data(request):
         except merges.MergeError as e:
             return (jsonify({"error": str(e)}), e.code, headers)
         except Exception as e:
-            print(f"[ERROR merge_tokens] {e}")
+            logger.error(f"[ERROR merge_tokens] {e}")
             return (jsonify({"error": "Erro ao mergear tokens"}), 500, headers)
 
     if request.method == "POST" and request.args.get("action") == "unmerge_token":
@@ -1077,7 +1080,7 @@ def report_data(request):
         except merges.MergeError as e:
             return (jsonify({"error": str(e)}), e.code, headers)
         except Exception as e:
-            print(f"[ERROR unmerge_token] {e}")
+            logger.error(f"[ERROR unmerge_token] {e}")
             return (jsonify({"error": "Erro ao desfazer merge"}), 500, headers)
 
     if request.method == "POST" and request.args.get("action") == "update_merge_settings":
@@ -1103,7 +1106,7 @@ def report_data(request):
         except merges.MergeError as e:
             return (jsonify({"error": str(e)}), e.code, headers)
         except Exception as e:
-            print(f"[ERROR update_merge_settings] {e}")
+            logger.error(f"[ERROR update_merge_settings] {e}")
             return (jsonify({"error": "Erro ao atualizar settings"}), 500, headers)
 
     # ── Endpoint: lista de clientes agregada (admin) ─────────────────────────
@@ -1169,7 +1172,7 @@ def report_data(request):
             }
             return (jsonify({**payload, "_cache": "miss"}), 200, resp_headers)
         except Exception as e:
-            print(f"[ERROR list_clients] {e}")
+            logger.error(f"[ERROR list_clients] {e}")
             return (jsonify({"error": "Erro ao listar clientes"}), 500, headers)
 
     if request.args.get("list") == "true":
@@ -1194,7 +1197,7 @@ def report_data(request):
                 resp_headers,
             )
         except Exception as e:
-            print(f"[ERROR] {e}")
+            logger.error(f"[ERROR] {e}")
             return (jsonify({"error": "Erro ao listar campanhas"}), 500, headers)
 
     short_token = request.args.get("token")
@@ -1248,7 +1251,7 @@ def report_data(request):
                         if m.get("short_token"):
                             members_set.add(m["short_token"].upper())
             except Exception as e:
-                print(f"[WARN view-resolve get_merge_group] {e}")
+                logger.warning(f"[WARN view-resolve get_merge_group] {e}")
             if view_param.upper() in members_set:
                 target_token = view_param
 
@@ -1266,7 +1269,7 @@ def report_data(request):
                 if meta:
                     data = {**data, "merge_meta": meta}
             except Exception as e:
-                print(f"[WARN attach merge_meta to single-token view] {e}")
+                logger.warning(f"[WARN attach merge_meta to single-token view] {e}")
 
         total_ms = int((time.time() - t0) * 1000)
         resp_headers = {
@@ -1282,7 +1285,7 @@ def report_data(request):
             resp_headers,
         )
     except Exception as e:
-        print(f"[ERROR] {e}")
+        logger.error(f"[ERROR] {e}")
         return (jsonify({"error": "Erro interno ao buscar dados"}), 500, headers)
 
 
@@ -1354,7 +1357,7 @@ def _safe_sheets_status_public(short_token: str):
     try:
         return sheets_integration.status_for_response(short_token, is_admin=False)
     except Exception as e:
-        print(f"[WARN sheets_integration.status {short_token}] {e}")
+        logger.warning(f"[WARN sheets_integration.status {short_token}] {e}")
         return None
 
 
@@ -1363,7 +1366,7 @@ def _safe_future_result(future, label, default):
     try:
         return future.result()
     except Exception as e:
-        print(f"[WARN fetch_campaign_data {label}] {e}")
+        logger.warning(f"[WARN fetch_campaign_data {label}] {e}")
         return default
 
 
@@ -1604,10 +1607,10 @@ def _compose_asset_payload(per_token, active_token, mode, key, members_sorted):
                 accumulated.extend(parsed)
             else:
                 # Não é array — não dá pra concat semanticamente.
-                print(f"[WARN _compose_asset_payload {key}] token={t} payload não é array, mode=merge cai pra latest")
+                logger.warning(f"[WARN _compose_asset_payload {key}] token={t} payload não é array, mode=merge cai pra latest")
                 return latest_non_null()
         except Exception as e:
-            print(f"[WARN _compose_asset_payload {key}] token={t} parse falhou: {e}; mode=merge cai pra latest")
+            logger.warning(f"[WARN _compose_asset_payload {key}] token={t} parse falhou: {e}; mode=merge cai pra latest")
             return latest_non_null()
 
     if not accumulated:
@@ -1644,7 +1647,7 @@ def compose_merged_report(group, force_refresh=False):
         try:
             data, _hit = futures[t].result()
         except Exception as e:
-            print(f"[WARN compose_merged_report] fetch token={t} falhou: {e}")
+            logger.warning(f"[WARN compose_merged_report] fetch token={t} falhou: {e}")
             continue
         if data is not None:
             per_token[t] = data
@@ -1732,7 +1735,7 @@ def compose_merged_report(group, force_refresh=False):
             group["merge_id"], is_admin=False, target_type="merge",
         )
     except Exception as e:
-        print(f"[WARN compose_merged_report sheets_integration merge] {e}")
+        logger.warning(f"[WARN compose_merged_report sheets_integration merge] {e}")
     if not sheets:
         sheets = active_data.get("sheets_integration")
 
@@ -1817,7 +1820,7 @@ def _get_merge_meta_only(merge_id):
         try:
             data, _hit = futures[t].result()
         except Exception as e:
-            print(f"[WARN _get_merge_meta_only] fetch token={t} falhou: {e}")
+            logger.warning(f"[WARN _get_merge_meta_only] fetch token={t} falhou: {e}")
             continue
         if data is not None:
             per_token[t] = data
@@ -1922,7 +1925,7 @@ def query_logo(short_token: str):
         if rows:
             return rows[0]["logo_base64"]
     except Exception as e:
-        print(f"[WARN query_logo] {e}")
+        logger.warning(f"[WARN query_logo] {e}")
     return None
 
 
@@ -1967,7 +1970,7 @@ def query_loom(short_token: str):
         if rows:
             return rows[0]["loom_url"]
     except Exception as e:
-        print(f"[WARN query_loom] {e}")
+        logger.warning(f"[WARN query_loom] {e}")
     return None
 
 
@@ -2012,7 +2015,7 @@ def query_survey(short_token: str):
         if rows:
             return rows[0]["survey_data"]
     except Exception as e:
-        print(f"[WARN query_survey] {e}")
+        logger.warning(f"[WARN query_survey] {e}")
     return None
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2054,7 +2057,7 @@ def query_comments(short_token: str):
         return [{"metric_name": r["metric_name"], "author": r["author"],
                  "comment": r["comment"], "created_at": str(r["created_at"])} for r in rows]
     except Exception as e:
-        print(f"[WARN query_comments] {e}")
+        logger.warning(f"[WARN query_comments] {e}")
     return []
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2825,7 +2828,7 @@ def _safe_get_owners_lookup():
     try:
         return owners.get_owners_lookup_dict()
     except Exception as e:
-        print(f"[WARN _safe_get_owners_lookup] {e}")
+        logger.warning(f"[WARN _safe_get_owners_lookup] {e}")
         return {}
 
 
@@ -2842,7 +2845,7 @@ def _safe_get_overrides():
     try:
         data = owners.get_overrides_dict()
     except Exception as e:
-        print(f"[WARN _safe_get_overrides] {e}")
+        logger.warning(f"[WARN _safe_get_overrides] {e}")
         data = {}
     _cache_set(_overrides_cache, "all", data)
     return data
@@ -2861,7 +2864,7 @@ def _safe_get_aliases():
     try:
         data = owners.get_aliases_dict()
     except Exception as e:
-        print(f"[WARN _safe_get_aliases] {e}")
+        logger.warning(f"[WARN _safe_get_aliases] {e}")
         data = {}
     _cache_set(_aliases_cache, "all", data)
     return data
@@ -2881,7 +2884,7 @@ def _safe_get_all_share_ids():
     try:
         data = shares.get_all_share_ids()
     except Exception as e:
-        print(f"[WARN _safe_get_all_share_ids] {e}")
+        logger.warning(f"[WARN _safe_get_all_share_ids] {e}")
         data = {}
     _cache_set(_shares_cache, "all", data)
     return data
@@ -2901,7 +2904,7 @@ def _safe_get_merges():
     try:
         data = merges.get_all_merge_groups_lookup()
     except Exception as e:
-        print(f"[WARN _safe_get_merges] {e}")
+        logger.warning(f"[WARN _safe_get_merges] {e}")
         data = {}
     _cache_set(_merges_cache, "all", data)
     return data
@@ -2917,7 +2920,7 @@ def query_upload(short_token, upload_type):
         rows = list(client.query(sql, job_config=jc).result())
         if rows: return rows[0]["data_json"]
     except Exception as e:
-        print(f"[WARN query_upload {upload_type}] {e}")
+        logger.warning(f"[WARN query_upload {upload_type}] {e}")
     return None
 
 def save_upload(short_token, upload_type, data_json):

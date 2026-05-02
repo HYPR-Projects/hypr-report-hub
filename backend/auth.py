@@ -43,6 +43,7 @@ temporary. Once production traffic migrates, the legacy path is removed
 in a follow-up commit.
 """
 
+import logging
 import os
 import time
 import json
@@ -52,6 +53,9 @@ import base64
 import urllib.request
 import urllib.parse
 from typing import Optional, Dict, Any
+
+
+logger = logging.getLogger(__name__)
 
 
 # ─── Config ──────────────────────────────────────────────────────────────────
@@ -155,7 +159,7 @@ def verify_google_id_token(id_token: str) -> Optional[Dict[str, Any]]:
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode())
     except Exception as e:
-        print(f"[WARN verify_google_id_token] {e}")
+        logger.warning(f"[WARN verify_google_id_token] {e}")
         return None
 
     email = (data.get("email") or "").lower()

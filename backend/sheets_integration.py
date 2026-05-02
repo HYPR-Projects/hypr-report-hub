@@ -60,6 +60,7 @@ Tabela criada idempotentemente via `ensure_table_exists` na primeira
 chamada de qualquer endpoint de sheets.
 """
 
+import logging
 import os
 import json
 import time
@@ -76,6 +77,9 @@ from google.auth import default as google_auth_default
 from googleapiclient.discovery import build as build_google_api
 from googleapiclient.errors import HttpError
 from google.oauth2.credentials import Credentials
+
+
+logger = logging.getLogger(__name__)
 
 
 # ─── Config ──────────────────────────────────────────────────────────────────
@@ -196,14 +200,14 @@ def ensure_table_exists() -> None:
                 f"ALTER TABLE `{_table_id()}` ADD COLUMN IF NOT EXISTS target_type STRING"
             ).result()
         except Exception as e:
-            print(f"[WARN ensure_table_exists ADD COLUMN target_type] {e}")
+            logger.warning(f"[WARN ensure_table_exists ADD COLUMN target_type] {e}")
         # Backfill rows legacy onde target_type ficou NULL.
         try:
             _bq_client().query(
                 f"UPDATE `{_table_id()}` SET target_type = 'token' WHERE target_type IS NULL"
             ).result()
         except Exception as e:
-            print(f"[WARN ensure_table_exists backfill target_type] {e}")
+            logger.warning(f"[WARN ensure_table_exists backfill target_type] {e}")
         _table_ensured = True
 
 
@@ -543,7 +547,7 @@ def delete_integration(
                 # Best-effort. Continua o soft delete da row mesmo se a
                 # deleção do arquivo falhou (ex.: file já apagado manual,
                 # token expirado etc.). Logamos pra investigação.
-                print(f"[WARN delete_integration drive {target_type}/{target_id}] {e}")
+                logger.warning(f"[WARN delete_integration drive {target_type}/{target_id}] {e}")
 
     sql = f"""
     UPDATE `{_table_id()}`
@@ -668,7 +672,7 @@ def sync_all_due(token_loader, merge_loader=None) -> Dict:
             )
             summary["paused"] += 1
         except Exception as e:
-            print(
+            logger.warning(
                 f"[WARN sheets sync_all_due pause "
                 f"{row.get('target_type','token')}/{row['target_id']}] {e}"
             )
@@ -682,7 +686,7 @@ def sync_all_due(token_loader, merge_loader=None) -> Dict:
         try:
             if target_type == TARGET_MERGE:
                 if merge_loader is None:
-                    print(
+                    logger.warning(
                         f"[WARN sheets sync_all_due] merge_loader não fornecido — "
                         f"pulando merge_id={target_id}"
                     )
@@ -695,10 +699,10 @@ def sync_all_due(token_loader, merge_loader=None) -> Dict:
             summary["synced"] += 1
         except PermissionError:
             summary["revoked"] += 1
-            print(f"[INFO sheets sync_all_due] {target_type}/{target_id} revoked")
+            logger.info(f"[INFO sheets sync_all_due] {target_type}/{target_id} revoked")
         except Exception as e:
             summary["errors"] += 1
-            print(f"[ERROR sheets sync_all_due {target_type}/{target_id}] {e}")
+            logger.error(f"[ERROR sheets sync_all_due {target_type}/{target_id}] {e}")
 
     return summary
 
@@ -1059,7 +1063,7 @@ def _create_spreadsheet_with_payload(
                 fields="id,parents",
             ).execute()
         except Exception as e:
-            print(f"[WARN move sheet to folder {spreadsheet_id}] {e}")
+            logger.warning(f"[WARN move sheet to folder {spreadsheet_id}] {e}")
 
     # Permissão de link público (best-effort)
     try:
@@ -1070,7 +1074,7 @@ def _create_spreadsheet_with_payload(
             fields="id",
         ).execute()
     except Exception as e:
-        print(f"[WARN set anyone-link permission {spreadsheet_id}] {e}")
+        logger.warning(f"[WARN set anyone-link permission {spreadsheet_id}] {e}")
 
     return spreadsheet_id, spreadsheet_url
 
@@ -1353,7 +1357,7 @@ def _try_delete_spreadsheet(spreadsheet_id: str, access_token: str) -> None:
         drive_svc = _build_drive_client(access_token)
         drive_svc.files().delete(fileId=spreadsheet_id).execute()
     except Exception as e:
-        print(f"[WARN _try_delete_spreadsheet {spreadsheet_id}] {e}")
+        logger.warning(f"[WARN _try_delete_spreadsheet {spreadsheet_id}] {e}")
 
 
 def status_for_response(
