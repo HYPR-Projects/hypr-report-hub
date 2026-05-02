@@ -683,6 +683,39 @@ def report_data(request):
             logger.error(f"[ERROR save_logo] {e}")
             return (jsonify({"error": "Erro ao salvar logo"}), 500, headers)
 
+    # ── Endpoint: listar logos de outras campanhas do mesmo cliente ───────────
+    # Usado pelo LogoModal pra oferecer reaproveitamento. Retorna apenas
+    # metadados (sem base64) — o front busca o base64 individualmente via
+    # `?action=get_logo` quando o admin clica numa opção.
+    if request.method == "GET" and request.args.get("action") == "list_client_logos":
+        if not authenticate_admin(request):
+            return (jsonify({"error": "Não autorizado"}), 401, headers)
+        short_token = request.args.get("short_token", "").strip()
+        if not short_token:
+            return (jsonify({"error": "short_token é obrigatório"}), 400, headers)
+        try:
+            items = query_client_logos_meta(short_token)
+            return (jsonify({"items": items}), 200, headers)
+        except Exception as e:
+            logger.error(f"[ERROR list_client_logos] {e}")
+            return (jsonify({"error": "Erro ao listar logos do cliente"}), 500, headers)
+
+    # ── Endpoint: buscar logo de uma campanha específica ──────────────────────
+    # Usado pelo LogoModal no fluxo de reaproveitamento (segundo passo, depois
+    # do admin escolher um item da galeria via `list_client_logos`).
+    if request.method == "GET" and request.args.get("action") == "get_logo":
+        if not authenticate_admin(request):
+            return (jsonify({"error": "Não autorizado"}), 401, headers)
+        short_token = request.args.get("short_token", "").strip()
+        if not short_token:
+            return (jsonify({"error": "short_token é obrigatório"}), 400, headers)
+        try:
+            logo_base64 = query_logo(short_token)
+            return (jsonify({"logo_base64": logo_base64}), 200, headers)
+        except Exception as e:
+            logger.error(f"[ERROR get_logo] {e}")
+            return (jsonify({"error": "Erro ao buscar logo"}), 500, headers)
+
     # ── Endpoint: salvar link Loom ───────────────────────────────────────────
     if request.method == "POST" and request.args.get("action") == "save_loom":
         if not authenticate_admin(request):
@@ -1927,6 +1960,51 @@ def query_logo(short_token: str):
     except Exception as e:
         logger.warning(f"[WARN query_logo] {e}")
     return None
+
+
+def query_client_logos_meta(short_token: str):
+    """Lista metadados (sem base64) dos logos de outras campanhas do mesmo
+    cliente do `short_token` informado. Usado pelo LogoModal pra oferecer
+    reaproveitamento de logos já cadastrados.
+
+    Não inclui o próprio token na resposta. Retorna ordenado por
+    updated_at DESC (mais recente primeiro).
+
+    Returns: list de {short_token, campaign_name, updated_at}
+    """
+    sql = f"""
+        WITH src AS (
+            SELECT client_name FROM {table_ref()}
+            WHERE short_token = @token
+            LIMIT 1
+        )
+        SELECT
+            cl.short_token                  AS short_token,
+            ANY_VALUE(c.campaign_name)      AS campaign_name,
+            MAX(cl.updated_at)              AS updated_at
+        FROM `{PROJECT_ID}.{DATASET_ASSETS}.client_logos` cl
+        JOIN {table_ref()} c USING (short_token)
+        WHERE c.client_name = (SELECT client_name FROM src)
+          AND cl.short_token != @token
+        GROUP BY cl.short_token
+        ORDER BY MAX(cl.updated_at) DESC
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[bigquery.ScalarQueryParameter("token", "STRING", short_token)]
+    )
+    try:
+        rows = list(bq.query(sql, job_config=job_config).result())
+        return [
+            {
+                "short_token":   r["short_token"],
+                "campaign_name": r["campaign_name"],
+                "updated_at":    r["updated_at"].isoformat() if r["updated_at"] else None,
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        logger.warning(f"[WARN query_client_logos_meta] {e}")
+        return []
 
 
 # ─────────────────────────────────────────────────────────────────────────────

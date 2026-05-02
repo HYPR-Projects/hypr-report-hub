@@ -350,6 +350,46 @@ export async function saveLogo({ short_token, logo_base64 }) {
   );
 }
 
+/**
+ * Lista metadados (sem base64) dos logos já cadastrados em outras
+ * campanhas do mesmo cliente do `short_token`. Retorna ordenado por
+ * updated_at DESC (mais recente primeiro). Em falha, retorna [].
+ */
+export async function listClientLogos({ short_token }) {
+  try {
+    const jwt = await getOrIssueAdminJwt();
+    const r = await fetch(
+      `${API_URL}?action=list_client_logos&short_token=${encodeURIComponent(short_token)}`,
+      { headers: { ...adminAuthHeaders(jwt) } },
+    );
+    if (!r.ok) return [];
+    const d = await r.json();
+    return d.items || [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Busca o logo_base64 de um short_token específico. Usado pelo modal
+ * de reaproveitamento, depois que o admin escolheu um item da galeria.
+ * Retorna null em falha ou se o token não tem logo.
+ */
+export async function getLogo({ short_token }) {
+  try {
+    const jwt = await getOrIssueAdminJwt();
+    const r = await fetch(
+      `${API_URL}?action=get_logo&short_token=${encodeURIComponent(short_token)}`,
+      { headers: { ...adminAuthHeaders(jwt) } },
+    );
+    if (!r.ok) return null;
+    const d = await r.json();
+    return d.logo_base64 || null;
+  } catch {
+    return null;
+  }
+}
+
 // ── Loom (admin) ─────────────────────────────────────────────────────────────
 
 export async function saveLoom({ short_token, loom_url }) {
