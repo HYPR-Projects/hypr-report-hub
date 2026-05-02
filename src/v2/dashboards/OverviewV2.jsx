@@ -79,18 +79,17 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt,
     ? mergeCostSeries(chartDisplay, chartVideo).slice(-14).map((d) => d.cost)
     : [];
 
-  // Pacing helpers — fórmula canônica calendar-elapsed pra Display E Video.
-  // ANTES: pacingVideo vinha de `video[0]?.pacing` (backend per-row,
-  // formula `days_with_delivery`), o que (a) usava fórmula diferente do
-  // Display e (b) só lia a PRIMEIRA linha de vídeo, escondendo over-
-  // delivery/under-delivery em campanhas com múltiplas linhas (O2O+OOH).
-  // Ex.: Diageo Johnnie Walker tinha VIDEO/OOH em 59% e VIDEO/O2O em 442%
-  // mas a barra mostrava só 59%, dando leitura otimista falsa.
+  // Pacing helpers — usa a régua da campanha inteira (não actual_start
+  // por frente), agregando O2O+OOH no numerador e denominador. Mantém
+  // todas as frentes na conta inclusive as que ainda não começaram a
+  // entregar — o objetivo da Visão Geral é responder "estamos no ritmo
+  // do contrato?", não "cada frente está performando?". Cálculo por
+  // tática (com actual_start_date) continua nas abas Display e Video.
   const pacingDisplay = computeMediaPacing(display, camp, "DISPLAY");
   const pacingVideo   = computeMediaPacing(video,   camp, "VIDEO");
 
   // Pacing Geral % — média ponderada por budget de Display + Video,
-  // agora com Display E Video usando a mesma fórmula.
+  // usando a mesma fórmula calendar-camp acima.
   const pacingGeral = computePacingGeral(display, video, camp);
 
   // Custo formatado pra hero (separa centavos pra estilo do mockup).
@@ -346,22 +345,15 @@ function splitCents(value) {
   };
 }
 
-// Pacing display lógica idêntica à OverviewV2 anterior.
-// REMOVIDO: `computeDisplayPacing` local foi extraído pra
-// `shared/aggregations.js#computeMediaPacing` (parametrizado por
-// mediaType). Mantém compat 100% com o cálculo anterior.
-
 // Pacing geral % = média ponderada por budget contratado de Display + Video.
-// Ambos os pacings agora usam a mesma fórmula calendar-elapsed
-// (computeMediaPacing), eliminando a inconsistência anterior em que
-// Display vinha do front (calendar) e Video do backend (days_with_delivery).
+// Budget exclui bônus (bonificação não fatura), mesmo padrão do backend.
 function computePacingGeral(display, video, camp) {
   const dpacing = computeMediaPacing(display, camp, "DISPLAY");
   const vpacing = computeMediaPacing(video,   camp, "VIDEO");
 
   // Campos *_budget são denormalizados: cada row carrega o2o E ooh da
   // campanha inteira. Pegar de rows[0] evita duplicação quando há 2
-  // tactics (O2O+OOH) — mesmo padrão de computeMediaPacing.
+  // tactics (O2O+OOH).
   const dbudget = (display[0]?.o2o_display_budget || 0) + (display[0]?.ooh_display_budget || 0);
   const vbudget = (video[0]?.o2o_video_budget || 0) + (video[0]?.ooh_video_budget || 0);
   const total = dbudget + vbudget;
