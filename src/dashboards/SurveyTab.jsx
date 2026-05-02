@@ -247,7 +247,7 @@ const SurveyTab=({surveyJson,token,isAdmin,adminJwt,theme})=>{
             }}>
               {/* Marca */}
               <div style={{display:"flex",alignItems:"center",gap:6,minWidth:0}}>
-                {r.isFocus&&<span style={{color:C.blue,fontSize:14,lineHeight:1,flexShrink:0}}>★</span>}
+                {r.isFocus&&<span role="img" aria-label="Marca em foco" style={{color:C.blue,fontSize:14,lineHeight:1,flexShrink:0}}>★</span>}
                 <div style={{minWidth:0}}>
                   <div style={{fontSize:14,fontWeight:r.isFocus?700:600,color:txt,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
                     {r.label}
