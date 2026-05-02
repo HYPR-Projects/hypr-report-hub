@@ -6,7 +6,6 @@ const MonthGroup = ({ label, items, defaultOpen, isDark, ...cardProps }) => {
   const [open, setOpen] = useState(defaultOpen);
   const border = isDark ? C.dark3 : CL.border;
   const muted  = isDark ? C.muted : CL.muted;
-  const bg2    = isDark ? C.dark2 : CL.bg2;
 
   return (
     <div style={{ marginBottom: 4 }}>

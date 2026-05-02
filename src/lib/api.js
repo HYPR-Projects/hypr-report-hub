@@ -226,59 +226,6 @@ export async function saveReportOwner({ short_token, cp_email, cs_email }) {
   return r;
 }
 
-// ── Aliases de cliente (admin) ──────────────────────────────────────────────
-// Apelidos manuais que conectam variações de nome à grafia canônica usada
-// na planilha de De-Para Comercial. Resolve casos onde a normalização
-// padrão (acentos/caixa/artigos) não basta — ex: "RD" → "Raia Drogasil".
-
-export async function listAliases() {
-  try {
-    const jwt = await getOrIssueAdminJwt();
-    if (!jwt) return [];
-    const r = await fetch(`${API_URL}?action=list_aliases`, {
-      headers: { ...adminAuthHeaders(jwt) },
-    });
-    if (!r.ok) return [];
-    const d = await r.json();
-    return d.aliases || [];
-  } catch {
-    return [];
-  }
-}
-
-/**
- * Cria/atualiza um alias. Lança erro em status != 2xx pra o caller exibir
- * mensagem (inclui ValueError do backend pra inputs inválidos com 400).
- */
-export async function saveAlias({ alias, canonical }) {
-  const jwt = await getOrIssueAdminJwt();
-  const r = await postJson(
-    `${API_URL}?action=save_alias`,
-    { alias, canonical },
-    adminAuthHeaders(jwt),
-  );
-  if (!r.ok) {
-    let msg = `HTTP ${r.status}`;
-    try {
-      const d = await r.json();
-      if (d?.error) msg = d.error;
-    } catch { /* keep generic */ }
-    throw new Error(msg);
-  }
-  return r.json();
-}
-
-export async function deleteAlias(alias) {
-  const jwt = await getOrIssueAdminJwt();
-  const r = await postJson(
-    `${API_URL}?action=delete_alias`,
-    { alias },
-    adminAuthHeaders(jwt),
-  );
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r.json();
-}
-
 // ── Share IDs (admin) ────────────────────────────────────────────────────────
 
 /**

@@ -193,7 +193,7 @@ const PdoohDashboard = ({ data, onClear, isDark = true }) => {
           )}
         </div>
         {hasGeo
-          ? <PdoohMap points={mapPoints} metric={mapMetric}/>
+          ? <PdoohMap points={mapPoints}/>
           : <div style={{height:200,display:"flex",alignItems:"center",justifyContent:"center",color:muted,fontSize:13,flexDirection:"column",gap:8}}>
               <span style={{fontSize:32}}>🗺️</span>
               <span>O arquivo não possui colunas de geolocalização</span>

@@ -56,7 +56,7 @@ const TabChat = ({ token, tabName, author, adminJwt, theme }) => {
       setMessages(prev=>[...prev,{metric_name:tabName, author, comment:newMsg.trim(), created_at:new Date().toISOString()}]);
       shouldScroll.current = true;
       setNewMsg("");
-    }catch(e){}
+    }catch{}
     finally{setSending(false);}
   };
 

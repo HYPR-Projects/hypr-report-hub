@@ -25,7 +25,6 @@ const NewCampaignModal = ({ onClose, onConfirm, theme }) => {
   const [newToken,    setNewToken]    = useState("");
   const [tokenData,   setTokenData]   = useState(null);
   const [shareId,     setShareId]     = useState(null);
-  const [logoFile,    setLogoFile]    = useState(null);
   const [logoPreview, setLogoPreview] = useState(null);
   const [checking,    setChecking]    = useState(false);
 
@@ -36,7 +35,7 @@ const NewCampaignModal = ({ onClose, onConfirm, theme }) => {
 
   const reset = () => {
     setNewToken(""); setTokenData(null); setShareId(null);
-    setLogoFile(null); setLogoPreview(null);
+    setLogoPreview(null);
   };
 
   const handleClose = () => {
@@ -82,7 +81,6 @@ const NewCampaignModal = ({ onClose, onConfirm, theme }) => {
   const handleLogoFile = e => {
     const f = e.target.files?.[0];
     if (!f) return;
-    setLogoFile(f);
     const reader = new FileReader();
     reader.onload = ev => setLogoPreview(ev.target.result);
     reader.readAsDataURL(f);
@@ -159,7 +157,7 @@ const NewCampaignModal = ({ onClose, onConfirm, theme }) => {
                 <img src={logoPreview} style={{ height: 40, objectFit: "contain", maxWidth: 120 }}/>
                 <span style={{ fontSize: 12, color: muted, flex: 1 }}>Logo carregado</span>
                 <button
-                  onClick={() => { setLogoFile(null); setLogoPreview(null); }}
+                  onClick={() => { setLogoPreview(null); }}
                   style={{ background: "none", border: "none", color: muted, cursor: "pointer", fontSize: 18, lineHeight: 1 }}
                 >×</button>
               </div>

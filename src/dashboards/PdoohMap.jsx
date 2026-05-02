@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { C } from "../shared/theme";
 import { useleaflet } from "../shared/useLeaflet";
 
-const PdoohMap = ({ points, metric }) => {
+const PdoohMap = ({ points }) => {
   const mapRef = useRef(null);
   const instanceRef = useRef(null);
   const heatRef = useRef(null);

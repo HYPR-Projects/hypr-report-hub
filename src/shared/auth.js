@@ -91,18 +91,7 @@ export function clearSession() {
   }
 }
 
-// ─── Google id_token getters/setters (delegam para a sessão) ─────────────────
-// Mantidos para compatibilidade com chamadas existentes em outros componentes.
-export function setGoogleIdToken(token) {
-  if (!token) {
-    clearSession();
-    return;
-  }
-  // Atualiza apenas o idToken preservando o user existente.
-  const current = loadSession();
-  saveSession(current?.user || null, token);
-}
-
+// ─── Google id_token getter (delega para a sessão) ──────────────────────────
 export function getGoogleIdToken() {
   return loadSession()?.idToken || null;
 }
@@ -171,15 +160,6 @@ export function getResolvedShortToken(urlToken) {
     return parsed.shortToken || urlToken;
   } catch {
     return null;
-  }
-}
-
-export function clearClientUnlock(token) {
-  if (!token) return;
-  try {
-    localStorage.removeItem(LS_CLIENT_UNLOCK_PREFIX + token.toUpperCase());
-  } catch {
-    /* ignore */
   }
 }
 

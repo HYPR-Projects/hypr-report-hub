@@ -84,29 +84,6 @@ export function vtrColorClass(vtr) {
 }
 
 /**
- * Régua de cor do eCPM real (admin).
- *
- * IMPORTANTE — semântica INVERTIDA das outras métricas:
- *   pacing/CTR/VTR: maior = melhor
- *   eCPM:           MENOR = melhor (custo por mil mais eficiente,
- *                                   = mais margem)
- *
- * Tiers (em R$):
- *   < 0,70   verde   (abaixo do alvo — ótima margem)
- *   0,70–0,80  amarelo (atenção — perto do teto)
- *   ≥ 0,80   vermelho (acima do alvo — margem comprimida)
- *
- * Sem dado → cinza sutil. Thresholds definidos junto com a operação;
- * ajustar aqui se a régua mudar (única fonte da verdade pro front).
- */
-export function ecpmColorClass(ecpm) {
-  if (ecpm == null || isNaN(ecpm)) return "text-fg-subtle";
-  if (ecpm < 0.70) return "text-success";
-  if (ecpm < 0.80) return "text-warning";
-  return "text-danger";
-}
-
-/**
  * Variante de cor de FUNDO pastelíssima pro eCPM. Usa tokens base
  * (success/warning/danger) com alpha curta (/8 a /12) — bem mais
  * sutil que os tokens *-soft (alpha 0.15) que pesavam visualmente.
@@ -120,8 +97,12 @@ export function ecpmColorClass(ecpm) {
  * via tint do box em vez do texto — mais minimalista, deixa o número
  * neutro pra leitura limpa.
  *
- * Mesma régua de tiers do `ecpmColorClass`. Sem dado / sem dinheiro
- * → bg-surface neutro (não polui visualmente).
+ * Tiers (em R$):
+ *   < 0,70   verde   (abaixo do alvo — ótima margem)
+ *   0,70–0,80  amarelo (atenção — perto do teto)
+ *   ≥ 0,80   vermelho (acima do alvo — margem comprimida)
+ *
+ * Sem dado / sem dinheiro → bg-surface neutro (não polui visualmente).
  */
 export function ecpmBgClass(ecpm) {
   if (ecpm == null || isNaN(ecpm)) return "bg-surface";

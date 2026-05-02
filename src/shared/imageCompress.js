@@ -35,53 +35,6 @@ const loadImage = (src) =>
   });
 
 /**
- * Calcula a luminância média perceptual de uma imagem (escala 0-1).
- * Usa coeficientes Rec. 709 (peso maior pro verde, como o olho humano).
- * Pixels transparentes são ignorados.
- *
- * Usado pra decidir se a logo precisa de filter pra ter contraste com o
- * fundo do tema:
- *   - Logo escura (lum < 0.4) num tema dark → forçar branca
- *   - Logo clara (lum > 0.6) num tema light → forçar preta
- *   - Zona neutra (0.4-0.6): aparece em ambos, não mexe.
- *
- * Em caso de erro retorna 0.5 (neutro, não força filter).
- */
-export function detectLuminance(src) {
-  return new Promise((resolve) => {
-    if (!src) return resolve(0.5);
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => {
-      try {
-        const w = 64, h = Math.max(1, Math.round(64 * (img.height / img.width)));
-        const canvas = document.createElement("canvas");
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return resolve(0.5);
-        ctx.drawImage(img, 0, 0, w, h);
-        const { data } = ctx.getImageData(0, 0, w, h);
-        let totalLum = 0;
-        let opaquePixels = 0;
-        for (let i = 0; i < data.length; i += 4) {
-          const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
-          if (a < 32) continue;
-          opaquePixels++;
-          totalLum += (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
-        }
-        if (opaquePixels === 0) return resolve(0.5);
-        resolve(totalLum / opaquePixels);
-      } catch {
-        resolve(0.5);
-      }
-    };
-    img.onerror = () => resolve(0.5);
-    img.src = src;
-  });
-}
-
-/**
  * Comprime uma imagem (File). SVG passa sem processar.
  * Lança erro com mensagem amigável se o arquivo for inválido.
  *

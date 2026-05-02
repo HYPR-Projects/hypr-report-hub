@@ -138,7 +138,7 @@ const SurveyTab=({surveyJson,token,isAdmin,adminJwt,theme})=>{
   // Layout compacto pra matrix: 1 linha por marca, distribuição controle e
   // exposto lado a lado, média + lift na direita. Marca-foco ganha borda
   // esquerda azul, tint de fundo e ícone ★ — sem ocupar espaço extra.
-  const renderMatrix = (q, qIdx) => {
+  const renderMatrix = (q) => {
     const allRows=[...new Set([...Object.keys(q.ctrlRows||{}),...Object.keys(q.expRows||{})])];
     const sortedRows=q.focusRow
       ?[q.focusRow,...allRows.filter(r=>r!==q.focusRow)]
@@ -333,7 +333,7 @@ const SurveyTab=({surveyJson,token,isAdmin,adminJwt,theme})=>{
           {q.legacy
             ?q.questions.map((lq,j)=>renderQuestion(lq.label,null,null,q.control_total,q.exposed_total,j,true,lq))
             :q.type==="matrix"
-              ?renderMatrix(q,i)
+              ?renderMatrix(q)
               :renderQuestion(q.nome,q.ctrl,q.exp,q.control_total,q.exposed_total,i,false,null)
           }
         </div>

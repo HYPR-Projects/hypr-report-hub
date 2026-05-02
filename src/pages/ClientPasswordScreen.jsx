@@ -54,7 +54,7 @@ const ClientPasswordScreen = ({ token, onUnlock }) => {
       // Backend respondeu mas senha errada (401) ou payload inesperado.
       setErr(true);
       setTimeout(() => setErr(false), 2000);
-    } catch (_e) {
+    } catch {
       // Falha de rede: tenta o caminho legacy local. Só funciona se a
       // URL for o formato antigo (token == senha). Se for share_id
       // novo, a comparação local não tem como validar — desiste.
