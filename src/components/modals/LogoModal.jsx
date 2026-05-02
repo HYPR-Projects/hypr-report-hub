@@ -2,6 +2,8 @@ import { useState, useEffect } from "react";
 import { C } from "../../shared/theme";
 import { saveLogo as saveLogoApi, listClientLogos, getLogo } from "../../lib/api";
 import { compressImageFile } from "../../shared/imageCompress";
+import { useLogoAnalysis } from "../../v2/hooks/useLogoAnalysis";
+import { useTheme } from "../../v2/hooks/useTheme";
 import ModalShell from "./ModalShell";
 
 /**
@@ -39,6 +41,16 @@ const LogoModal = ({ shortToken, onClose, onSaved, theme }) => {
   const muted    = theme?.muted    || C.muted;
   const modalBdr = theme?.modalBdr || C.dark3;
   const inputBg  = theme?.inputBg  || C.dark3;
+
+  // Espelha a lógica do CampaignHeaderV2: detecta se a logo é monocromática
+  // clara/escura e aplica `filter: invert(1)` quando o tema do app conflita
+  // com a logo. Sem isso, logos brancas (Heineken, Nintendo) somem na
+  // preview do modal em tema light, e o admin acha que falhou.
+  const logoKind = useLogoAnalysis(preview);
+  const [appTheme] = useTheme();
+  const shouldInvertPreview =
+    (logoKind === "monochrome-light" && appTheme === "light") ||
+    (logoKind === "monochrome-dark"  && appTheme === "dark");
 
   // Ao abrir o modal, busca a galeria de logos já cadastrados em outras
   // campanhas do mesmo cliente. Em falha (rede, sem permissão, sem outras
@@ -196,7 +208,15 @@ const LogoModal = ({ shortToken, onClose, onSaved, theme }) => {
       {preview && (
         <img
           src={preview}
-          style={{ width: "100%", maxHeight: 120, objectFit: "contain", marginBottom: 20, borderRadius: 8 }}
+          style={{
+            width: "100%",
+            maxHeight: 120,
+            objectFit: "contain",
+            marginBottom: 20,
+            borderRadius: 8,
+            filter: shouldInvertPreview ? "invert(1)" : undefined,
+            transition: "filter 0.2s",
+          }}
           alt="Preview do logo"
         />
       )}
