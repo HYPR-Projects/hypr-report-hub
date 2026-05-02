@@ -420,14 +420,6 @@ def report_data(request):
                     400, headers,
                 )
 
-            def _parse_iso_date(v):
-                if not v:
-                    return None
-                try:
-                    return datetime.fromisoformat(str(v)[:10]).date()
-                except Exception:
-                    return None
-
             if target_type == "merge":
                 # Carrega membros do grupo + detail/totals de cada um.
                 group = merges.get_merge_group(target_id)
@@ -452,8 +444,8 @@ def report_data(request):
                         "short_token": st,
                         "detail_rows": pl.get("detail") or [],
                         "totals_rows": pl.get("totals") or [],
-                        "start_date":  _parse_iso_date(camp.get("start_date")),
-                        "end_date":    _parse_iso_date(camp.get("end_date")),
+                        "start_date":  _parse_iso_date_safe(camp.get("start_date")),
+                        "end_date":    _parse_iso_date_safe(camp.get("end_date")),
                     })
                 if not members_payload:
                     return (jsonify({"error": "Nenhum membro do grupo retornou dados"}), 404, headers)
@@ -482,8 +474,8 @@ def report_data(request):
                 campaign_name = campaign.get("campaign_name") or target_id
                 client_name   = campaign.get("client_name")
 
-                start_date_obj = _parse_iso_date(campaign.get("start_date"))
-                end_date_obj   = _parse_iso_date(campaign.get("end_date"))
+                start_date_obj = _parse_iso_date_safe(campaign.get("start_date"))
+                end_date_obj   = _parse_iso_date_safe(campaign.get("end_date"))
 
                 result = sheets_integration.create_sheet_for_campaign(
                     short_token=target_id,
@@ -551,11 +543,6 @@ def report_data(request):
                 if not group:
                     return (jsonify({"error": "Grupo não encontrado"}), 404, headers)
 
-                def _parse_iso_date(v):
-                    if not v: return None
-                    try: return datetime.fromisoformat(str(v)[:10]).date()
-                    except Exception: return None
-
                 members_payload = []
                 for m in (group.get("members") or []):
                     st = m.get("short_token")
@@ -567,8 +554,8 @@ def report_data(request):
                         "short_token": st,
                         "detail_rows": pl.get("detail") or [],
                         "totals_rows": pl.get("totals") or [],
-                        "start_date":  _parse_iso_date(camp.get("start_date")),
-                        "end_date":    _parse_iso_date(camp.get("end_date")),
+                        "start_date":  _parse_iso_date_safe(camp.get("start_date")),
+                        "end_date":    _parse_iso_date_safe(camp.get("end_date")),
                     })
                 sheets_integration.sync_merge_sheet(target_id, members_payload)
                 # Invalida caches afetados
@@ -613,11 +600,6 @@ def report_data(request):
                     return ([], [])
                 return (payload.get("detail") or [], payload.get("totals") or [])
 
-            def _parse_iso_date(v):
-                if not v: return None
-                try: return datetime.fromisoformat(str(v)[:10]).date()
-                except Exception: return None
-
             def _merge_loader(merge_id):
                 # Carrega grupo + detail/totals de cada membro, anotado com
                 # start_date/end_date pra a coluna `Mês` da sheet agregada.
@@ -634,8 +616,8 @@ def report_data(request):
                         "short_token": st,
                         "detail_rows": pl.get("detail") or [],
                         "totals_rows": pl.get("totals") or [],
-                        "start_date":  _parse_iso_date(camp.get("start_date")),
-                        "end_date":    _parse_iso_date(camp.get("end_date")),
+                        "start_date":  _parse_iso_date_safe(camp.get("start_date")),
+                        "end_date":    _parse_iso_date_safe(camp.get("end_date")),
                     })
                 return out
 
