@@ -232,8 +232,8 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
       </p>
       <p style={{ color: muted, fontSize: 12, marginBottom: 20, lineHeight: 1.6 }}>
         {scope === "workspace"
-          ? <>Escolha cada form direto da pasta <strong>Survey</strong> do Typeform (últimos 120 dias). Se o form estiver fora da pasta, use o modo <em>colar URL</em>.</>
-          : <>Escolha cada form da sua conta Typeform (últimos 120 dias). Se não encontrar, use <em>colar URL</em>.</>}
+          ? <>Escolha cada form direto da pasta <strong>Survey</strong> do Typeform{forms.length ? <> ({forms.length} forms disponíveis)</> : null}. Se o form estiver fora da pasta, use <em>colar URL</em>.</>
+          : <>Escolha cada form da sua conta Typeform{forms.length ? <> ({forms.length} disponíveis)</> : null}. Se não encontrar, use <em>colar URL</em>.</>}
       </p>
 
       {formsError && (
@@ -457,10 +457,21 @@ function FormPicker({ label, forms, formsById, mode, formId, url, onChange, them
 
   const selected = formId ? formsById.get(formId) : null;
 
-  const filtered = useMemo(() => {
+  // Limite de render: sem busca, mostra só os 100 mais recentes (a lista vem
+  // ordenada por last_updated_at desc do backend). Com 1900 forms no workspace,
+  // montar todos no DOM trava o scroll. Quando o admin digita algo, busca em
+  // toda a base — string match em 1900 itens é <5ms.
+  const RENDER_CAP = 100;
+  const { filtered, hiddenCount } = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return forms;
-    return forms.filter((f) => f.title?.toLowerCase().includes(q));
+    if (!q) {
+      return {
+        filtered: forms.slice(0, RENDER_CAP),
+        hiddenCount: Math.max(0, forms.length - RENDER_CAP),
+      };
+    }
+    const matches = forms.filter((f) => f.title?.toLowerCase().includes(q));
+    return { filtered: matches.slice(0, RENDER_CAP), hiddenCount: Math.max(0, matches.length - RENDER_CAP) };
   }, [forms, search]);
 
   const { text, muted, modalBdr, inputBg, cardBg } = theme;
@@ -600,7 +611,8 @@ function FormPicker({ label, forms, formsById, mode, formId, url, onChange, them
                 Nenhum form encontrado.
               </div>
             ) : (
-              filtered.map((f) => {
+              <>
+              {filtered.map((f) => {
                 const isSel = f.id === formId;
                 return (
                   <button
@@ -641,7 +653,22 @@ function FormPicker({ label, forms, formsById, mode, formId, url, onChange, them
                     </span>
                   </button>
                 );
-              })
+              })}
+              {hiddenCount > 0 && (
+                <div
+                  style={{
+                    padding: "10px 14px",
+                    color: muted,
+                    fontSize: 11,
+                    textAlign: "center",
+                    background: inputBg + "80",
+                    fontStyle: "italic",
+                  }}
+                >
+                  + {hiddenCount} {hiddenCount === 1 ? "form" : "forms"} — refine a busca pra ver mais
+                </div>
+              )}
+              </>
             )}
           </div>
         </div>

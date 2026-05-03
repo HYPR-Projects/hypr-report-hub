@@ -865,10 +865,10 @@ def report_data(request):
             return (jsonify({"error": "Erro ao buscar survey"}), 500, headers)
 
     # ── Endpoint: listar forms do Typeform da pasta "Survey" ─────────────────
-    # GET admin-only. Devolve lista de forms (id, title, last_updated_at)
-    # filtrada por workspace e janela de 120d. Cacheado 5min em memória —
-    # várias aberturas do modal não estouram rate-limit do Typeform.
-    # Aceita ?refresh=true pra invalidar e re-buscar.
+    # GET admin-only. Devolve a base inteira de forms do workspace Survey
+    # (id, title, last_updated_at), ordenada por last_updated_at desc.
+    # Cacheado 5min em memória — várias aberturas do modal não estouram
+    # rate-limit do Typeform. Aceita ?refresh=true pra invalidar e re-buscar.
     if request.method == "GET" and request.args.get("action") == "typeform_list_forms":
         if not authenticate_admin(request):
             return (jsonify({"error": "Não autorizado"}), 401, headers)
@@ -884,10 +884,10 @@ def report_data(request):
             return (jsonify(cached), 200, headers)
         try:
             workspace_id = _resolve_survey_workspace_id(TYPEFORM_TOKEN)
-            forms = _fetch_recent_typeform_forms(
+            forms = _fetch_typeform_forms(
                 TYPEFORM_TOKEN,
                 workspace_id=workspace_id,
-                days=120,
+                days=0,  # base inteira; admin filtra via search no modal
             )
             payload = {
                 "forms": forms,
@@ -3343,32 +3343,30 @@ def _fetch_typeform_forms_page(token, workspace_id, page, page_size=200):
         return json.loads(resp.read().decode())
 
 
-def _fetch_recent_typeform_forms(token, workspace_id="", days=120, hard_cap=2000):
-    """Lista forms do workspace e filtra os atualizados nos últimos `days`.
+def _fetch_typeform_forms(token, workspace_id="", days=0, hard_cap=5000):
+    """Lista forms do workspace inteiro, ordenados por last_updated_at desc.
 
-    Estratégia
-    ----------
+    `days=0` (default) devolve TUDO — admin tem 1900+ forms históricos e
+    quer poder buscar qualquer um pelo nome. `days>0` filtra por janela
+    móvel (caso queiramos reativar a poda no futuro sem mexer no caller).
+
+    Estratégia de fetch
+    -------------------
     A API do Typeform `/forms` é paginada (page_size=200) e NÃO garante
-    ordenação por `last_updated_at`. Workspaces grandes (1900+ forms)
-    têm 10+ páginas — fazer sequencial seria 10s+ de espera. Solução:
+    ordenação. Workspaces grandes (10+ páginas) seriam 10s+ sequenciais.
 
-    1. Busca página 1 sequencial (precisamos do page_count).
-    2. Busca páginas 2..N em paralelo (ThreadPoolExecutor, 8 workers).
-    3. Filtra client-side por last_updated_at >= cutoff.
+    1. Página 1 sequencial (precisamos do page_count).
+    2. Páginas 2..N em paralelo (ThreadPoolExecutor, 8 workers).
+    3. Sort client-side por last_updated_at desc.
 
-    Trade-off vs bail-early: gastamos um pouco mais de quota Typeform por
-    cache miss, mas evitamos o pior caso de 10s. Como a listagem é cacheada
-    5min, na prática são ~1 fetch completo a cada 5 min de uso ativo.
+    Cache de 5min absorve o custo: 1 fetch completo a cada 5 min de uso.
     """
-    cutoff = datetime.utcnow() - timedelta(days=days)
+    cutoff = datetime.utcnow() - timedelta(days=days) if days and days > 0 else None
 
-    # Página 1 — síncrona, pra descobrir page_count
     first = _fetch_typeform_forms_page(token, workspace_id, page=1)
     items_all = list(first.get("items") or [])
     page_count = int(first.get("page_count", 1) or 1)
 
-    # Páginas 2..N em paralelo — 8 workers cobre worst case (10 páginas)
-    # em ~2 rodadas. Mais que isso atinge rate limit do Typeform (2 req/s).
     if page_count > 1:
         with ThreadPoolExecutor(max_workers=8) as ex:
             futures = [
@@ -3384,23 +3382,24 @@ def _fetch_recent_typeform_forms(token, workspace_id="", days=120, hard_cap=2000
                     # parcial do que erro pro admin.
                     logger.warning(f"[WARN typeform_forms_page] {e}")
 
-    fresh = []  # [(ts, payload)]
+    out = []  # [(ts, payload)]
     for f in items_all:
         if not f.get("id"):
             continue
         ts = _parse_typeform_ts(f.get("last_updated_at") or f.get("created_at"))
-        if ts and ts >= cutoff:
-            fresh.append((ts, {
-                "id": f.get("id"),
-                "title": f.get("title") or "(sem título)",
-                "last_updated_at": f.get("last_updated_at") or f.get("created_at"),
-                "display_url": (f.get("_links") or {}).get("display") or "",
-            }))
-            if len(fresh) >= hard_cap:
-                break
+        if cutoff and (not ts or ts < cutoff):
+            continue
+        out.append((ts or datetime.min, {
+            "id": f.get("id"),
+            "title": f.get("title") or "(sem título)",
+            "last_updated_at": f.get("last_updated_at") or f.get("created_at"),
+            "display_url": (f.get("_links") or {}).get("display") or "",
+        }))
+        if len(out) >= hard_cap:
+            break
 
-    fresh.sort(key=lambda x: x[0], reverse=True)
-    return [x[1] for x in fresh]
+    out.sort(key=lambda x: x[0], reverse=True)
+    return [x[1] for x in out]
 
 
 def _process_typeform_items(items, field_to_row=None):
