@@ -926,11 +926,19 @@ def report_data(request):
         )
         if not form_id:
             return (jsonify({"error": "form_id ou form_url é obrigatório"}), 400, headers)
+        force_refresh = request.args.get("refresh", "").lower() == "true"
+        if force_refresh:
+            with _cache_lock:
+                _typeform_meta_cache.pop(form_id, None)
         cached = _cache_get(_typeform_meta_cache, form_id, _TYPEFORM_META_TTL)
         if cached is not None:
             return (jsonify(cached), 200, headers)
         try:
             meta = _fetch_typeform_form_meta(form_id, TYPEFORM_TOKEN)
+            logger.info(
+                f"[form_meta] form_id={form_id} type={meta.get('type')} "
+                f"rows={len(meta.get('rows') or [])}"
+            )
             _cache_set(_typeform_meta_cache, form_id, meta)
             return (jsonify(meta), 200, headers)
         except urllib.error.HTTPError as e:

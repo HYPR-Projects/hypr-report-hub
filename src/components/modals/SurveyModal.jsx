@@ -470,7 +470,44 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
             />
 
             <FocusRowField
-              block={block}
+              block={{
+                ...block,
+                refreshMeta: () => {
+                  const ids = [];
+                  if (block.ctrlMode === "list" && block.ctrlFormId) ids.push(block.ctrlFormId);
+                  if (block.expMode  === "list" && block.expFormId)  ids.push(block.expFormId);
+                  if (ids.length === 0) return;
+                  // Marca como loading e refetch com refresh=true
+                  setMetaById((prev) => {
+                    const next = new Map(prev);
+                    for (const id of ids) {
+                      next.set(id, { loading: true, type: null, rows: [] });
+                      inflightIdsRef.current.add(id);
+                    }
+                    return next;
+                  });
+                  (async () => {
+                    const results = await Promise.all(
+                      ids.map(async (id) => {
+                        try {
+                          const meta = await fetchTypeformFormMeta(id, { refresh: true });
+                          return [id, { type: meta?.type || "other", rows: meta?.rows || [] }];
+                        } catch (e) {
+                          return [id, { type: "other", rows: [], error: e?.message || "fetch error" }];
+                        }
+                      }),
+                    );
+                    setMetaById((prev) => {
+                      const next = new Map(prev);
+                      for (const [id, val] of results) {
+                        next.set(id, val);
+                        inflightIdsRef.current.delete(id);
+                      }
+                      return next;
+                    });
+                  })();
+                },
+              }}
               metaById={metaById}
               onChange={(value) => updateBlock(idx, { focusRow: value })}
               theme={{ text, muted, modalBdr, inputBg }}
@@ -951,7 +988,8 @@ function FocusRowField({ block, metaById, onChange, theme, inputStyle }) {
   }
 
   // Sem rows — input livre como fallback (modo manual em ambos, ou tipos
-  // text/rating/scale que não têm opções fixas).
+  // text/rating/scale que não têm opções fixas). Adiciona "tentar de novo"
+  // pra forçar refetch ignorando cache (útil pra forms recém-criados).
   return (
     <div style={wrapperStyle}>
       <div style={{ fontSize: 12, color: muted, marginBottom: 4 }}>
@@ -960,13 +998,45 @@ function FocusRowField({ block, metaById, onChange, theme, inputStyle }) {
       <input
         value={block.focusRow || ""}
         onChange={(e) => onChange(e.target.value)}
-        placeholder="Ex: Heineken — destaca essa resposta visualmente"
+        placeholder="Ex: Sim — destaca essa resposta visualmente"
         style={inputStyle(!!block.focusRow)}
       />
-      <div style={{ fontSize: 11, color: muted, marginTop: 6, lineHeight: 1.5, opacity: 0.85 }}>
-        {noListSlot
-          ? "Selecione os forms da pasta Survey pra ver as opções em dropdown."
-          : "Este form não expõe opções fixas (texto/escala) — digite a resposta manualmente se quiser destacá-la."}
+      <div
+        style={{
+          fontSize: 11,
+          marginTop: 6,
+          lineHeight: 1.5,
+          color: muted,
+          opacity: 0.85,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+        }}
+      >
+        <span>
+          {noListSlot
+            ? "Selecione os forms da pasta Survey pra ver as opções em dropdown."
+            : "Não consegui detectar opções deste form — digite manualmente ou tente recarregar."}
+        </span>
+        {!noListSlot && block.refreshMeta && (
+          <button
+            type="button"
+            onClick={() => block.refreshMeta()}
+            style={{
+              background: "none",
+              border: "none",
+              color: C.blue,
+              fontSize: 11,
+              fontWeight: 600,
+              cursor: "pointer",
+              padding: 0,
+              whiteSpace: "nowrap",
+            }}
+          >
+            ↻ recarregar opções
+          </button>
+        )}
       </div>
     </div>
   );

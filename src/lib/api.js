@@ -464,13 +464,11 @@ export async function listTypeformForms({ refresh = false } = {}) {
  * pré-popular o dropdown de marca-foco com as linhas reais quando o
  * form é matrix. Cacheado server-side por 10min.
  */
-export async function fetchTypeformFormMeta(formId) {
+export async function fetchTypeformFormMeta(formId, { refresh = false } = {}) {
   if (!formId) return null;
   const jwt = await getOrIssueAdminJwt();
-  const r = await fetch(
-    `${API_URL}?action=typeform_form_meta&form_id=${encodeURIComponent(formId)}`,
-    { headers: adminAuthHeaders(jwt) },
-  );
+  const url = `${API_URL}?action=typeform_form_meta&form_id=${encodeURIComponent(formId)}${refresh ? "&refresh=true" : ""}`;
+  const r = await fetch(url, { headers: adminAuthHeaders(jwt) });
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(d?.error || `HTTP ${r.status}`);
   return d;
