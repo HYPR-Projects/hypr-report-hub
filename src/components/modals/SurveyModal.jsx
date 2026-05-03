@@ -11,32 +11,24 @@ import ModalShell from "./ModalShell";
 /**
  * Modal pra configurar surveys (controle vs. exposto) via API do Typeform.
  *
- * Fluxo
- * -----
- * 1. Ao abrir, carrega em paralelo:
- *    - lista de forms da pasta Survey (últimos 120d) via `listTypeformForms`
- *    - config existente da campanha via `getSurvey` (pra entrar em modo edição)
- * 2. Cada bloco "Pergunta N" tem dois pickers (Controle, Exposto). O picker
- *    aceita selecionar da lista (combobox searchable) OU colar URL manual —
- *    fallback pra forms fora da pasta/janela. Toggle inline entre os modos.
- * 3. Ao salvar, gera payload `{nome, ctrlUrl, expUrl, focusRow?}` mantendo
- *    compat com o renderer (SurveyTab, SurveyV2). Adiciona `ctrlFormId/expFormId`
- *    pra persistir referência estável caso o título do form mude no Typeform.
+ * Modelo interno (state): cada bloco tem um array `forms` com 2 itens.
+ * Posição no array é só ordem visual; o GRUPO (controle/exposto) é
+ * deduzido do sufixo do nome do form (auto-detect) ou definido pelo
+ * admin via toggle. Isso elimina a categoria de erro "form do grupo
+ * errado no slot errado" porque slot e grupo deixam de ser acoplados.
  *
- * Backwards compat
- * ----------------
- * - Configs antigas (só URLs coladas) são lidas, e tentamos casar com forms
- *   da lista pelo form_id extraído. Se casar, vira modo "list"; senão, modo
- *   "manual" preservando a URL como estava.
+ * Persistência (BigQuery): continua igual ao formato anterior —
+ * { nome, ctrlUrl, expUrl, ctrlFormId, expFormId, focusRow? }. Na hora
+ * de salvar, identificamos qual form é controle e qual é exposto pelo
+ * groupOverride (ou pelo nome detectado) e mapeamos pra esse formato.
+ * Renderer (SurveyTab) não muda.
  */
 const EMPTY_BLOCK = (defaultMode = "list") => ({
   nome: "",
-  ctrlMode: defaultMode,
-  ctrlFormId: "",
-  ctrlUrl: "",
-  expMode: defaultMode,
-  expFormId: "",
-  expUrl: "",
+  forms: [
+    { mode: defaultMode, formId: "", url: "", groupOverride: null },
+    { mode: defaultMode, formId: "", url: "", groupOverride: null },
+  ],
   focusRow: "",
 });
 
@@ -50,12 +42,9 @@ function extractFormId(value) {
   return "";
 }
 
-// Helper de label legível pra slot
-const slotLabel = (s) => (s === "ctrl" ? "Controle" : "Exposto");
-
 // Heurística leve: identifica grupo (controle/exposto) pelo sufixo do nome.
 // Convenção HYPR: forms terminam em "_Controle" ou "_Exposto" (case-insens).
-// Forms fora dessa convenção devolvem null e não disparam nenhuma sinalização.
+// Forms fora dessa convenção devolvem null e exigem definição manual.
 const GROUP_SUFFIX_RE = /_(controle|exposto)\s*$/i;
 function parseGroupFromName(title) {
   if (!title) return null;
@@ -63,8 +52,28 @@ function parseGroupFromName(title) {
   return m ? m[1].toLowerCase() : null;
 }
 
-// Mapeamento ctrl/exp ↔ controle/exposto. ctrl=controle, exp=exposto.
-const slotExpectedGroup = (slot) => (slot === "ctrl" ? "controle" : "exposto");
+// Devolve o grupo "efetivo" de um form do bloco. Prioriza override explícito
+// (admin clicou em "trocar"), senão tenta detectar pelo nome (lookup em
+// formsById se for list-mode, ou via extractFormId+lookup se for manual).
+// Retorna null se não há override e não dá pra detectar.
+function getFormGroup(form, formsById) {
+  if (!form) return null;
+  if (form.groupOverride) return form.groupOverride;
+  let title = "";
+  if (form.formId) {
+    const f = formsById.get(form.formId);
+    if (f) title = f.title || "";
+  } else if (form.url) {
+    const id = extractFormId(form.url);
+    if (id) {
+      const f = formsById.get(id);
+      if (f) title = f.title || "";
+    }
+  }
+  return title ? parseGroupFromName(title) : null;
+}
+
+const groupLabel = (g) => (g === "controle" ? "Controle" : g === "exposto" ? "Exposto" : "");
 
 // Acha o "irmão" de um form trocando _Controle ↔ _Exposto no nome,
 // preservando a capitalização. Devolve o form encontrado ou null.
@@ -79,7 +88,6 @@ function findPartnerForm(formId, formsById, forms) {
   const swap = m[1].toLowerCase() === "controle" ? "Exposto" : "Controle";
   const swapped = isUpper ? swap.toUpperCase() : isCap ? swap : swap.toLowerCase();
   const partnerTitle = f.title.replace(GROUP_SUFFIX_RE, `_${swapped}`);
-  // Match exato primeiro (preserva case), depois case-insensitive
   return (
     forms.find((x) => x.id !== formId && x.title === partnerTitle) ||
     forms.find(
@@ -89,31 +97,29 @@ function findPartnerForm(formId, formsById, forms) {
   );
 }
 
-// Constrói mapa formId → [{blockIdx, slot}] varrendo todos os blocos.
-// Usado pra detectar duplicatas no dropdown e na hora de salvar.
-function buildUsageMap(blocks) {
+// Constrói mapa formId → [{blockIdx, formIdx, group}] varrendo blocos.
+// O `group` (efetivo) é incluído pra rotular conflitos de forma legível.
+function buildUsageMap(blocks, formsById) {
   const m = new Map();
-  blocks.forEach((b, i) => {
-    if (b.ctrlMode === "list" && b.ctrlFormId) {
-      const arr = m.get(b.ctrlFormId) || [];
-      arr.push({ blockIdx: i, slot: "ctrl" });
-      m.set(b.ctrlFormId, arr);
-    }
-    if (b.expMode === "list" && b.expFormId) {
-      const arr = m.get(b.expFormId) || [];
-      arr.push({ blockIdx: i, slot: "exp" });
-      m.set(b.expFormId, arr);
-    }
+  blocks.forEach((b, blockIdx) => {
+    b.forms.forEach((form, formIdx) => {
+      if (form.mode === "list" && form.formId) {
+        const arr = m.get(form.formId) || [];
+        const group = getFormGroup(form, formsById);
+        arr.push({ blockIdx, formIdx, group });
+        m.set(form.formId, arr);
+      }
+    });
   });
   return m;
 }
 
-// Devolve usos do form em outros slots (excluindo o slot atual).
-function conflictsFor(formId, currentBlockIdx, currentSlot, usageMap) {
+// Conflitos do form atual (excluindo o slot atual deste bloco).
+function conflictsFor(formId, currentBlockIdx, currentFormIdx, usageMap) {
   if (!formId) return [];
   const all = usageMap.get(formId) || [];
   return all.filter(
-    (u) => !(u.blockIdx === currentBlockIdx && u.slot === currentSlot),
+    (u) => !(u.blockIdx === currentBlockIdx && u.formIdx === currentFormIdx),
   );
 }
 
@@ -138,7 +144,7 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
   const [forms, setForms] = useState([]);            // [{id,title,last_updated_at,display_url}]
   const [formsError, setFormsError] = useState("");
   const [scope, setScope] = useState("workspace");
-  // Cache de meta por formId — popular sob demanda quando admin seleciona um form.
+  // Cache de meta por formId — populado sob demanda quando admin seleciona um form.
   // valor: { type: "matrix"|"choice"|"other", rows: [str], loading?: bool, error?: str }
   const [metaById, setMetaById] = useState(() => new Map());
 
@@ -154,20 +160,9 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
     return m;
   }, [forms]);
 
-  const usageMap = useMemo(() => buildUsageMap(blocks), [blocks]);
+  const usageMap = useMemo(() => buildUsageMap(blocks, formsById), [blocks, formsById]);
 
-  // Lazy-fetch da meta de cada form selecionado em modo list. Precisamos
-  // disso pra oferecer dropdown de linhas (marca-foco) só quando o form é
-  // matrix/choice. Estratégia:
-  //
-  // - metaByIdRef sempre reflete o último metaById renderizado, pra
-  //   leitura síncrona dentro do effect (sem precisar do estado nas deps,
-  //   que causa loop quando setState dispara).
-  // - inflightIdsRef rastreia ids em fetch ativo, pra evitar duplo-fetch
-  //   quando o effect re-executa (incluindo o double-invoke do StrictMode).
-  // - missing é calculado SÍNCRONO antes de setState. Não dá pra computar
-  //   dentro do updater functional porque o updater roda no próximo
-  //   render, não imediatamente — leitura via closure ficaria stale.
+  // ── Lazy-fetch da meta (rows) por formId selecionado em modo list ─────────
   const metaByIdRef = useRef(metaById);
   useEffect(() => { metaByIdRef.current = metaById; });
   const inflightIdsRef = useRef(new Set());
@@ -175,8 +170,9 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
   useEffect(() => {
     const idsNeeded = new Set();
     for (const b of blocks) {
-      if (b.ctrlMode === "list" && b.ctrlFormId) idsNeeded.add(b.ctrlFormId);
-      if (b.expMode === "list" && b.expFormId) idsNeeded.add(b.expFormId);
+      for (const f of b.forms) {
+        if (f.mode === "list" && f.formId) idsNeeded.add(f.formId);
+      }
     }
     const current = metaByIdRef.current;
     const missing = [...idsNeeded].filter(
@@ -187,9 +183,7 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
     for (const id of missing) inflightIdsRef.current.add(id);
     setMetaById((prev) => {
       const next = new Map(prev);
-      for (const id of missing) {
-        next.set(id, { loading: true, type: null, rows: [] });
-      }
+      for (const id of missing) next.set(id, { loading: true, type: null, rows: [] });
       return next;
     });
 
@@ -236,11 +230,12 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
       }
       setForms(formsList);
 
-      // Default mode = "manual" se a listagem falhou (ou veio vazia) — assim
-      // o admin nem vê o dropdown bloqueado, já cai direto em colar URL.
       const defaultMode = listFailed || formsList.length === 0 ? "manual" : "list";
 
-      // Hidrata blocos com config existente, casando URLs → form_id da lista.
+      // Hidrata blocos com config existente. O formato salvo continua
+      // ctrlFormId/expFormId; mapeamos pra forms[0]=controle, forms[1]=exposto
+      // e setamos groupOverride explicitamente (assim a classificação salva
+      // sobrevive mesmo se o nome do form mudar no Typeform).
       if (savedRaw.status === "fulfilled" && savedRaw.value) {
         try {
           const parsed = JSON.parse(savedRaw.value);
@@ -253,12 +248,20 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
               const expMatched  = expId  && idsInList.has(expId);
               return {
                 nome: q.nome || "",
-                ctrlMode: ctrlMatched ? "list" : "manual",
-                ctrlFormId: ctrlMatched ? ctrlId : "",
-                ctrlUrl: q.ctrlUrl || "",
-                expMode: expMatched ? "list" : "manual",
-                expFormId: expMatched ? expId : "",
-                expUrl: q.expUrl || "",
+                forms: [
+                  {
+                    mode: ctrlMatched ? "list" : "manual",
+                    formId: ctrlMatched ? ctrlId : "",
+                    url: q.ctrlUrl || "",
+                    groupOverride: "controle",
+                  },
+                  {
+                    mode: expMatched ? "list" : "manual",
+                    formId: expMatched ? expId : "",
+                    url: q.expUrl || "",
+                    groupOverride: "exposto",
+                  },
+                ],
                 focusRow: q.focusRow || "",
               };
             });
@@ -268,7 +271,6 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
           // JSON corrompido — mantém bloco vazio
         }
       } else if (defaultMode === "manual") {
-        // Sem config existente + lista indisponível → bloco inicial em manual
         setBlocks([EMPTY_BLOCK("manual")]);
       }
       setLoading(false);
@@ -276,12 +278,19 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
     return () => { cancelled = true; };
   }, [shortToken]);
 
-  const handleClose = () => {
-    if (onClose) onClose();
-  };
+  const handleClose = () => { if (onClose) onClose(); };
 
   const updateBlock = (idx, patch) =>
     setBlocks((b) => b.map((bl, i) => (i === idx ? { ...bl, ...patch } : bl)));
+
+  const updateForm = (blockIdx, formIdx, patch) =>
+    setBlocks((b) => b.map((bl, i) => {
+      if (i !== blockIdx) return bl;
+      return {
+        ...bl,
+        forms: bl.forms.map((f, j) => (j === formIdx ? { ...f, ...patch } : f)),
+      };
+    }));
 
   const removeBlock = (idx) =>
     setBlocks((b) => (b.length > 1 ? b.filter((_, i) => i !== idx) : b));
@@ -291,21 +300,34 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
   const handleSave = async () => {
     // Validação
     for (const [i, b] of blocks.entries()) {
-      const ctrlOk = b.ctrlMode === "list" ? !!b.ctrlFormId : !!extractFormId(b.ctrlUrl);
-      const expOk  = b.expMode  === "list" ? !!b.expFormId  : !!extractFormId(b.expUrl);
       if (!b.nome.trim()) {
         alert(`Pergunta ${i + 1}: preencha o nome.`);
         return;
       }
-      if (!ctrlOk || !expOk) {
-        alert(`Pergunta ${i + 1}: selecione (ou cole URL de) um form para Controle e Exposto.`);
+      // Cada form deve ter conteúdo (formId em list, URL válida em manual)
+      const formsOk = b.forms.every((f) =>
+        f.mode === "list" ? !!f.formId : !!extractFormId(f.url),
+      );
+      if (!formsOk) {
+        alert(`Pergunta ${i + 1}: selecione (ou cole URL de) os 2 forms do par.`);
+        return;
+      }
+      // Cada form precisa ter grupo definido (auto ou override)
+      const groups = b.forms.map((f) => getFormGroup(f, formsById));
+      if (groups.some((g) => g == null)) {
+        alert(`Pergunta ${i + 1}: defina manualmente o grupo (Controle/Exposto) dos forms sem padrão de nome.`);
+        return;
+      }
+      // Os 2 forms devem ter grupos diferentes (1 ctrl + 1 exp)
+      const ctrl = b.forms.find((f) => getFormGroup(f, formsById) === "controle");
+      const exp  = b.forms.find((f) => getFormGroup(f, formsById) === "exposto");
+      if (!ctrl || !exp) {
+        alert(`Pergunta ${i + 1}: o par precisa ter 1 form Controle e 1 Exposto. Ajuste os grupos via "trocar".`);
         return;
       }
     }
 
     // Detecção de duplicatas (mesmo formId em 2+ slots) — modo list apenas.
-    // Em modo manual, deixa passar: admin pode estar copiando URL crua e a
-    // gente não tenta inferir conflito sem ID resolvido.
     const dupes = [];
     for (const [fid, uses] of usageMap.entries()) {
       if (uses.length > 1) {
@@ -318,7 +340,7 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
       const lines = dupes
         .map((d) => {
           const slots = d.uses
-            .map((u) => `P${u.blockIdx + 1} ${slotLabel(u.slot)}`)
+            .map((u) => `P${u.blockIdx + 1} ${groupLabel(u.group) || `Form ${u.formIdx + 1}`}`)
             .join(" e ");
           return `• ${d.title}\n   ${slots}`;
         })
@@ -333,21 +355,25 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
     try {
       const payload = blocks.map((b) => {
         const out = { nome: b.nome.trim() };
-        if (b.ctrlMode === "list") {
-          const f = formsById.get(b.ctrlFormId);
-          out.ctrlFormId = b.ctrlFormId;
-          out.ctrlUrl = f?.display_url || `https://form.typeform.com/to/${b.ctrlFormId}`;
+        const ctrl = b.forms.find((f) => getFormGroup(f, formsById) === "controle");
+        const exp  = b.forms.find((f) => getFormGroup(f, formsById) === "exposto");
+        // Controle
+        if (ctrl.mode === "list") {
+          const f = formsById.get(ctrl.formId);
+          out.ctrlFormId = ctrl.formId;
+          out.ctrlUrl = f?.display_url || `https://form.typeform.com/to/${ctrl.formId}`;
         } else {
-          out.ctrlUrl = b.ctrlUrl.trim();
+          out.ctrlUrl = ctrl.url.trim();
           const id = extractFormId(out.ctrlUrl);
           if (id) out.ctrlFormId = id;
         }
-        if (b.expMode === "list") {
-          const f = formsById.get(b.expFormId);
-          out.expFormId = b.expFormId;
-          out.expUrl = f?.display_url || `https://form.typeform.com/to/${b.expFormId}`;
+        // Exposto
+        if (exp.mode === "list") {
+          const f = formsById.get(exp.formId);
+          out.expFormId = exp.formId;
+          out.expUrl = f?.display_url || `https://form.typeform.com/to/${exp.formId}`;
         } else {
-          out.expUrl = b.expUrl.trim();
+          out.expUrl = exp.url.trim();
           const id = extractFormId(out.expUrl);
           if (id) out.expFormId = id;
         }
@@ -380,6 +406,42 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
   const totalCount = blocks.length;
   const emptyForms = !loading && forms.length === 0;
 
+  // refresh handler pra usar dentro do FocusRowField via closure
+  const buildRefreshMeta = (block) => () => {
+    const ids = block.forms
+      .filter((f) => f.mode === "list" && f.formId)
+      .map((f) => f.formId);
+    if (ids.length === 0) return;
+    setMetaById((prev) => {
+      const next = new Map(prev);
+      for (const id of ids) {
+        next.set(id, { loading: true, type: null, rows: [] });
+        inflightIdsRef.current.add(id);
+      }
+      return next;
+    });
+    (async () => {
+      const results = await Promise.all(
+        ids.map(async (id) => {
+          try {
+            const meta = await fetchTypeformFormMeta(id, { refresh: true });
+            return [id, { type: meta?.type || "other", rows: meta?.rows || [] }];
+          } catch (e) {
+            return [id, { type: "other", rows: [], error: e?.message || "fetch error" }];
+          }
+        }),
+      );
+      setMetaById((prev) => {
+        const next = new Map(prev);
+        for (const [id, val] of results) {
+          next.set(id, val);
+          inflightIdsRef.current.delete(id);
+        }
+        return next;
+      });
+    })();
+  };
+
   return (
     <ModalShell onClose={handleClose} theme={theme} maxWidth={620} padding={32} maxHeight="90vh">
       <h2 style={{ fontSize: 20, fontWeight: 800, marginBottom: 4, color: text }}>
@@ -390,8 +452,8 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
       </p>
       <p style={{ color: muted, fontSize: 12, marginBottom: 20, lineHeight: 1.6 }}>
         {scope === "workspace"
-          ? <>Escolha cada form direto da pasta <strong>Survey</strong> do Typeform{forms.length ? <> ({forms.length} forms disponíveis)</> : null}. Se o form estiver fora da pasta, use <em>colar URL</em>.</>
-          : <>Escolha cada form da sua conta Typeform{forms.length ? <> ({forms.length} disponíveis)</> : null}. Se não encontrar, use <em>colar URL</em>.</>}
+          ? <>Escolha 2 forms do par direto da pasta <strong>Survey</strong> do Typeform{forms.length ? <> ({forms.length} forms disponíveis)</> : null}. O grupo (Controle/Exposto) é detectado automaticamente pelo sufixo do nome — você pode trocar manualmente se precisar.</>
+          : <>Escolha 2 forms do par da sua conta Typeform{forms.length ? <> ({forms.length} disponíveis)</> : null}. O grupo é detectado pelo sufixo do nome.</>}
       </p>
 
       {formsError && (
@@ -413,175 +475,149 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
       {loading ? (
         <SkeletonBlock theme={{ inputBg, modalBdr }} />
       ) : (
-        blocks.map((block, idx) => (
-          <div
-            key={idx}
-            style={{
-              border: `1px solid ${modalBdr}`,
-              borderRadius: 10,
-              padding: 16,
-              marginBottom: 12,
-              background: cardBg,
-            }}
-          >
+        blocks.map((block, idx) => {
+          // Validação visual em tempo real do par
+          const groups = block.forms.map((f) => getFormGroup(f, formsById));
+          const sameGroup = groups[0] && groups[1] && groups[0] === groups[1];
+
+          return (
             <div
+              key={idx}
               style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
+                border: `1px solid ${modalBdr}`,
+                borderRadius: 10,
+                padding: 16,
                 marginBottom: 12,
+                background: cardBg,
               }}
             >
               <div
                 style={{
-                  fontSize: 12,
-                  fontWeight: 700,
-                  color: C.blue,
-                  textTransform: "uppercase",
-                  letterSpacing: 1,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginBottom: 12,
                 }}
               >
-                Pergunta {idx + 1}
-              </div>
-              {blocks.length > 1 && (
-                <button
-                  onClick={() => removeBlock(idx)}
-                  title="Remover pergunta"
+                <div
                   style={{
-                    background: "none",
-                    border: "none",
-                    color: muted,
-                    cursor: "pointer",
-                    fontSize: 18,
-                    lineHeight: 1,
-                    padding: 0,
+                    fontSize: 12,
+                    fontWeight: 700,
+                    color: C.blue,
+                    textTransform: "uppercase",
+                    letterSpacing: 1,
                   }}
                 >
-                  ×
-                </button>
-              )}
-            </div>
+                  Pergunta {idx + 1}
+                </div>
+                {blocks.length > 1 && (
+                  <button
+                    onClick={() => removeBlock(idx)}
+                    title="Remover pergunta"
+                    style={{
+                      background: "none",
+                      border: "none",
+                      color: muted,
+                      cursor: "pointer",
+                      fontSize: 18,
+                      lineHeight: 1,
+                      padding: 0,
+                    }}
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
 
-            <div style={{ marginBottom: 12 }}>
-              <div style={{ fontSize: 12, color: muted, marginBottom: 4 }}>Nome da pergunta</div>
-              <input
-                value={block.nome}
-                onChange={(e) => updateBlock(idx, { nome: e.target.value })}
-                placeholder="Ex: Ad Recall, Awareness — SP..."
-                style={inputStyle(!!block.nome)}
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 12, color: muted, marginBottom: 4 }}>Nome da pergunta</div>
+                <input
+                  value={block.nome}
+                  onChange={(e) => updateBlock(idx, { nome: e.target.value })}
+                  placeholder="Ex: Ad Recall, Awareness — SP..."
+                  style={inputStyle(!!block.nome)}
+                />
+              </div>
+
+              {block.forms.map((form, fIdx) => {
+                // Sugestão: o outro slot tem form, este está vazio, e existe irmão na lista
+                const otherFilledIdx = block.forms.findIndex((x, j) => j !== fIdx && x.mode === "list" && x.formId);
+                const otherForm = otherFilledIdx >= 0 ? block.forms[otherFilledIdx] : null;
+                let suggestion = null;
+                if (form.mode === "list" && !form.formId && otherForm) {
+                  const partner = findPartnerForm(otherForm.formId, formsById, forms);
+                  if (partner) {
+                    const used = usageMap.get(partner.id) || [];
+                    if (used.length === 0) suggestion = partner;
+                  }
+                }
+
+                return (
+                  <div key={fIdx} style={{ marginBottom: fIdx === 0 ? 10 : 0 }}>
+                    <FormPicker
+                      label={`Form ${fIdx + 1} do par`}
+                      forms={forms}
+                      formsById={formsById}
+                      mode={form.mode}
+                      formId={form.formId}
+                      url={form.url}
+                      groupOverride={form.groupOverride}
+                      effectiveGroup={getFormGroup(form, formsById)}
+                      disabled={emptyForms && form.mode === "list"}
+                      usageMap={usageMap}
+                      currentBlockIdx={idx}
+                      currentFormIdx={fIdx}
+                      suggestion={suggestion}
+                      onChange={(patch) =>
+                        updateForm(idx, fIdx, {
+                          mode: patch.mode ?? form.mode,
+                          formId: patch.formId ?? (patch.mode === "manual" ? "" : form.formId),
+                          url: patch.url ?? form.url,
+                          // Quando o admin troca o form por outro pela lista,
+                          // limpa override pra deixar a auto-detecção valer.
+                          ...(patch.formId !== undefined && patch.formId !== form.formId
+                            ? { groupOverride: null }
+                            : {}),
+                          ...(patch.groupOverride !== undefined
+                            ? { groupOverride: patch.groupOverride }
+                            : {}),
+                        })
+                      }
+                      theme={{ text, muted, modalBdr, inputBg, cardBg }}
+                    />
+                  </div>
+                );
+              })}
+
+              {sameGroup && (
+                <div
+                  style={{
+                    marginTop: 8,
+                    fontSize: 11,
+                    color: "#FFB95E",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                  }}
+                >
+                  <span>⚠</span>
+                  <span>
+                    os 2 forms estão como <strong>{groupLabel(groups[0])}</strong>. Use o botão <em>trocar</em> em um deles pra formar o par Controle/Exposto.
+                  </span>
+                </div>
+              )}
+
+              <FocusRowField
+                block={block}
+                metaById={metaById}
+                onChange={(value) => updateBlock(idx, { focusRow: value })}
+                onRefreshMeta={buildRefreshMeta(block)}
+                theme={{ text, muted, modalBdr, inputBg }}
+                inputStyle={inputStyle}
               />
             </div>
-
-            <FormPicker
-              label="Form do Grupo Controle"
-              forms={forms}
-              formsById={formsById}
-              mode={block.ctrlMode}
-              formId={block.ctrlFormId}
-              url={block.ctrlUrl}
-              disabled={emptyForms && block.ctrlMode === "list"}
-              usageMap={usageMap}
-              currentBlockIdx={idx}
-              currentSlot="ctrl"
-              suggestion={
-                // Sugestão de irmão: aparece se este slot está vazio E o slot
-                // oposto tem form selecionado E o irmão (com sufixo trocado)
-                // existe na lista. Não aparece se o irmão já foi escolhido em
-                // outro bloco (evita poluir com par já em uso).
-                block.ctrlMode === "list" && !block.ctrlFormId && block.expFormId
-                  ? (() => {
-                      const partner = findPartnerForm(block.expFormId, formsById, forms);
-                      if (!partner) return null;
-                      const used = usageMap.get(partner.id) || [];
-                      return used.length === 0 ? partner : null;
-                    })()
-                  : null
-              }
-              onChange={(patch) => updateBlock(idx, {
-                ctrlMode: patch.mode ?? block.ctrlMode,
-                ctrlFormId: patch.formId ?? (patch.mode === "manual" ? "" : block.ctrlFormId),
-                ctrlUrl: patch.url ?? block.ctrlUrl,
-              })}
-              theme={{ text, muted, modalBdr, inputBg, cardBg }}
-            />
-
-            <div style={{ height: 10 }} />
-
-            <FormPicker
-              label="Form do Grupo Exposto"
-              forms={forms}
-              formsById={formsById}
-              mode={block.expMode}
-              formId={block.expFormId}
-              url={block.expUrl}
-              disabled={emptyForms && block.expMode === "list"}
-              usageMap={usageMap}
-              currentBlockIdx={idx}
-              currentSlot="exp"
-              suggestion={
-                block.expMode === "list" && !block.expFormId && block.ctrlFormId
-                  ? (() => {
-                      const partner = findPartnerForm(block.ctrlFormId, formsById, forms);
-                      if (!partner) return null;
-                      const used = usageMap.get(partner.id) || [];
-                      return used.length === 0 ? partner : null;
-                    })()
-                  : null
-              }
-              onChange={(patch) => updateBlock(idx, {
-                expMode: patch.mode ?? block.expMode,
-                expFormId: patch.formId ?? (patch.mode === "manual" ? "" : block.expFormId),
-                expUrl: patch.url ?? block.expUrl,
-              })}
-              theme={{ text, muted, modalBdr, inputBg, cardBg }}
-            />
-
-            <FocusRowField
-              block={{
-                ...block,
-                refreshMeta: () => {
-                  const ids = [];
-                  if (block.ctrlMode === "list" && block.ctrlFormId) ids.push(block.ctrlFormId);
-                  if (block.expMode  === "list" && block.expFormId)  ids.push(block.expFormId);
-                  if (ids.length === 0) return;
-                  // Marca como loading e refetch com refresh=true
-                  setMetaById((prev) => {
-                    const next = new Map(prev);
-                    for (const id of ids) {
-                      next.set(id, { loading: true, type: null, rows: [] });
-                      inflightIdsRef.current.add(id);
-                    }
-                    return next;
-                  });
-                  (async () => {
-                    const results = await Promise.all(
-                      ids.map(async (id) => {
-                        try {
-                          const meta = await fetchTypeformFormMeta(id, { refresh: true });
-                          return [id, { type: meta?.type || "other", rows: meta?.rows || [] }];
-                        } catch (e) {
-                          return [id, { type: "other", rows: [], error: e?.message || "fetch error" }];
-                        }
-                      }),
-                    );
-                    setMetaById((prev) => {
-                      const next = new Map(prev);
-                      for (const [id, val] of results) {
-                        next.set(id, val);
-                        inflightIdsRef.current.delete(id);
-                      }
-                      return next;
-                    });
-                  })();
-                },
-              }}
-              metaById={metaById}
-              onChange={(value) => updateBlock(idx, { focusRow: value })}
-              theme={{ text, muted, modalBdr, inputBg }}
-              inputStyle={inputStyle}
-            />
-          </div>
-        ))
+          );
+        })
       )}
 
       {!loading && (
@@ -646,9 +682,8 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
 };
 
 // ─── FormPicker ─────────────────────────────────────────────────────────────
-// Combobox searchable + toggle pra modo manual (URL crua). Mantém estado
-// interno apenas do termo de busca e do open/close — tudo que importa pro
-// caller volta via onChange({mode?, formId?, url?}).
+// Picker neutro (sem rótulo fixo de Controle/Exposto). Mostra chip do grupo
+// efetivo (auto-detectado pelo nome ou override manual) com botão "trocar".
 
 function FormPicker({
   label,
@@ -657,19 +692,20 @@ function FormPicker({
   mode,
   formId,
   url,
+  groupOverride,
+  effectiveGroup,        // grupo computado pelo parent (controle/exposto/null)
   onChange,
   theme,
   disabled,
   usageMap,
   currentBlockIdx,
-  currentSlot,
-  suggestion,           // form sugerido pra preencher este slot (irmão do par)
+  currentFormIdx,
+  suggestion,
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const wrapRef = useRef(null);
 
-  // Click-outside fecha o dropdown
   useEffect(() => {
     if (!open) return;
     const onDoc = (e) => {
@@ -681,17 +717,9 @@ function FormPicker({
 
   const selected = formId ? formsById.get(formId) : null;
   const ownConflicts = mode === "list"
-    ? conflictsFor(formId, currentBlockIdx, currentSlot, usageMap)
+    ? conflictsFor(formId, currentBlockIdx, currentFormIdx, usageMap)
     : [];
-  // Inferência de grupo do form selecionado e checagem contra slot esperado
-  const selectedGroup = selected ? parseGroupFromName(selected.title) : null;
-  const expectedGroup = slotExpectedGroup(currentSlot);
-  const groupMismatch = selectedGroup && selectedGroup !== expectedGroup;
 
-  // Limite de render: sem busca, mostra só os 100 mais recentes (a lista vem
-  // ordenada por last_updated_at desc do backend). Com 1900 forms no workspace,
-  // montar todos no DOM trava o scroll. Quando o admin digita algo, busca em
-  // toda a base — string match em 1900 itens é <5ms.
   const RENDER_CAP = 100;
   const { filtered, hiddenCount } = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -740,6 +768,82 @@ function FormPicker({
     </div>
   );
 
+  // Chip de grupo: aparece DEPOIS do form ser selecionado (list) ou da URL
+  // ser preenchida (manual). Mostra:
+  //   - "Controle" / "Exposto" quando há grupo efetivo
+  //   - "definir grupo" + dropdown quando não há (sem sufixo no nome)
+  // Botão "trocar" inverte o override (controle ↔ exposto).
+  const hasContent = mode === "list" ? !!formId : !!extractFormId(url);
+  const groupChip = hasContent ? (
+    <div
+      style={{
+        marginTop: 6,
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        flexWrap: "wrap",
+      }}
+    >
+      {effectiveGroup ? (
+        <>
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              padding: "3px 9px",
+              borderRadius: 999,
+              background: effectiveGroup === "controle" ? "#27AE6020" : `${C.blue}20`,
+              color: effectiveGroup === "controle" ? "#27AE60" : C.blue,
+              border: `1px solid ${effectiveGroup === "controle" ? "#27AE60" : C.blue}40`,
+            }}
+          >
+            {groupLabel(effectiveGroup)}
+            {groupOverride ? "" : " (auto)"}
+          </span>
+          <button
+            type="button"
+            onClick={() =>
+              onChange({
+                groupOverride: effectiveGroup === "controle" ? "exposto" : "controle",
+              })
+            }
+            style={{
+              background: "none",
+              border: "none",
+              color: C.blue,
+              fontSize: 11,
+              fontWeight: 600,
+              cursor: "pointer",
+              padding: 0,
+            }}
+          >
+            ↔ trocar para {effectiveGroup === "controle" ? "Exposto" : "Controle"}
+          </button>
+        </>
+      ) : (
+        <>
+          <span style={{ fontSize: 11, color: "#FFB95E" }}>
+            ⚠ grupo não detectado
+          </span>
+          <button
+            type="button"
+            onClick={() => onChange({ groupOverride: "controle" })}
+            style={chipBtn("#27AE60")}
+          >
+            Controle
+          </button>
+          <button
+            type="button"
+            onClick={() => onChange({ groupOverride: "exposto" })}
+            style={chipBtn(C.blue)}
+          >
+            Exposto
+          </button>
+        </>
+      )}
+    </div>
+  ) : null;
+
   if (mode === "manual") {
     return (
       <div>
@@ -760,6 +864,7 @@ function FormPicker({
             fontFamily: "monospace",
           }}
         />
+        {groupChip}
       </div>
     );
   }
@@ -769,8 +874,6 @@ function FormPicker({
     <div ref={wrapRef} style={{ position: "relative" }}>
       {labelRow}
 
-      {/* Sugestão de par detectado — só aparece se slot vazio E parte foi
-          selecionada no slot oposto E o irmão existe na lista */}
       {!selected && suggestion && (
         <button
           type="button"
@@ -801,7 +904,6 @@ function FormPicker({
         </button>
       )}
 
-      {/* Botão / chip de seleção */}
       <button
         onClick={() => !disabled && setOpen((o) => !o)}
         disabled={disabled}
@@ -837,6 +939,8 @@ function FormPicker({
         </span>
       </button>
 
+      {groupChip}
+
       {ownConflicts.length > 0 && (
         <div
           style={{
@@ -852,27 +956,8 @@ function FormPicker({
           <span>
             mesmo form em{" "}
             {ownConflicts
-              .map((u) => `P${u.blockIdx + 1} ${slotLabel(u.slot)}`)
+              .map((u) => `P${u.blockIdx + 1} ${groupLabel(u.group) || `Form ${u.formIdx + 1}`}`)
               .join(", ")}
-          </span>
-        </div>
-      )}
-
-      {groupMismatch && (
-        <div
-          style={{
-            marginTop: 6,
-            fontSize: 11,
-            color: "#FFB95E",
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-          }}
-        >
-          <span>⚠</span>
-          <span>
-            esse form parece ser de <strong>{slotLabel(selectedGroup === "controle" ? "ctrl" : "exp")}</strong>,
-            mas está no slot de <strong>{slotLabel(currentSlot)}</strong>
           </span>
         </div>
       )}
@@ -915,118 +1000,116 @@ function FormPicker({
               </div>
             ) : (
               <>
-              {filtered.map((f) => {
-                const isSel = f.id === formId;
-                const conflicts = conflictsFor(f.id, currentBlockIdx, currentSlot, usageMap);
-                const hasConflict = conflicts.length > 0;
-                const conflictLabel = hasConflict
-                  ? (conflicts.length === 1
-                      ? `já em P${conflicts[0].blockIdx + 1} · ${slotLabel(conflicts[0].slot)}`
-                      : `em uso em ${conflicts.length} slots`)
-                  : null;
-                const itemGroup = parseGroupFromName(f.title);
-                const groupBadgeOff = itemGroup && itemGroup !== expectedGroup;
-                return (
-                  <button
-                    key={f.id}
-                    onClick={() => {
-                      onChange({ formId: f.id });
-                      setOpen(false);
-                      setSearch("");
-                    }}
-                    title={hasConflict
-                      ? `Este form já foi usado em: ${conflicts.map((u) => `P${u.blockIdx + 1} ${slotLabel(u.slot)}`).join(", ")}`
-                      : ""}
-                    style={{
-                      width: "100%",
-                      background: isSel ? C.blue + "20" : "none",
-                      border: "none",
-                      padding: "9px 12px",
-                      textAlign: "left",
-                      cursor: "pointer",
-                      color: text,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      gap: 10,
-                      borderBottom: `1px solid ${modalBdr}40`,
-                      opacity: hasConflict ? 0.55 : 1,
-                    }}
-                  >
-                    {itemGroup ? (
-                      <span
-                        style={{
-                          flexShrink: 0,
-                          width: 18,
-                          height: 18,
-                          borderRadius: 4,
-                          fontSize: 10,
-                          fontWeight: 700,
-                          display: "inline-flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          background: itemGroup === "controle" ? "#27AE6020" : `${C.blue}20`,
-                          color: itemGroup === "controle" ? "#27AE60" : C.blue,
-                          border: `1px solid ${itemGroup === "controle" ? "#27AE60" : C.blue}40`,
-                          opacity: groupBadgeOff ? 0.5 : 1,
-                        }}
-                        aria-label={itemGroup === "controle" ? "Controle" : "Exposto"}
-                        title={itemGroup === "controle" ? "Controle" : "Exposto"}
-                      >
-                        {itemGroup === "controle" ? "C" : "E"}
-                      </span>
-                    ) : (
-                      <span style={{ flexShrink: 0, width: 18 }} aria-hidden />
-                    )}
-                    <span
+                {filtered.map((f) => {
+                  const isSel = f.id === formId;
+                  const conflicts = conflictsFor(f.id, currentBlockIdx, currentFormIdx, usageMap);
+                  const hasConflict = conflicts.length > 0;
+                  const conflictLabel = hasConflict
+                    ? (conflicts.length === 1
+                        ? `já em P${conflicts[0].blockIdx + 1} · ${groupLabel(conflicts[0].group) || `Form ${conflicts[0].formIdx + 1}`}`
+                        : `em uso em ${conflicts.length} slots`)
+                    : null;
+                  const itemGroup = parseGroupFromName(f.title);
+                  return (
+                    <button
+                      key={f.id}
+                      onClick={() => {
+                        onChange({ formId: f.id });
+                        setOpen(false);
+                        setSearch("");
+                      }}
+                      title={hasConflict
+                        ? `Este form já foi usado em: ${conflicts.map((u) => `P${u.blockIdx + 1} ${groupLabel(u.group) || `Form ${u.formIdx + 1}`}`).join(", ")}`
+                        : ""}
                       style={{
-                        fontSize: 13,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                        flex: 1,
+                        width: "100%",
+                        background: isSel ? C.blue + "20" : "none",
+                        border: "none",
+                        padding: "9px 12px",
+                        textAlign: "left",
+                        cursor: "pointer",
+                        color: text,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: 10,
+                        borderBottom: `1px solid ${modalBdr}40`,
+                        opacity: hasConflict ? 0.55 : 1,
                       }}
                     >
-                      {f.title}
-                    </span>
-                    {hasConflict ? (
+                      {itemGroup ? (
+                        <span
+                          style={{
+                            flexShrink: 0,
+                            width: 18,
+                            height: 18,
+                            borderRadius: 4,
+                            fontSize: 10,
+                            fontWeight: 700,
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            background: itemGroup === "controle" ? "#27AE6020" : `${C.blue}20`,
+                            color: itemGroup === "controle" ? "#27AE60" : C.blue,
+                            border: `1px solid ${itemGroup === "controle" ? "#27AE60" : C.blue}40`,
+                          }}
+                          aria-label={groupLabel(itemGroup)}
+                          title={groupLabel(itemGroup)}
+                        >
+                          {itemGroup === "controle" ? "C" : "E"}
+                        </span>
+                      ) : (
+                        <span style={{ flexShrink: 0, width: 18 }} aria-hidden />
+                      )}
                       <span
                         style={{
-                          fontSize: 10,
-                          flexShrink: 0,
-                          color: "#FFB95E",
-                          background: "#FFB95E18",
-                          border: "1px solid #FFB95E40",
-                          borderRadius: 999,
-                          padding: "2px 8px",
-                          fontWeight: 600,
+                          fontSize: 13,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
                           whiteSpace: "nowrap",
+                          flex: 1,
                         }}
                       >
-                        {conflictLabel}
+                        {f.title}
                       </span>
-                    ) : (
-                      <span style={{ color: muted, fontSize: 11, flexShrink: 0 }}>
-                        {relativeTime(f.last_updated_at)}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-              {hiddenCount > 0 && (
-                <div
-                  style={{
-                    padding: "10px 14px",
-                    color: muted,
-                    fontSize: 11,
-                    textAlign: "center",
-                    background: inputBg + "80",
-                    fontStyle: "italic",
-                  }}
-                >
-                  + {hiddenCount} {hiddenCount === 1 ? "form" : "forms"} — refine a busca pra ver mais
-                </div>
-              )}
+                      {hasConflict ? (
+                        <span
+                          style={{
+                            fontSize: 10,
+                            flexShrink: 0,
+                            color: "#FFB95E",
+                            background: "#FFB95E18",
+                            border: "1px solid #FFB95E40",
+                            borderRadius: 999,
+                            padding: "2px 8px",
+                            fontWeight: 600,
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {conflictLabel}
+                        </span>
+                      ) : (
+                        <span style={{ color: muted, fontSize: 11, flexShrink: 0 }}>
+                          {relativeTime(f.last_updated_at)}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+                {hiddenCount > 0 && (
+                  <div
+                    style={{
+                      padding: "10px 14px",
+                      color: muted,
+                      fontSize: 11,
+                      textAlign: "center",
+                      background: inputBg + "80",
+                      fontStyle: "italic",
+                    }}
+                  >
+                    + {hiddenCount} {hiddenCount === 1 ? "form" : "forms"} — refine a busca pra ver mais
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -1036,38 +1119,48 @@ function FormPicker({
   );
 }
 
-// ─── FocusRowField ──────────────────────────────────────────────────────────
-// Campo "resposta-foco" — sempre visível. Modos:
-// - Loading da meta dos forms (sem fallback ainda) → skeleton.
-// - Rows conhecidos (matrix children OU labels de choice/yes_no/dropdown) → <select>.
-// - Sem rows (modo manual em ambos OU forms tipo text/rating) → input livre.
-// O valor escolhido vira o destaque visual no relatório (matrix e choice).
+// Estilo dos botões "Controle"/"Exposto" no chip de "definir grupo"
+function chipBtn(color) {
+  return {
+    background: `${color}15`,
+    border: `1px solid ${color}50`,
+    color,
+    fontSize: 11,
+    fontWeight: 700,
+    padding: "3px 9px",
+    borderRadius: 999,
+    cursor: "pointer",
+  };
+}
 
-function FocusRowField({ block, metaById, onChange, theme, inputStyle }) {
+// ─── FocusRowField ──────────────────────────────────────────────────────────
+// Resposta-foco para destaque visual no relatório. Sempre visível.
+//   - Loading da meta (sem rows ainda) → skeleton
+//   - Rows conhecidos → <select>
+//   - Sem rows (manual em ambos OU tipos sem opções fixas) → input livre
+
+function FocusRowField({ block, metaById, onChange, onRefreshMeta, theme, inputStyle }) {
   const { text, muted, modalBdr, inputBg } = theme;
 
-  const ctrlMeta = block.ctrlMode === "list" && block.ctrlFormId
-    ? metaById.get(block.ctrlFormId) : null;
-  const expMeta  = block.expMode  === "list" && block.expFormId
-    ? metaById.get(block.expFormId)  : null;
+  // Iterando forms[] genericamente — não importa qual é controle/exposto.
+  const metas = block.forms.map((f) =>
+    f.mode === "list" && f.formId ? metaById.get(f.formId) : null,
+  );
 
-  // União de rows (preserva ordem ctrl primeiro). De-dup case-sensitive.
   const rows = useMemo(() => {
     const seen = new Set();
     const out = [];
-    for (const m of [ctrlMeta, expMeta]) {
+    for (const m of metas) {
       for (const r of (m?.rows || [])) {
         const t = String(r).trim();
         if (t && !seen.has(t)) { seen.add(t); out.push(t); }
       }
     }
     return out;
-  }, [ctrlMeta, expMeta]);
+  }, [metas]);
 
-  const anyLoading = (ctrlMeta?.loading) || (expMeta?.loading);
-  // Algum slot tá em modo manual ou deu erro — não temos como puxar rows;
-  // mas se o OUTRO slot tem rows via list, ainda mostramos select com eles.
-  const noListSlot = block.ctrlMode !== "list" && block.expMode !== "list";
+  const anyLoading = metas.some((m) => m?.loading);
+  const noListSlot = block.forms.every((f) => f.mode !== "list");
 
   const wrapperStyle = {
     marginTop: 12,
@@ -1075,8 +1168,6 @@ function FocusRowField({ block, metaById, onChange, theme, inputStyle }) {
     borderTop: `1px dashed ${modalBdr}`,
   };
 
-  // Skeleton enquanto carregando E sem rows ainda — evita flicker entre
-  // "vazio" → "select" quando a meta resolve.
   if (anyLoading && rows.length === 0) {
     return (
       <div style={wrapperStyle}>
@@ -1093,13 +1184,11 @@ function FocusRowField({ block, metaById, onChange, theme, inputStyle }) {
     );
   }
 
-  // Tem rows → select. Inclui "valor antigo não encontrado" se aplicável.
   if (rows.length > 0) {
     const focusInRows = !block.focusRow || rows.includes(block.focusRow);
-    const sourceLabel =
-      (ctrlMeta?.type === "matrix" || expMeta?.type === "matrix")
-        ? "linhas detectadas no form (matrix)"
-        : "opções de resposta detectadas no form";
+    const sourceLabel = metas.some((m) => m?.type === "matrix")
+      ? "linhas detectadas no form (matrix)"
+      : "opções de resposta detectadas no form";
     return (
       <div style={wrapperStyle}>
         <div style={{ fontSize: 12, color: muted, marginBottom: 4 }}>
@@ -1137,9 +1226,6 @@ function FocusRowField({ block, metaById, onChange, theme, inputStyle }) {
     );
   }
 
-  // Sem rows — input livre como fallback (modo manual em ambos, ou tipos
-  // text/rating/scale que não têm opções fixas). Adiciona "tentar de novo"
-  // pra forçar refetch ignorando cache (útil pra forms recém-criados).
   return (
     <div style={wrapperStyle}>
       <div style={{ fontSize: 12, color: muted, marginBottom: 4 }}>
@@ -1169,10 +1255,10 @@ function FocusRowField({ block, metaById, onChange, theme, inputStyle }) {
             ? "Selecione os forms da pasta Survey pra ver as opções em dropdown."
             : "Não consegui detectar opções deste form — digite manualmente ou tente recarregar."}
         </span>
-        {!noListSlot && block.refreshMeta && (
+        {!noListSlot && onRefreshMeta && (
           <button
             type="button"
-            onClick={() => block.refreshMeta()}
+            onClick={onRefreshMeta}
             style={{
               background: "none",
               border: "none",
