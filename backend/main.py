@@ -3328,64 +3328,54 @@ _typeform_meta_cache = {}  # form_id -> (timestamp, payload)
 
 
 def _fetch_typeform_form_meta(form_id, token):
-    """Busca a definição do form e devolve um payload enxuto pro frontend.
+    """Busca a definição do form + 1 página de respostas e devolve as
+    rows reais que o report vai renderizar.
 
     {
       "form_id": "abc123",
       "type": "matrix" | "choice" | "other",
-      "rows": ["Heineken", "Corona", ...]   # opções/linhas detectadas
+      "rows": ["Heineken", "Corona", ...]
     }
 
-    Rows é populado para:
-      - matrix         → títulos dos children (uma linha por marca)
-      - multiple_choice / picture_choice / dropdown → labels das choices
-      - yes_no         → ["Sim", "Não"] hardcoded (Typeform não expõe choices)
-
-    Para forms só de texto/rating/scale, rows fica vazio e o frontend
-    cai no input livre. "matrix" tem prioridade no campo `type` se houver
-    qualquer pergunta matrix; senão "choice"; senão "other".
+    Estratégia: extrai labels dos COUNTS reais das respostas (mesma lógica
+    do typeform_proxy). Esses labels são exatamente o que o frontend
+    renderiza, então qualquer focusRow escolhido aqui vai bater 100%.
+    Fallback pra definição do form quando ainda não há respostas.
     """
-    url = f"https://api.typeform.com/forms/{urllib.parse.quote(form_id)}"
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    # 1. Definição do form — pra classificar o tipo e ter o field_to_row
+    #    do matrix (necessário pro processamento de respostas)
+    url_def = f"https://api.typeform.com/forms/{urllib.parse.quote(form_id)}"
+    req = urllib.request.Request(url_def, headers={"Authorization": f"Bearer {token}"})
     with urllib.request.urlopen(req, timeout=10) as resp:
-        data = json.loads(resp.read().decode())
+        form_data = json.loads(resp.read().decode())
 
-    rows = []
+    # Classificação do tipo (só pra metadata; rows não dependem disso)
     has_matrix = False
     has_choice = False
+    field_to_row = {}
 
-    def add_row(label):
-        s = (label or "").strip()
-        if s and s not in rows:
-            rows.append(s)
-
-    def walk(fields):
+    def classify(fields):
         nonlocal has_matrix, has_choice
         for f in fields:
             ftype = f.get("type")
             properties = f.get("properties") or {}
             children = properties.get("fields") or []
-            choices = properties.get("choices") or []
-
             if ftype == "matrix":
                 has_matrix = True
                 for child in children:
-                    add_row(child.get("title"))
-            elif ftype in ("multiple_choice", "picture_choice", "dropdown"):
+                    cid = child.get("id")
+                    label = child.get("title")
+                    if cid and label:
+                        field_to_row[cid] = label
+            elif ftype in (
+                "multiple_choice", "picture_choice", "dropdown",
+                "yes_no", "rating", "opinion_scale", "nps", "legal"
+            ):
                 has_choice = True
-                for c in choices:
-                    add_row(c.get("label"))
-            elif ftype == "yes_no":
-                has_choice = True
-                # Typeform não expõe choices pra yes_no — hardcoded em PT-BR.
-                add_row("Sim")
-                add_row("Não")
-
-            # Recurse em groups/statements (matrix children são folhas).
             if children and ftype != "matrix":
-                walk(children)
+                classify(children)
 
-    walk(data.get("fields") or [])
+    classify(form_data.get("fields") or [])
 
     if has_matrix:
         kind = "matrix"
@@ -3393,6 +3383,73 @@ def _fetch_typeform_form_meta(form_id, token):
         kind = "choice"
     else:
         kind = "other"
+
+    # 2. 1 página de respostas — extrai os labels REAIS via mesma lógica
+    #    do typeform_proxy. É O QUE O REPORT VAI RENDERIZAR.
+    rows = []
+    seen = set()
+    try:
+        url_resp = (
+            f"https://api.typeform.com/forms/{urllib.parse.quote(form_id)}"
+            f"/responses?page_size=200&completed=true"
+        )
+        req = urllib.request.Request(url_resp, headers={"Authorization": f"Bearer {token}"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            resp_data = json.loads(resp.read().decode())
+        items = resp_data.get("items", [])
+        flat_counts, matrix_rows, _, _ = _process_typeform_items(items, field_to_row)
+        # Matrix rows primeiro (mais comum em Adrecall), depois flat counts
+        for label in matrix_rows.keys():
+            s = str(label).strip()
+            if s and s not in seen:
+                seen.add(s); rows.append(s)
+        for label in flat_counts.keys():
+            s = str(label).strip()
+            if s and s not in seen:
+                seen.add(s); rows.append(s)
+    except Exception as e:
+        logger.warning(f"[WARN form_meta responses for {form_id}] {e}")
+
+    # 3. Fallback: se a chamada de respostas falhou OU o form ainda não tem
+    #    respostas, tenta extrair labels da própria definição (choices/yes_no
+    #    /matrix children/scale steps).
+    if not rows:
+        def add_row(label):
+            s = str(label).strip() if label is not None else ""
+            if s and s not in seen:
+                seen.add(s); rows.append(s)
+
+        def walk_def(fields):
+            for f in fields:
+                ftype = f.get("type")
+                properties = f.get("properties") or {}
+                children = properties.get("fields") or []
+                choices = properties.get("choices") or []
+
+                if ftype == "matrix":
+                    for child in children:
+                        add_row(child.get("title"))
+                elif ftype in ("multiple_choice", "picture_choice", "dropdown"):
+                    for c in choices:
+                        add_row(c.get("label"))
+                elif ftype == "yes_no":
+                    add_row("Sim"); add_row("Não")
+                elif ftype == "legal":
+                    add_row("Sim"); add_row("Não")
+                elif ftype in ("rating", "opinion_scale"):
+                    steps = int(properties.get("steps") or 5)
+                    start = 1 if properties.get("start_at_one") else 0
+                    for i in range(start, start + steps):
+                        add_row(str(i))
+                elif ftype == "nps":
+                    for i in range(0, 11):
+                        add_row(str(i))
+
+                if children and ftype != "matrix":
+                    walk_def(children)
+
+        walk_def(form_data.get("fields") or [])
+
     return {"form_id": form_id, "type": kind, "rows": rows}
 
 
