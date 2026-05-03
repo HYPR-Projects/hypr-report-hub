@@ -4,6 +4,7 @@ import {
   saveSurvey as saveSurveyApi,
   getSurvey as getSurveyApi,
   listTypeformForms,
+  fetchTypeformFormMeta,
 } from "../../lib/api";
 import ModalShell from "./ModalShell";
 
@@ -101,6 +102,9 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
   const [forms, setForms] = useState([]);            // [{id,title,last_updated_at,display_url}]
   const [formsError, setFormsError] = useState("");
   const [scope, setScope] = useState("workspace");
+  // Cache de meta por formId — popular sob demanda quando admin seleciona um form.
+  // valor: { type: "matrix"|"choice"|"other", rows: [str], loading?: bool, error?: str }
+  const [metaById, setMetaById] = useState(() => new Map());
 
   const text     = theme?.text     || C.white;
   const muted    = theme?.muted    || C.muted;
@@ -115,6 +119,47 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
   }, [forms]);
 
   const usageMap = useMemo(() => buildUsageMap(blocks), [blocks]);
+
+  // Lazy-fetch da meta de cada form selecionado em modo list. Precisamos
+  // disso pra oferecer dropdown de linhas (marca-foco) só quando o form
+  // é matrix. Roda sempre que algum formId muda; ignora os já cacheados.
+  useEffect(() => {
+    const idsNeeded = new Set();
+    for (const b of blocks) {
+      if (b.ctrlMode === "list" && b.ctrlFormId) idsNeeded.add(b.ctrlFormId);
+      if (b.expMode === "list" && b.expFormId) idsNeeded.add(b.expFormId);
+    }
+    const missing = [...idsNeeded].filter((id) => !metaById.has(id));
+    if (missing.length === 0) return;
+
+    // Marca como loading antes de fetchar — evita flicker e re-disparos.
+    setMetaById((prev) => {
+      const next = new Map(prev);
+      for (const id of missing) next.set(id, { loading: true, type: null, rows: [] });
+      return next;
+    });
+
+    let cancelled = false;
+    (async () => {
+      const results = await Promise.all(
+        missing.map(async (id) => {
+          try {
+            const meta = await fetchTypeformFormMeta(id);
+            return [id, { type: meta?.type || "other", rows: meta?.rows || [] }];
+          } catch (e) {
+            return [id, { type: "other", rows: [], error: e?.message || "fetch error" }];
+          }
+        }),
+      );
+      if (cancelled) return;
+      setMetaById((prev) => {
+        const next = new Map(prev);
+        for (const [id, val] of results) next.set(id, val);
+        return next;
+      });
+    })();
+    return () => { cancelled = true; };
+  }, [blocks, metaById]);
 
   // ── Bootstrap: carrega config existente + lista de forms em paralelo ─────
   useEffect(() => {
@@ -413,28 +458,13 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
               theme={{ text, muted, modalBdr, inputBg, cardBg }}
             />
 
-            <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px dashed ${modalBdr}` }}>
-              <div style={{ fontSize: 12, color: muted, marginBottom: 4 }}>
-                Marca-foco para destaque <span style={{ opacity: 0.6 }}>(opcional)</span>
-              </div>
-              <input
-                value={block.focusRow || ""}
-                onChange={(e) => updateBlock(idx, { focusRow: e.target.value })}
-                placeholder="Ex: Heineken — destaca essa linha visualmente"
-                style={inputStyle(!!block.focusRow)}
-              />
-              <div
-                style={{
-                  fontSize: 11,
-                  color: muted,
-                  marginTop: 6,
-                  lineHeight: 1.5,
-                  opacity: 0.85,
-                }}
-              >
-                Para forms tipo matrix, a marca digitada acima fica em destaque visual no relatório.
-              </div>
-            </div>
+            <FocusRowField
+              block={block}
+              metaById={metaById}
+              onChange={(value) => updateBlock(idx, { focusRow: value })}
+              theme={{ text, muted, modalBdr, inputBg }}
+              inputStyle={inputStyle}
+            />
           </div>
         ))
       )}
@@ -806,6 +836,145 @@ function FormPicker({
       )}
     </div>
   );
+}
+
+// ─── FocusRowField ──────────────────────────────────────────────────────────
+// Campo "marca-foco" com fallback inteligente:
+// - Se ambos forms (ctrl + exp) são matrix: <select> com união das linhas.
+// - Se algum dos dois ainda está carregando: skeleton.
+// - Se nenhum dos dois é matrix: campo escondido (não faz sentido em choice).
+// - Se a meta falhou ou estamos em modo manual: input livre como fallback.
+
+function FocusRowField({ block, metaById, onChange, theme, inputStyle }) {
+  const { text, muted, modalBdr, inputBg } = theme;
+
+  const ctrlMeta = block.ctrlMode === "list" && block.ctrlFormId
+    ? metaById.get(block.ctrlFormId) : null;
+  const expMeta  = block.expMode  === "list" && block.expFormId
+    ? metaById.get(block.expFormId)  : null;
+
+  const anyLoading = (ctrlMeta?.loading) || (expMeta?.loading);
+  const eitherMatrix =
+    (ctrlMeta && ctrlMeta.type === "matrix") ||
+    (expMeta  && expMeta.type  === "matrix");
+  const anyManualOrError =
+    block.ctrlMode === "manual" || block.expMode === "manual" ||
+    (ctrlMeta?.error) || (expMeta?.error);
+
+  // União de linhas, preservando ordem (ctrl primeiro). Trim + de-dup case-sens.
+  const rows = useMemo(() => {
+    const seen = new Set();
+    const out = [];
+    for (const m of [ctrlMeta, expMeta]) {
+      for (const r of (m?.rows || [])) {
+        const t = String(r).trim();
+        if (t && !seen.has(t)) { seen.add(t); out.push(t); }
+      }
+    }
+    return out;
+  }, [ctrlMeta, expMeta]);
+
+  // Detecta se o focusRow salvo não bate com nenhuma linha conhecida — comum
+  // após troca de form. Adiciona como opção de "valor antigo" pro admin
+  // perceber e re-escolher.
+  const focusInRows = !block.focusRow || rows.includes(block.focusRow);
+
+  // Caso 1: matrix detectado em pelo menos um lado, lista carregada
+  if (eitherMatrix && !anyLoading && rows.length > 0) {
+    return (
+      <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px dashed ${modalBdr}` }}>
+        <div style={{ fontSize: 12, color: muted, marginBottom: 4 }}>
+          Marca-foco para destaque <span style={{ opacity: 0.6 }}>(opcional)</span>
+        </div>
+        <select
+          value={block.focusRow || ""}
+          onChange={(e) => onChange(e.target.value)}
+          style={{
+            width: "100%",
+            background: inputBg,
+            border: `1px solid ${block.focusRow ? C.blue + "60" : modalBdr}`,
+            borderRadius: 7,
+            padding: "9px 12px",
+            color: text,
+            fontSize: 13,
+            outline: "none",
+            cursor: "pointer",
+          }}
+        >
+          <option value="">— sem destaque —</option>
+          {!focusInRows && (
+            <option value={block.focusRow}>
+              {block.focusRow} (não encontrada nas linhas atuais)
+            </option>
+          )}
+          {rows.map((r) => (
+            <option key={r} value={r}>{r}</option>
+          ))}
+        </select>
+        <div style={{ fontSize: 11, color: muted, marginTop: 6, lineHeight: 1.5, opacity: 0.85 }}>
+          Linhas detectadas a partir do form {ctrlMeta?.type === "matrix" ? "Controle" : "Exposto"}.
+          A marca selecionada fica em destaque no relatório.
+        </div>
+      </div>
+    );
+  }
+
+  // Caso 2: ainda carregando meta dos forms — skeleton compacto
+  if (anyLoading && !anyManualOrError) {
+    return (
+      <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px dashed ${modalBdr}` }}>
+        <div style={{ fontSize: 12, color: muted, marginBottom: 4 }}>
+          Marca-foco <span style={{ opacity: 0.6 }}>(carregando linhas do form…)</span>
+        </div>
+        <div
+          style={{
+            height: 36, background: inputBg, borderRadius: 7, opacity: 0.5,
+            border: `1px solid ${modalBdr}`,
+          }}
+        />
+      </div>
+    );
+  }
+
+  // Caso 3: modo manual em algum slot OU meta falhou — input livre como fallback
+  if (anyManualOrError) {
+    return (
+      <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px dashed ${modalBdr}` }}>
+        <div style={{ fontSize: 12, color: muted, marginBottom: 4 }}>
+          Marca-foco para destaque <span style={{ opacity: 0.6 }}>(opcional)</span>
+        </div>
+        <input
+          value={block.focusRow || ""}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="Ex: Heineken — destaca essa linha visualmente"
+          style={inputStyle(!!block.focusRow)}
+        />
+        <div style={{ fontSize: 11, color: muted, marginTop: 6, lineHeight: 1.5, opacity: 0.85 }}>
+          Pra ver linhas em dropdown, selecione os forms da pasta Survey nos dois grupos. Se for matrix, listamos as marcas automaticamente.
+        </div>
+      </div>
+    );
+  }
+
+  // Caso 4: meta carregada mas nenhum dos forms é matrix (choice/other) — esconde
+  // o campo. Marca-foco só faz sentido em matrix. Se há focusRow legado salvo,
+  // mantém input livre pra não perder o valor silenciosamente.
+  if (block.focusRow) {
+    return (
+      <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px dashed ${modalBdr}` }}>
+        <div style={{ fontSize: 12, color: muted, marginBottom: 4 }}>
+          Marca-foco <span style={{ opacity: 0.6 }}>(form não é matrix — pode limpar)</span>
+        </div>
+        <input
+          value={block.focusRow}
+          onChange={(e) => onChange(e.target.value)}
+          style={inputStyle(true)}
+        />
+      </div>
+    );
+  }
+
+  return null; // nenhum dos forms é matrix e sem focusRow → some o campo
 }
 
 // ─── Skeleton ───────────────────────────────────────────────────────────────

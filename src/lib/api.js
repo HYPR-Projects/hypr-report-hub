@@ -459,6 +459,24 @@ export async function listTypeformForms({ refresh = false } = {}) {
 }
 
 /**
+ * Busca metadados de um form individual do Typeform: { form_id, type:
+ * "matrix"|"choice"|"other", rows: [str] }. Usado pelo SurveyModal pra
+ * pré-popular o dropdown de marca-foco com as linhas reais quando o
+ * form é matrix. Cacheado server-side por 10min.
+ */
+export async function fetchTypeformFormMeta(formId) {
+  if (!formId) return null;
+  const jwt = await getOrIssueAdminJwt();
+  const r = await fetch(
+    `${API_URL}?action=typeform_form_meta&form_id=${encodeURIComponent(formId)}`,
+    { headers: adminAuthHeaders(jwt) },
+  );
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d?.error || `HTTP ${r.status}`);
+  return d;
+}
+
+/**
  * Proxy do Typeform para evitar CORS. Caller (SurveyTab) recebe o JSON cru
  * com formato { type: "choice"|"matrix", ... }. Lança em status != 2xx.
  */

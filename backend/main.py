@@ -908,6 +908,43 @@ def report_data(request):
             logger.error(f"[ERROR typeform_list_forms] {e}")
             return (jsonify({"error": str(e)}), 502, headers)
 
+    # ── Endpoint: meta de um form Typeform (tipo + linhas se matrix) ─────────
+    # GET admin-only. Usado pelo SurveyModal pra pré-popular o dropdown da
+    # marca-foco com as linhas reais do matrix (evita o admin digitar errado).
+    # Cacheado 10min em memória por form_id — meta muda pouco.
+    if request.method == "GET" and request.args.get("action") == "typeform_form_meta":
+        if not authenticate_admin(request):
+            return (jsonify({"error": "Não autorizado"}), 401, headers)
+        TYPEFORM_TOKEN = os.environ.get("TYPEFORM_TOKEN", "")
+        if not TYPEFORM_TOKEN:
+            return (jsonify({"error": "TYPEFORM_TOKEN não configurado"}), 500, headers)
+        form_url = request.args.get("form_url", "").strip()
+        form_id_param = request.args.get("form_id", "").strip()
+        form_id = (
+            _extract_typeform_form_id(form_url)
+            if form_url else _extract_typeform_form_id(form_id_param)
+        )
+        if not form_id:
+            return (jsonify({"error": "form_id ou form_url é obrigatório"}), 400, headers)
+        cached = _cache_get(_typeform_meta_cache, form_id, _TYPEFORM_META_TTL)
+        if cached is not None:
+            return (jsonify(cached), 200, headers)
+        try:
+            meta = _fetch_typeform_form_meta(form_id, TYPEFORM_TOKEN)
+            _cache_set(_typeform_meta_cache, form_id, meta)
+            return (jsonify(meta), 200, headers)
+        except urllib.error.HTTPError as e:
+            logger.error(f"[ERROR typeform_form_meta] HTTP {e.code} for {form_id}: {e.reason}")
+            msg = {
+                401: "TYPEFORM_TOKEN inválido ou expirado",
+                403: "Sem permissão para acessar este form",
+                404: "Form não encontrado",
+            }.get(e.code, f"Erro Typeform: HTTP {e.code}")
+            return (jsonify({"error": msg, "form_id": form_id}), 502, headers)
+        except Exception as e:
+            logger.error(f"[ERROR typeform_form_meta] {e}")
+            return (jsonify({"error": str(e), "form_id": form_id}), 502, headers)
+
     # ── Endpoint: salvar survey ──────────────────────────────────────────────
     if request.method == "POST" and request.args.get("action") == "save_survey":
         if not authenticate_admin(request):
@@ -3286,6 +3323,59 @@ def _fetch_typeform_form_def(form_id, token):
 #      pode buscar pelo título via input do modal).
 # ─────────────────────────────────────────────────────────────────────────────
 _TYPEFORM_LIST_TTL = 300  # 5 min — listagem muda pouco no horizonte de uma sessão
+_TYPEFORM_META_TTL = 600  # 10 min — definição de form muda menos ainda
+_typeform_meta_cache = {}  # form_id -> (timestamp, payload)
+
+
+def _fetch_typeform_form_meta(form_id, token):
+    """Busca a definição do form e devolve um payload enxuto pro frontend.
+
+    {
+      "form_id": "abc123",
+      "type": "matrix" | "choice" | "other",
+      "rows": ["Heineken", "Corona", ...]   # só preenchido quando type=matrix
+    }
+
+    "matrix" tem prioridade — se o form tiver QUALQUER pergunta matrix,
+    classificamos como matrix e devolvemos as linhas. Forms só com
+    multiple_choice viram "choice". O resto vira "other" (text, rating,
+    etc) — frontend trata como sem rows disponíveis.
+    """
+    url = f"https://api.typeform.com/forms/{urllib.parse.quote(form_id)}"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        data = json.loads(resp.read().decode())
+
+    rows = []
+    has_matrix = False
+    has_choice = False
+
+    def walk(fields):
+        nonlocal has_matrix, has_choice
+        for f in fields:
+            ftype = f.get("type")
+            children = (f.get("properties") or {}).get("fields") or []
+            if ftype == "matrix":
+                has_matrix = True
+                for child in children:
+                    label = (child.get("title") or "").strip()
+                    if label and label not in rows:
+                        rows.append(label)
+            elif ftype in ("multiple_choice", "picture_choice", "yes_no", "dropdown"):
+                has_choice = True
+            if children and ftype != "matrix":
+                walk(children)
+
+    walk(data.get("fields") or [])
+
+    if has_matrix:
+        kind = "matrix"
+    elif has_choice:
+        kind = "choice"
+    else:
+        kind = "other"
+    return {"form_id": form_id, "type": kind, "rows": rows}
+
 
 
 def _fetch_typeform_workspaces(token):
