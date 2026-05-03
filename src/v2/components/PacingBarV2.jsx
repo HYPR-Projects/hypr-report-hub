@@ -87,8 +87,8 @@ export function PacingBarV2({
       </div>
 
       {/* Bar */}
-      <div className="relative h-2.5 rounded-full bg-canvas-deeper overflow-visible mt-4">
-        <div className="absolute inset-0 rounded-full bg-canvas-deeper overflow-hidden">
+      <div className="relative h-2.5 rounded-full bg-track overflow-visible mt-4">
+        <div className="absolute inset-0 rounded-full bg-track overflow-hidden">
           <div
             className="absolute inset-y-0 left-0 rounded-full transition-[width] duration-500 ease-out"
             style={{ width: `${baseWidth}%`, background: barColor }}

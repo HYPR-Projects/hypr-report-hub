@@ -9,19 +9,21 @@
 //   data, ponderado por budget Display+Video.
 //
 //   Linha real (signature): pacing % cumulativo, ponto por dia, vai apenas
-//   até "hoje". Mesma fórmula do KPI Pacing Geral aplicada a cada dia
-//   (média ponderada por budget de pacing Display + pacing Video).
+//   até D-1 (ontem). Os ETLs entregam dados defasados 1 dia — incluir hoje
+//   contaria o dia no esperado linear sem ter entrega correspondente, gerando
+//   um drop artificial. Mesma fórmula do KPI Pacing Geral aplicada a cada
+//   dia (média ponderada por budget de pacing Display + pacing Video).
 //
 //   Linha "no alvo" (cinza tracejado): horizontal em 100% — convenção
 //   universal de pacing em ad-tech (acima = over, abaixo = atrasado).
 //
-//   ReferenceLine vertical em "hoje" separa o passado (curva real visível)
-//   do futuro (sem dados).
+//   ReferenceLine vertical em "ontem" marca o último dia com dado completo
+//   (D-1) — coincide com a ponta direita da curva real.
 //
 // Como ler
 //   - Real ACIMA da linha 100% → over-pacing (entregando mais que o ritmo)
 //   - Real ABAIXO da linha 100% → sub-pacing (atrasado vs ritmo linear)
-//   - Valor no marker "hoje" bate com o KPI Pacing Geral acima.
+//   - Valor no marker "ontem" bate com o KPI Pacing Geral acima.
 //
 // Por que a curva pode oscilar (especialmente nos primeiros dias):
 //   No início da campanha o esperado linear é minúsculo (1/totalDays do
@@ -90,8 +92,12 @@ function buildSeries({
   });
 
   const totalDays = Math.max(1, Math.round((endDate - startDate) / ONE_DAY) + 1);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  // Cutoff = ontem (D-1). Os ETLs entregam dados sempre defasados em 1 dia,
+  // então hoje ainda tem entrega 0 enquanto o esperado linear já contaria
+  // o dia. Cortar em ontem evita o drop artificial no fim da curva.
+  const cutoff = new Date();
+  cutoff.setHours(0, 0, 0, 0);
+  cutoff.setDate(cutoff.getDate() - 1);
   const totalBudget = budgetDisplay + budgetVideo;
 
   let cumDisplay = 0;
@@ -102,7 +108,7 @@ function buildSeries({
     const date = new Date(startDate.getTime() + i * ONE_DAY);
     const iso = date.toISOString().slice(0, 10);
     const dayData = dailyByDate[iso] || { display: 0, video: 0 };
-    const isPast = date <= today;
+    const isPast = date <= cutoff;
 
     if (isPast) {
       cumDisplay += dayData.display;
@@ -139,17 +145,20 @@ function buildSeries({
   return points;
 }
 
-function findTodayLabel(points, endDate) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  // Campanha já encerrada — não faz sentido marcar "hoje" no chart.
-  if (endDate && today > endDate) return null;
+function findCutoffLabel(points, endDate) {
+  // Marker fica em D-1 (ontem) — coincide com o último ponto da curva,
+  // já que dados são D-1 e o cutoff em buildSeries também é ontem.
+  const cutoff = new Date();
+  cutoff.setHours(0, 0, 0, 0);
+  cutoff.setDate(cutoff.getDate() - 1);
+  // Campanha já encerrada — não faz sentido marcar referência temporal.
+  if (endDate && cutoff > endDate) return null;
   for (let i = points.length - 1; i >= 0; i--) {
     const [y, m, d] = points[i].date.split("-").map(Number);
     const date = new Date(y, m - 1, d);
-    if (date <= today) return points[i].label;
+    if (date <= cutoff) return points[i].label;
   }
-  return points[0]?.label;
+  return null;
 }
 
 function ChartTooltip({ active, payload, label }) {
@@ -215,7 +224,7 @@ export function CumulativePacingChartV2({
 
   if (series.length === 0) return null;
 
-  const todayLabel = findTodayLabel(series, endDate);
+  const cutoffLabel = findCutoffLabel(series, endDate);
 
   return (
     <div className="rounded-xl border border-border bg-surface-2 px-5 py-5">
@@ -288,13 +297,13 @@ export function CumulativePacingChartV2({
             animationDuration={500}
           />
 
-          {todayLabel && (
+          {cutoffLabel && (
             <ReferenceLine
-              x={todayLabel}
+              x={cutoffLabel}
               stroke={chartNeutral.axis}
               strokeDasharray="2 2"
               label={{
-                value: "hoje",
+                value: "ontem",
                 position: "top",
                 fill: chartNeutral.label,
                 fontSize: 10,
