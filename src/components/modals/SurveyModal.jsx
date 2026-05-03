@@ -850,11 +850,11 @@ function FormPicker({
 }
 
 // ─── FocusRowField ──────────────────────────────────────────────────────────
-// Campo "marca-foco" com fallback inteligente:
-// - Se ambos forms (ctrl + exp) são matrix: <select> com união das linhas.
-// - Se algum dos dois ainda está carregando: skeleton.
-// - Se nenhum dos dois é matrix: campo escondido (não faz sentido em choice).
-// - Se a meta falhou ou estamos em modo manual: input livre como fallback.
+// Campo "resposta-foco" — sempre visível. Modos:
+// - Loading da meta dos forms (sem fallback ainda) → skeleton.
+// - Rows conhecidos (matrix children OU labels de choice/yes_no/dropdown) → <select>.
+// - Sem rows (modo manual em ambos OU forms tipo text/rating) → input livre.
+// O valor escolhido vira o destaque visual no relatório (matrix e choice).
 
 function FocusRowField({ block, metaById, onChange, theme, inputStyle }) {
   const { text, muted, modalBdr, inputBg } = theme;
@@ -864,15 +864,7 @@ function FocusRowField({ block, metaById, onChange, theme, inputStyle }) {
   const expMeta  = block.expMode  === "list" && block.expFormId
     ? metaById.get(block.expFormId)  : null;
 
-  const anyLoading = (ctrlMeta?.loading) || (expMeta?.loading);
-  const eitherMatrix =
-    (ctrlMeta && ctrlMeta.type === "matrix") ||
-    (expMeta  && expMeta.type  === "matrix");
-  const anyManualOrError =
-    block.ctrlMode === "manual" || block.expMode === "manual" ||
-    (ctrlMeta?.error) || (expMeta?.error);
-
-  // União de linhas, preservando ordem (ctrl primeiro). Trim + de-dup case-sens.
+  // União de rows (preserva ordem ctrl primeiro). De-dup case-sensitive.
   const rows = useMemo(() => {
     const seen = new Set();
     const out = [];
@@ -885,17 +877,46 @@ function FocusRowField({ block, metaById, onChange, theme, inputStyle }) {
     return out;
   }, [ctrlMeta, expMeta]);
 
-  // Detecta se o focusRow salvo não bate com nenhuma linha conhecida — comum
-  // após troca de form. Adiciona como opção de "valor antigo" pro admin
-  // perceber e re-escolher.
-  const focusInRows = !block.focusRow || rows.includes(block.focusRow);
+  const anyLoading = (ctrlMeta?.loading) || (expMeta?.loading);
+  // Algum slot tá em modo manual ou deu erro — não temos como puxar rows;
+  // mas se o OUTRO slot tem rows via list, ainda mostramos select com eles.
+  const noListSlot = block.ctrlMode !== "list" && block.expMode !== "list";
 
-  // Caso 1: matrix detectado em pelo menos um lado, lista carregada
-  if (eitherMatrix && !anyLoading && rows.length > 0) {
+  const wrapperStyle = {
+    marginTop: 12,
+    paddingTop: 10,
+    borderTop: `1px dashed ${modalBdr}`,
+  };
+
+  // Skeleton enquanto carregando E sem rows ainda — evita flicker entre
+  // "vazio" → "select" quando a meta resolve.
+  if (anyLoading && rows.length === 0) {
     return (
-      <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px dashed ${modalBdr}` }}>
+      <div style={wrapperStyle}>
         <div style={{ fontSize: 12, color: muted, marginBottom: 4 }}>
-          Marca-foco para destaque <span style={{ opacity: 0.6 }}>(opcional)</span>
+          Resposta-foco <span style={{ opacity: 0.6 }}>(carregando opções do form…)</span>
+        </div>
+        <div
+          style={{
+            height: 36, background: inputBg, borderRadius: 7, opacity: 0.5,
+            border: `1px solid ${modalBdr}`,
+          }}
+        />
+      </div>
+    );
+  }
+
+  // Tem rows → select. Inclui "valor antigo não encontrado" se aplicável.
+  if (rows.length > 0) {
+    const focusInRows = !block.focusRow || rows.includes(block.focusRow);
+    const sourceLabel =
+      (ctrlMeta?.type === "matrix" || expMeta?.type === "matrix")
+        ? "linhas detectadas no form (matrix)"
+        : "opções de resposta detectadas no form";
+    return (
+      <div style={wrapperStyle}>
+        <div style={{ fontSize: 12, color: muted, marginBottom: 4 }}>
+          Resposta-foco para destaque <span style={{ opacity: 0.6 }}>(opcional)</span>
         </div>
         <select
           value={block.focusRow || ""}
@@ -915,7 +936,7 @@ function FocusRowField({ block, metaById, onChange, theme, inputStyle }) {
           <option value="">— sem destaque —</option>
           {!focusInRows && (
             <option value={block.focusRow}>
-              {block.focusRow} (não encontrada nas linhas atuais)
+              {block.focusRow} (não encontrada nas opções atuais)
             </option>
           )}
           {rows.map((r) => (
@@ -923,69 +944,32 @@ function FocusRowField({ block, metaById, onChange, theme, inputStyle }) {
           ))}
         </select>
         <div style={{ fontSize: 11, color: muted, marginTop: 6, lineHeight: 1.5, opacity: 0.85 }}>
-          Linhas detectadas a partir do form {ctrlMeta?.type === "matrix" ? "Controle" : "Exposto"}.
-          A marca selecionada fica em destaque no relatório.
+          {sourceLabel}. A opção selecionada fica em destaque visual no relatório.
         </div>
       </div>
     );
   }
 
-  // Caso 2: ainda carregando meta dos forms — skeleton compacto
-  if (anyLoading && !anyManualOrError) {
-    return (
-      <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px dashed ${modalBdr}` }}>
-        <div style={{ fontSize: 12, color: muted, marginBottom: 4 }}>
-          Marca-foco <span style={{ opacity: 0.6 }}>(carregando linhas do form…)</span>
-        </div>
-        <div
-          style={{
-            height: 36, background: inputBg, borderRadius: 7, opacity: 0.5,
-            border: `1px solid ${modalBdr}`,
-          }}
-        />
+  // Sem rows — input livre como fallback (modo manual em ambos, ou tipos
+  // text/rating/scale que não têm opções fixas).
+  return (
+    <div style={wrapperStyle}>
+      <div style={{ fontSize: 12, color: muted, marginBottom: 4 }}>
+        Resposta-foco para destaque <span style={{ opacity: 0.6 }}>(opcional)</span>
       </div>
-    );
-  }
-
-  // Caso 3: modo manual em algum slot OU meta falhou — input livre como fallback
-  if (anyManualOrError) {
-    return (
-      <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px dashed ${modalBdr}` }}>
-        <div style={{ fontSize: 12, color: muted, marginBottom: 4 }}>
-          Marca-foco para destaque <span style={{ opacity: 0.6 }}>(opcional)</span>
-        </div>
-        <input
-          value={block.focusRow || ""}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder="Ex: Heineken — destaca essa linha visualmente"
-          style={inputStyle(!!block.focusRow)}
-        />
-        <div style={{ fontSize: 11, color: muted, marginTop: 6, lineHeight: 1.5, opacity: 0.85 }}>
-          Pra ver linhas em dropdown, selecione os forms da pasta Survey nos dois grupos. Se for matrix, listamos as marcas automaticamente.
-        </div>
+      <input
+        value={block.focusRow || ""}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="Ex: Heineken — destaca essa resposta visualmente"
+        style={inputStyle(!!block.focusRow)}
+      />
+      <div style={{ fontSize: 11, color: muted, marginTop: 6, lineHeight: 1.5, opacity: 0.85 }}>
+        {noListSlot
+          ? "Selecione os forms da pasta Survey pra ver as opções em dropdown."
+          : "Este form não expõe opções fixas (texto/escala) — digite a resposta manualmente se quiser destacá-la."}
       </div>
-    );
-  }
-
-  // Caso 4: meta carregada mas nenhum dos forms é matrix (choice/other) — esconde
-  // o campo. Marca-foco só faz sentido em matrix. Se há focusRow legado salvo,
-  // mantém input livre pra não perder o valor silenciosamente.
-  if (block.focusRow) {
-    return (
-      <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px dashed ${modalBdr}` }}>
-        <div style={{ fontSize: 12, color: muted, marginBottom: 4 }}>
-          Marca-foco <span style={{ opacity: 0.6 }}>(form não é matrix — pode limpar)</span>
-        </div>
-        <input
-          value={block.focusRow}
-          onChange={(e) => onChange(e.target.value)}
-          style={inputStyle(true)}
-        />
-      </div>
-    );
-  }
-
-  return null; // nenhum dos forms é matrix e sem focusRow → some o campo
+    </div>
+  );
 }
 
 // ─── Skeleton ───────────────────────────────────────────────────────────────

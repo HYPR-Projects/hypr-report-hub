@@ -43,10 +43,12 @@ const SurveyTab=({surveyJson,token,isAdmin,adminJwt,theme})=>{
                 expRows: expData.rows || {},
               };
             }
-            // Choice: comportamento atual
+            // Choice: comportamento atual + focusRow propagado pra destacar
+            // a opção escolhida no card de lifts.
             return {
               nome: q.nome,
               type: "choice",
+              focusRow: q.focusRow || null,
               control_total: ctrlData.total,
               exposed_total: expData.total,
               ctrl: ctrlData.counts || {},
@@ -86,10 +88,16 @@ const SurveyTab=({surveyJson,token,isAdmin,adminJwt,theme})=>{
   const mt=theme?.muted||C.muted;
 
   // Pergunta tipo choice/choices simples (Sim/Não/Talvez, etc).
-  const renderQuestion=(nome,ctrl,exp,ctrlTotal,expTotal,qIdx,isLegacy,legacyQ)=>{
-    const allKeys=isLegacy
+  // focusRow (opcional): se preenchido e bater com algum dos labels, ordena
+  // esse card primeiro e aplica destaque visual (borda azul, tint, ★).
+  const renderQuestion=(nome,ctrl,exp,ctrlTotal,expTotal,qIdx,isLegacy,legacyQ,focusRow)=>{
+    const baseKeys=isLegacy
       ?[...new Set([...Object.keys(legacyQ.control),...Object.keys(legacyQ.exposed)])]
       :[...new Set([...Object.keys(ctrl),...Object.keys(exp)])];
+    // Sort: focusRow primeiro (quando bate com alguma label), demais preservam ordem.
+    const allKeys = focusRow && baseKeys.includes(focusRow)
+      ? [focusRow, ...baseKeys.filter(k=>k!==focusRow)]
+      : baseKeys;
     const ctrlMap=isLegacy?legacyQ.control:ctrl;
     const expMap=isLegacy?legacyQ.exposed:exp;
     const ctrlTot=isLegacy?Object.values(ctrlMap).reduce((a,b)=>a+b,0):ctrlTotal;
@@ -99,7 +107,7 @@ const SurveyTab=({surveyJson,token,isAdmin,adminJwt,theme})=>{
     const lifts=allKeys.map((k,i)=>{
       const abs=Math.round((expPct[i]-ctrlPct[i])*10)/10;
       const rel=ctrlPct[i]>0?Math.round((abs/ctrlPct[i])*1000)/10:0;
-      return{key:k,abs,rel};
+      return{key:k,abs,rel,isFocus:k===focusRow};
     });
     return(
       <div style={{border:`1px solid ${bdr}`,borderRadius:12,padding:20,marginBottom:16,background:bgCard}}>
@@ -114,8 +122,17 @@ const SurveyTab=({surveyJson,token,isAdmin,adminJwt,theme})=>{
             {lifts.map((l,j)=>{
               const color=l.abs>=0?"#2ECC71":"#E74C3C";
               return(
-                <div key={j} style={{border:`1px solid ${bdr}`,borderRadius:8,padding:12}}>
-                  <div style={{fontSize:12,color:mt,marginBottom:6,fontWeight:600}}>{l.key}</div>
+                <div key={j} style={{
+                  border:l.isFocus?`1px solid ${C.blue}80`:`1px solid ${bdr}`,
+                  borderLeft:l.isFocus?`3px solid ${C.blue}`:`1px solid ${bdr}`,
+                  borderRadius:8,
+                  padding:12,
+                  background:l.isFocus?`${C.blue}14`:"transparent",
+                }}>
+                  <div style={{fontSize:12,color:l.isFocus?txt:mt,marginBottom:6,fontWeight:l.isFocus?700:600,display:"flex",alignItems:"center",gap:6}}>
+                    {l.isFocus&&<span role="img" aria-label="Resposta-foco" style={{color:C.blue,fontSize:13,lineHeight:1}}>★</span>}
+                    <span>{l.key}</span>
+                  </div>
                   <div style={{display:"flex",gap:8}}>
                     <div style={{flex:1,background:bgInner,borderRadius:6,padding:"8px 10px"}}>
                       <div style={{fontSize:11,color:mt,marginBottom:2}}>Lift absoluto</div>
@@ -331,10 +348,10 @@ const SurveyTab=({surveyJson,token,isAdmin,adminJwt,theme})=>{
             </div>
           )}
           {q.legacy
-            ?q.questions.map((lq,j)=>renderQuestion(lq.label,null,null,q.control_total,q.exposed_total,j,true,lq))
+            ?q.questions.map((lq,j)=>renderQuestion(lq.label,null,null,q.control_total,q.exposed_total,j,true,lq,null))
             :q.type==="matrix"
               ?renderMatrix(q)
-              :renderQuestion(q.nome,q.ctrl,q.exp,q.control_total,q.exposed_total,i,false,null)
+              :renderQuestion(q.nome,q.ctrl,q.exp,q.control_total,q.exposed_total,i,false,null,q.focusRow)
           }
         </div>
       ))}

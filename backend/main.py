@@ -3333,13 +3333,17 @@ def _fetch_typeform_form_meta(form_id, token):
     {
       "form_id": "abc123",
       "type": "matrix" | "choice" | "other",
-      "rows": ["Heineken", "Corona", ...]   # só preenchido quando type=matrix
+      "rows": ["Heineken", "Corona", ...]   # opções/linhas detectadas
     }
 
-    "matrix" tem prioridade — se o form tiver QUALQUER pergunta matrix,
-    classificamos como matrix e devolvemos as linhas. Forms só com
-    multiple_choice viram "choice". O resto vira "other" (text, rating,
-    etc) — frontend trata como sem rows disponíveis.
+    Rows é populado para:
+      - matrix         → títulos dos children (uma linha por marca)
+      - multiple_choice / picture_choice / dropdown → labels das choices
+      - yes_no         → ["Sim", "Não"] hardcoded (Typeform não expõe choices)
+
+    Para forms só de texto/rating/scale, rows fica vazio e o frontend
+    cai no input livre. "matrix" tem prioridade no campo `type` se houver
+    qualquer pergunta matrix; senão "choice"; senão "other".
     """
     url = f"https://api.typeform.com/forms/{urllib.parse.quote(form_id)}"
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
@@ -3350,19 +3354,34 @@ def _fetch_typeform_form_meta(form_id, token):
     has_matrix = False
     has_choice = False
 
+    def add_row(label):
+        s = (label or "").strip()
+        if s and s not in rows:
+            rows.append(s)
+
     def walk(fields):
         nonlocal has_matrix, has_choice
         for f in fields:
             ftype = f.get("type")
-            children = (f.get("properties") or {}).get("fields") or []
+            properties = f.get("properties") or {}
+            children = properties.get("fields") or []
+            choices = properties.get("choices") or []
+
             if ftype == "matrix":
                 has_matrix = True
                 for child in children:
-                    label = (child.get("title") or "").strip()
-                    if label and label not in rows:
-                        rows.append(label)
-            elif ftype in ("multiple_choice", "picture_choice", "yes_no", "dropdown"):
+                    add_row(child.get("title"))
+            elif ftype in ("multiple_choice", "picture_choice", "dropdown"):
                 has_choice = True
+                for c in choices:
+                    add_row(c.get("label"))
+            elif ftype == "yes_no":
+                has_choice = True
+                # Typeform não expõe choices pra yes_no — hardcoded em PT-BR.
+                add_row("Sim")
+                add_row("Não")
+
+            # Recurse em groups/statements (matrix children são folhas).
             if children and ftype != "matrix":
                 walk(children)
 
