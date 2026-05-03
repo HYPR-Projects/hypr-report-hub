@@ -49,6 +49,37 @@ function extractFormId(value) {
   return "";
 }
 
+// Helper de label legível pra slot
+const slotLabel = (s) => (s === "ctrl" ? "Controle" : "Exposto");
+
+// Constrói mapa formId → [{blockIdx, slot}] varrendo todos os blocos.
+// Usado pra detectar duplicatas no dropdown e na hora de salvar.
+function buildUsageMap(blocks) {
+  const m = new Map();
+  blocks.forEach((b, i) => {
+    if (b.ctrlMode === "list" && b.ctrlFormId) {
+      const arr = m.get(b.ctrlFormId) || [];
+      arr.push({ blockIdx: i, slot: "ctrl" });
+      m.set(b.ctrlFormId, arr);
+    }
+    if (b.expMode === "list" && b.expFormId) {
+      const arr = m.get(b.expFormId) || [];
+      arr.push({ blockIdx: i, slot: "exp" });
+      m.set(b.expFormId, arr);
+    }
+  });
+  return m;
+}
+
+// Devolve usos do form em outros slots (excluindo o slot atual).
+function conflictsFor(formId, currentBlockIdx, currentSlot, usageMap) {
+  if (!formId) return [];
+  const all = usageMap.get(formId) || [];
+  return all.filter(
+    (u) => !(u.blockIdx === currentBlockIdx && u.slot === currentSlot),
+  );
+}
+
 function relativeTime(iso) {
   if (!iso) return "";
   const t = Date.parse(iso);
@@ -82,6 +113,8 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
     for (const f of forms) m.set(f.id, f);
     return m;
   }, [forms]);
+
+  const usageMap = useMemo(() => buildUsageMap(blocks), [blocks]);
 
   // ── Bootstrap: carrega config existente + lista de forms em paralelo ─────
   useEffect(() => {
@@ -169,6 +202,32 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
         alert(`Pergunta ${i + 1}: selecione (ou cole URL de) um form para Controle e Exposto.`);
         return;
       }
+    }
+
+    // Detecção de duplicatas (mesmo formId em 2+ slots) — modo list apenas.
+    // Em modo manual, deixa passar: admin pode estar copiando URL crua e a
+    // gente não tenta inferir conflito sem ID resolvido.
+    const dupes = [];
+    for (const [fid, uses] of usageMap.entries()) {
+      if (uses.length > 1) {
+        const f = formsById.get(fid);
+        const title = f?.title || `form ${fid}`;
+        dupes.push({ title, uses });
+      }
+    }
+    if (dupes.length > 0) {
+      const lines = dupes
+        .map((d) => {
+          const slots = d.uses
+            .map((u) => `P${u.blockIdx + 1} ${slotLabel(u.slot)}`)
+            .join(" e ");
+          return `• ${d.title}\n   ${slots}`;
+        })
+        .join("\n\n");
+      const ok = window.confirm(
+        `Atenção: o mesmo form aparece em mais de um slot:\n\n${lines}\n\nSalvar mesmo assim?`,
+      );
+      if (!ok) return;
     }
 
     setSaving(true);
@@ -322,6 +381,9 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
               formId={block.ctrlFormId}
               url={block.ctrlUrl}
               disabled={emptyForms && block.ctrlMode === "list"}
+              usageMap={usageMap}
+              currentBlockIdx={idx}
+              currentSlot="ctrl"
               onChange={(patch) => updateBlock(idx, {
                 ctrlMode: patch.mode ?? block.ctrlMode,
                 ctrlFormId: patch.formId ?? (patch.mode === "manual" ? "" : block.ctrlFormId),
@@ -340,6 +402,9 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
               formId={block.expFormId}
               url={block.expUrl}
               disabled={emptyForms && block.expMode === "list"}
+              usageMap={usageMap}
+              currentBlockIdx={idx}
+              currentSlot="exp"
               onChange={(patch) => updateBlock(idx, {
                 expMode: patch.mode ?? block.expMode,
                 expFormId: patch.formId ?? (patch.mode === "manual" ? "" : block.expFormId),
@@ -440,7 +505,20 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
 // interno apenas do termo de busca e do open/close — tudo que importa pro
 // caller volta via onChange({mode?, formId?, url?}).
 
-function FormPicker({ label, forms, formsById, mode, formId, url, onChange, theme, disabled }) {
+function FormPicker({
+  label,
+  forms,
+  formsById,
+  mode,
+  formId,
+  url,
+  onChange,
+  theme,
+  disabled,
+  usageMap,
+  currentBlockIdx,
+  currentSlot,
+}) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const wrapRef = useRef(null);
@@ -456,6 +534,9 @@ function FormPicker({ label, forms, formsById, mode, formId, url, onChange, them
   }, [open]);
 
   const selected = formId ? formsById.get(formId) : null;
+  const ownConflicts = mode === "list"
+    ? conflictsFor(formId, currentBlockIdx, currentSlot, usageMap)
+    : [];
 
   // Limite de render: sem busca, mostra só os 100 mais recentes (a lista vem
   // ordenada por last_updated_at desc do backend). Com 1900 forms no workspace,
@@ -574,6 +655,27 @@ function FormPicker({ label, forms, formsById, mode, formId, url, onChange, them
         </span>
       </button>
 
+      {ownConflicts.length > 0 && (
+        <div
+          style={{
+            marginTop: 6,
+            fontSize: 11,
+            color: "#FFB95E",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+          }}
+        >
+          <span>⚠</span>
+          <span>
+            mesmo form em{" "}
+            {ownConflicts
+              .map((u) => `P${u.blockIdx + 1} ${slotLabel(u.slot)}`)
+              .join(", ")}
+          </span>
+        </div>
+      )}
+
       {open && (
         <div
           style={{
@@ -614,6 +716,13 @@ function FormPicker({ label, forms, formsById, mode, formId, url, onChange, them
               <>
               {filtered.map((f) => {
                 const isSel = f.id === formId;
+                const conflicts = conflictsFor(f.id, currentBlockIdx, currentSlot, usageMap);
+                const hasConflict = conflicts.length > 0;
+                const conflictLabel = hasConflict
+                  ? (conflicts.length === 1
+                      ? `já em P${conflicts[0].blockIdx + 1} · ${slotLabel(conflicts[0].slot)}`
+                      : `em uso em ${conflicts.length} slots`)
+                  : null;
                 return (
                   <button
                     key={f.id}
@@ -622,6 +731,9 @@ function FormPicker({ label, forms, formsById, mode, formId, url, onChange, them
                       setOpen(false);
                       setSearch("");
                     }}
+                    title={hasConflict
+                      ? `Este form já foi usado em: ${conflicts.map((u) => `P${u.blockIdx + 1} ${slotLabel(u.slot)}`).join(", ")}`
+                      : ""}
                     style={{
                       width: "100%",
                       background: isSel ? C.blue + "20" : "none",
@@ -635,6 +747,7 @@ function FormPicker({ label, forms, formsById, mode, formId, url, onChange, them
                       justifyContent: "space-between",
                       gap: 12,
                       borderBottom: `1px solid ${modalBdr}40`,
+                      opacity: hasConflict ? 0.55 : 1,
                     }}
                   >
                     <span
@@ -648,9 +761,27 @@ function FormPicker({ label, forms, formsById, mode, formId, url, onChange, them
                     >
                       {f.title}
                     </span>
-                    <span style={{ color: muted, fontSize: 11, flexShrink: 0 }}>
-                      {relativeTime(f.last_updated_at)}
-                    </span>
+                    {hasConflict ? (
+                      <span
+                        style={{
+                          fontSize: 10,
+                          flexShrink: 0,
+                          color: "#FFB95E",
+                          background: "#FFB95E18",
+                          border: "1px solid #FFB95E40",
+                          borderRadius: 999,
+                          padding: "2px 8px",
+                          fontWeight: 600,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {conflictLabel}
+                      </span>
+                    ) : (
+                      <span style={{ color: muted, fontSize: 11, flexShrink: 0 }}>
+                        {relativeTime(f.last_updated_at)}
+                      </span>
+                    )}
                   </button>
                 );
               })}
