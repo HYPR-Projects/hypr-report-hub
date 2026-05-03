@@ -117,21 +117,19 @@ function buildSeries({
 
     let realPct = null;
     if (isPast && totalBudget > 0) {
-      // elapsed = i (mesma convenção de computeMediaPacing:
-      // Math.floor((noon de dia i − start)/1d) = i). Pós-end usa cap
-      // em totalDays (espelha o `now > end ? tDays` do KPI).
-      const elapsedDays = date > endDate ? totalDays : i;
-      if (elapsedDays > 0) {
-        const elapsedFrac = elapsedDays / totalDays;
-        const expDisplay = contractedDisplay * elapsedFrac;
-        const expVideo = contractedVideo * elapsedFrac;
-        const pacingD = expDisplay > 0 ? (cumDisplay / expDisplay) * 100 : 0;
-        const pacingV = expVideo > 0 ? (cumVideo / expVideo) * 100 : 0;
-        realPct = (pacingD * budgetDisplay + pacingV * budgetVideo) / totalBudget;
-      } else {
-        // Dia 0 — campanha começou agora, esperado = 0 (não dividir por zero)
-        realPct = 0;
-      }
+      // elapsed = i + 1 — cada ponto representa "pacing ao FIM da data X".
+      // Como cumDisplay/cumVideo já somaram dayData[X] acima, o numerador
+      // tem (i+1) dias de entrega; o denominador tem que casar pra o ponto
+      // de "ontem" bater com o KPI Pacing Geral. Usar elapsed=i (índice)
+      // gerava off-by-one — o ponto de ontem mostrava ~2× o KPI.
+      // Pós-end (campanha encerrada) cap em totalDays.
+      const elapsedDays = date > endDate ? totalDays : i + 1;
+      const elapsedFrac = elapsedDays / totalDays;
+      const expDisplay = contractedDisplay * elapsedFrac;
+      const expVideo = contractedVideo * elapsedFrac;
+      const pacingD = expDisplay > 0 ? (cumDisplay / expDisplay) * 100 : 0;
+      const pacingV = expVideo > 0 ? (cumVideo / expVideo) * 100 : 0;
+      realPct = (pacingD * budgetDisplay + pacingV * budgetVideo) / totalBudget;
     }
 
     points.push({
