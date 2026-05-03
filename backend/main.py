@@ -3332,57 +3332,72 @@ def _parse_typeform_ts(raw):
         return None
 
 
-def _fetch_recent_typeform_forms(token, workspace_id="", days=120, hard_cap=600):
-    """Lista forms recentes do workspace, parando assim que sair da janela.
+def _fetch_typeform_forms_page(token, workspace_id, page, page_size=200):
+    """Busca uma página única do endpoint /forms. Devolve o JSON decodificado."""
+    params = f"page={page}&page_size={page_size}"
+    if workspace_id:
+        params += f"&workspace_id={urllib.parse.quote(workspace_id)}"
+    url = f"https://api.typeform.com/forms?{params}"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.loads(resp.read().decode())
 
-    Otimização crucial: a API do Typeform retorna `/forms` ordenado por
-    `last_updated_at` desc por default. Em workspaces grandes (ex: 1900+
-    forms) seria absurdo paginar tudo só pra filtrar 100 recentes — então
-    paramos assim que vemos uma página em que TODOS os forms já estão
-    fora da janela. `hard_cap` é só uma trava extra contra loop infinito.
 
-    Devolve payload enxuto: [{id, title, last_updated_at, display_url}]
-    ordenado por last_updated_at desc.
+def _fetch_recent_typeform_forms(token, workspace_id="", days=120, hard_cap=2000):
+    """Lista forms do workspace e filtra os atualizados nos últimos `days`.
+
+    Estratégia
+    ----------
+    A API do Typeform `/forms` é paginada (page_size=200) e NÃO garante
+    ordenação por `last_updated_at`. Workspaces grandes (1900+ forms)
+    têm 10+ páginas — fazer sequencial seria 10s+ de espera. Solução:
+
+    1. Busca página 1 sequencial (precisamos do page_count).
+    2. Busca páginas 2..N em paralelo (ThreadPoolExecutor, 8 workers).
+    3. Filtra client-side por last_updated_at >= cutoff.
+
+    Trade-off vs bail-early: gastamos um pouco mais de quota Typeform por
+    cache miss, mas evitamos o pior caso de 10s. Como a listagem é cacheada
+    5min, na prática são ~1 fetch completo a cada 5 min de uso ativo.
     """
     cutoff = datetime.utcnow() - timedelta(days=days)
+
+    # Página 1 — síncrona, pra descobrir page_count
+    first = _fetch_typeform_forms_page(token, workspace_id, page=1)
+    items_all = list(first.get("items") or [])
+    page_count = int(first.get("page_count", 1) or 1)
+
+    # Páginas 2..N em paralelo — 8 workers cobre worst case (10 páginas)
+    # em ~2 rodadas. Mais que isso atinge rate limit do Typeform (2 req/s).
+    if page_count > 1:
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            futures = [
+                ex.submit(_fetch_typeform_forms_page, token, workspace_id, p)
+                for p in range(2, page_count + 1)
+            ]
+            for fut in futures:
+                try:
+                    data = fut.result()
+                    items_all.extend(data.get("items") or [])
+                except Exception as e:
+                    # Página individual falhou — loga e segue. Melhor lista
+                    # parcial do que erro pro admin.
+                    logger.warning(f"[WARN typeform_forms_page] {e}")
+
     fresh = []  # [(ts, payload)]
-    page = 1
-
-    while len(fresh) < hard_cap:
-        params = f"page={page}&page_size=200"
-        if workspace_id:
-            params += f"&workspace_id={urllib.parse.quote(workspace_id)}"
-        url = f"https://api.typeform.com/forms?{params}"
-        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
-
-        items = data.get("items", [])
-        if not items:
-            break
-
-        page_had_fresh = False
-        for f in items:
-            ts = _parse_typeform_ts(f.get("last_updated_at") or f.get("created_at"))
-            if ts and ts >= cutoff and f.get("id"):
-                page_had_fresh = True
-                fresh.append((ts, {
-                    "id": f.get("id"),
-                    "title": f.get("title") or "(sem título)",
-                    "last_updated_at": f.get("last_updated_at") or f.get("created_at"),
-                    "display_url": (f.get("_links") or {}).get("display") or "",
-                }))
-
-        # Se a página inteira ficou fora da janela, paramos. Como o Typeform
-        # ordena por last_updated_at desc, todas as próximas serão ainda
-        # mais antigas.
-        if not page_had_fresh:
-            break
-
-        # Se a página veio incompleta, não há mais páginas.
-        if len(items) < 200 or page >= int(data.get("page_count", 1)):
-            break
-        page += 1
+    for f in items_all:
+        if not f.get("id"):
+            continue
+        ts = _parse_typeform_ts(f.get("last_updated_at") or f.get("created_at"))
+        if ts and ts >= cutoff:
+            fresh.append((ts, {
+                "id": f.get("id"),
+                "title": f.get("title") or "(sem título)",
+                "last_updated_at": f.get("last_updated_at") or f.get("created_at"),
+                "display_url": (f.get("_links") or {}).get("display") or "",
+            }))
+            if len(fresh) >= hard_cap:
+                break
 
     fresh.sort(key=lambda x: x[0], reverse=True)
     return [x[1] for x in fresh]
