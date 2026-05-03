@@ -24,7 +24,27 @@ import {
   daysInRange,
   daysBetween,
   formatRangeShort,
+  parseYmd,
+  ymd,
 } from "./dateFilter";
+
+/**
+ * `range` engloba inteiramente a janela [startStr, endStr]?
+ *
+ * Compara como string YYYY-MM-DD (lexicográfico equivale a cronológico
+ * nesse formato). Usado pra detectar "filtro cobre 100% do membro/campanha"
+ * — nesse caso o cálculo proporcional é descartado e o totals fechado é
+ * usado direto, evitando divergência entre fontes (totals lê de
+ * unified_daily_performance_metrics, detail lê de campaign_results, e o
+ * delta entre essas tabelas vazava no resultado proporcional mesmo quando
+ * a janela cobria o período inteiro).
+ */
+function rangeCoversWindow(range, startStr, endStr) {
+  if (!range || !startStr || !endStr) return false;
+  const fromYmd = ymd(range.from);
+  const toYmd   = ymd(range.to);
+  return fromYmd <= startStr && toYmd >= endStr;
+}
 
 /**
  * Extrai o segundo-último token de um line_name "_-separado".
@@ -261,9 +281,14 @@ export const computeVideoKpis = ({ rows, detail, tactic }) => {
  * @param {Array} rows         totals filtrados por media_type
  * @param {object} camp        data.campaign (precisa de start_date e end_date)
  * @param {"DISPLAY"|"VIDEO"} mediaType
+ * @param {"ALL"|"O2O"|"OOH"} tactic  Quando "O2O"/"OOH", restringe NEG e
+ *   ENTREGUE só a essa frente. Crítico quando rows já foi filtrado por
+ *   tactic — sem esse arg, neg seguiria usando contratado O2O+OOH (campos
+ *   denormalizados em rows[0]) e pacing seria entregue_X / contrato_total,
+ *   matematicamente errado.
  * @returns {number} pacing em % (ex.: 87.4 = 87.4%)
  */
-export function computeMediaPacing(rows, camp, mediaType) {
+export function computeMediaPacing(rows, camp, mediaType, tactic = "ALL") {
   if (!rows?.length || !camp?.start_date || !camp?.end_date) return 0;
 
   const isVideo = mediaType === "VIDEO";
@@ -277,18 +302,21 @@ export function computeMediaPacing(rows, camp, mediaType) {
   const eDays = now < start ? 0 : now > end ? tDays : Math.floor((now - start) / 864e5);
   if (tDays <= 0 || eDays <= 0) return 0;
 
-  // Negociado total (contratado + bônus) somando O2O + OOH.
-  // Bônus entra no negociado (entrega bonificada conta no pacing
-  // volumétrico), mas NÃO entra no budget (bonificação fica fora do
-  // faturamento — tratado em o2o_*_budget / ooh_*_budget no backend).
-  // Campos *_<tactic>_<media>_<unit> são denormalizados — todas as rows
-  // carregam o mesmo valor de campanha, basta ler de rows[0].
+  // Negociado (contratado + bônus). Campos *_<tactic>_<media>_<unit> são
+  // denormalizados — todas as rows carregam o mesmo valor da campanha,
+  // basta ler de rows[0]. Quando tactic="ALL", soma O2O+OOH; quando é
+  // "O2O" ou "OOH", lê só aquela frente — assim o numerador (delivered
+  // já restrito pelo filtro do caller) bate com o denominador.
   const r0 = rows[0] || {};
-  const negTotal = isVideo
+  const includeO2O = tactic === "ALL" || tactic === "O2O";
+  const includeOOH = tactic === "ALL" || tactic === "OOH";
+  const negO2O = isVideo
     ? (r0.contracted_o2o_video_completions   || 0) + (r0.bonus_o2o_video_completions   || 0)
-    + (r0.contracted_ooh_video_completions   || 0) + (r0.bonus_ooh_video_completions   || 0)
-    : (r0.contracted_o2o_display_impressions || 0) + (r0.bonus_o2o_display_impressions || 0)
-    + (r0.contracted_ooh_display_impressions || 0) + (r0.bonus_ooh_display_impressions || 0);
+    : (r0.contracted_o2o_display_impressions || 0) + (r0.bonus_o2o_display_impressions || 0);
+  const negOOH = isVideo
+    ? (r0.contracted_ooh_video_completions   || 0) + (r0.bonus_ooh_video_completions   || 0)
+    : (r0.contracted_ooh_display_impressions || 0) + (r0.bonus_ooh_display_impressions || 0);
+  const negTotal = (includeO2O ? negO2O : 0) + (includeOOH ? negOOH : 0);
 
   const totalDelivered = rows.reduce((s, r) => s + (isVideo
     ? (r.viewable_video_view_100_complete || r.completions || 0)
@@ -349,99 +377,39 @@ export function computeMediaPacing(rows, camp, mediaType) {
  * sobre o custo total de totalsRaw (que é correto) baseado em delivery
  * do detail filtrado — exatamente o que enrichDetailCosts já faz.
  */
-export function computeAggregates(data, mainRange) {
+export function computeAggregates(data, mainRange, mainTactic = "ALL") {
   if (!data || !data.campaign) return null;
 
   const noSurvey = (r) => !/survey/i.test(r.line_name || "");
-  const totalsRaw = (data.totals || []).filter(noSurvey);
-  const dailyRaw  = (data.daily  || []).filter(noSurvey);
-  const detailRaw = (data.detail || []).filter(noSurvey);
+  // mainTactic = "O2O" | "OOH" | "ALL". Filtro do "core product" da Visão
+  // Geral. Aplicado na entrada (totals/daily/detail) pra que toda a árvore
+  // de cálculo abaixo (proporção por membro, charts, sumários) trabalhe
+  // sobre o subset coerente. Sem branch novo no resto do código.
+  const tacticOk = (r) => mainTactic === "ALL" || r.tactic_type === mainTactic;
+  const totalsRaw = (data.totals || []).filter(noSurvey).filter(tacticOk);
+  const dailyRaw  = (data.daily  || []).filter(noSurvey).filter(tacticOk);
+  const detailRaw = (data.detail || []).filter(noSurvey).filter(tacticOk);
 
   const isFiltered = !!mainRange;
   const daily0  = isFiltered ? dailyRaw.filter(r => inRange(r.date, mainRange))   : dailyRaw;
   const detail0 = isFiltered ? detailRaw.filter(r => inRange(r.date, mainRange))  : detailRaw;
 
-  // Quando filtrado, reconstroi `totals` agregando delivery do `detail0`
-  // (campos SUM no backend — somar é correto) e aplicando proporção sobre
-  // o custo total de `totalsRaw` (que vem com SUM correto do backend).
+  // Visão agregada (merged) com filtro: a fórmula proporcional padrão
+  // assumiria CPM uniforme entre os membros do grupo, o que faz o custo
+  // efetivo agregado em janela curta divergir do drill-down do mesmo
+  // membro com o mesmo filtro. Aqui calculamos cost por-membro (cada um
+  // proporciona contra seu próprio totals) e somamos. Sem merge_meta ou
+  // sem filtro, segue o caminho single-token original.
+  const isMergedAgg = isFiltered
+    && Array.isArray(data.merge_meta?.members)
+    && data.merge_meta.members.length > 1
+    && data.merge_meta.members.every(m => Array.isArray(m.totals));
+
   let totals = totalsRaw;
   if (isFiltered) {
-    // 1) Soma delivery do detail filtrado por (media_type, tactic_type)
-    const byKey = {};
-    detail0.forEach(r => {
-      const k = `${r.media_type}|${r.tactic_type}`;
-      if (!byKey[k]) {
-        byKey[k] = {
-          media_type: r.media_type,
-          tactic_type: r.tactic_type,
-          impressions: 0,
-          viewable_impressions: 0,
-          clicks: 0,
-          video_view_100: 0,
-          video_view_25: 0, video_view_50: 0, video_view_75: 0,
-          video_starts: 0,
-          completions: 0,
-          line_name: "TOTAL",
-        };
-      }
-      const g = byKey[k];
-      g.impressions          += r.impressions          || 0;
-      g.viewable_impressions += r.viewable_impressions || 0;
-      g.clicks               += r.clicks               || 0;
-      g.video_view_100       += r.video_view_100       || 0;
-      g.video_view_25        += r.video_view_25        || 0;
-      g.video_view_50        += r.video_view_50        || 0;
-      g.video_view_75        += r.video_view_75        || 0;
-      g.video_starts         += r.video_starts         || 0;
-      g.completions          += r.video_view_100       || 0;
-    });
-
-    // 2) Pra cada (media_type, tactic_type), aplica proporção sobre o
-    //    custo total CORRETO de totalsRaw. Display usa viewable_impressions
-    //    como denominador, Video usa completions (consistente com CPM/CPCV).
-    totals = totalsRaw.map(orig => {
-      const k = `${orig.media_type}|${orig.tactic_type}`;
-      const g = byKey[k] || {
-        media_type: orig.media_type,
-        tactic_type: orig.tactic_type,
-        impressions: 0, viewable_impressions: 0, clicks: 0,
-        video_view_100: 0, video_view_25: 0, video_view_50: 0, video_view_75: 0,
-        video_starts: 0, completions: 0,
-        line_name: "TOTAL",
-      };
-      const isVideo = orig.media_type === "VIDEO";
-      const denom_filtered = isVideo ? (g.completions || 0)            : (g.viewable_impressions || 0);
-      const denom_total    = isVideo ? (orig.completions || 0)         : (orig.viewable_impressions || 0);
-      const proportion     = denom_total > 0 ? denom_filtered / denom_total : 0;
-
-      const cost_filtered      = (orig.effective_total_cost      || 0) * proportion;
-      const cost_over_filtered = (orig.effective_cost_with_over  || 0) * proportion;
-
-      // CPM/CPCV efetivo derivado dos novos valores
-      const eff_cpm  = g.viewable_impressions > 0 ? (cost_filtered / g.viewable_impressions) * 1000 : 0;
-      const eff_cpcv = g.completions          > 0 ? (cost_filtered / g.completions)                : 0;
-
-      return {
-        ...g,
-        deal_cpm_amount:           orig.deal_cpm_amount  || 0,
-        deal_cpcv_amount:          orig.deal_cpcv_amount || 0,
-        effective_total_cost:      Math.round(cost_filtered      * 100) / 100,
-        effective_cost_with_over:  Math.round(cost_over_filtered * 100) / 100,
-        effective_cpm_amount:      Math.round(eff_cpm  * 100) / 100,
-        effective_cpcv_amount:     Math.round(eff_cpcv * 100) / 100,
-        // Preserva campos de contratação (usados em pacing display)
-        contracted_o2o_display_impressions: orig.contracted_o2o_display_impressions,
-        contracted_ooh_display_impressions: orig.contracted_ooh_display_impressions,
-        contracted_o2o_video_completions:   orig.contracted_o2o_video_completions,
-        contracted_ooh_video_completions:   orig.contracted_ooh_video_completions,
-        bonus_o2o_display_impressions:      orig.bonus_o2o_display_impressions,
-        bonus_ooh_display_impressions:      orig.bonus_ooh_display_impressions,
-        bonus_o2o_video_completions:        orig.bonus_o2o_video_completions,
-        bonus_ooh_video_completions:        orig.bonus_ooh_video_completions,
-        // pacing não faz sentido em janela parcial — null pra UI esconder
-        pacing: null,
-      };
-    });
+    totals = isMergedAgg
+      ? recomputeTotalsByMember(data.merge_meta.members, detail0, totalsRaw, mainRange)
+      : recomputeTotalsProportional(detail0, totalsRaw, data.campaign, mainRange);
   }
 
   const daily  = daily0;
@@ -545,3 +513,223 @@ export function computeAggregates(data, mainRange) {
     availableDates,
   };
 }
+
+// ─── Recompose totals quando filtrado ──────────────────────────────────
+//
+// Duas estratégias separadas, escolhidas em computeAggregates:
+//
+//   1. recomputeTotalsProportional — caminho single-token (e drill-down
+//      de membro). Aplica proporção sobre o totals do próprio token.
+//      Comportamento idêntico ao código original.
+//
+//   2. recomputeTotalsByMember — caminho merged agregado. Aplica a
+//      proporção POR MEMBRO contra o totals individual de cada um, soma
+//      tudo. Necessário porque somar custos entre membros antes de
+//      proporcionar derruba o CPM real de cada um (vide bug onde
+//      "Visão agregada · Este mês" mostrava custo diferente de
+//      "Mai 26 · Este mês" para o mesmo range de datas).
+
+function emptyDeliveryRow(media_type, tactic_type) {
+  return {
+    media_type,
+    tactic_type,
+    impressions: 0,
+    viewable_impressions: 0,
+    clicks: 0,
+    video_view_100: 0,
+    video_view_25: 0, video_view_50: 0, video_view_75: 0,
+    video_starts: 0,
+    completions: 0,
+    line_name: "TOTAL",
+  };
+}
+
+function sumDeliveryFromDetail(detailRows) {
+  const byKey = {};
+  detailRows.forEach(r => {
+    const k = `${r.media_type}|${r.tactic_type}`;
+    if (!byKey[k]) byKey[k] = emptyDeliveryRow(r.media_type, r.tactic_type);
+    const g = byKey[k];
+    g.impressions          += r.impressions          || 0;
+    g.viewable_impressions += r.viewable_impressions || 0;
+    g.clicks               += r.clicks               || 0;
+    g.video_view_100       += r.video_view_100       || 0;
+    g.video_view_25        += r.video_view_25        || 0;
+    g.video_view_50        += r.video_view_50        || 0;
+    g.video_view_75        += r.video_view_75        || 0;
+    g.video_starts         += r.video_starts         || 0;
+    g.completions          += r.video_view_100       || 0;
+  });
+  return byKey;
+}
+
+// Preserva os campos do totals "original" (negociado, contratado, bonus,
+// budget) — esses são metadados da campanha, não dependem do filtro.
+// Sem isso, qualquer consumer que precise desses campos nos totals
+// recomputados (ex: pickBudget no OverviewV2) recebe undefined.
+function carryOverContractFields(orig) {
+  return {
+    deal_cpm_amount:                    orig.deal_cpm_amount  || 0,
+    deal_cpcv_amount:                   orig.deal_cpcv_amount || 0,
+    contracted_o2o_display_impressions: orig.contracted_o2o_display_impressions,
+    contracted_ooh_display_impressions: orig.contracted_ooh_display_impressions,
+    contracted_o2o_video_completions:   orig.contracted_o2o_video_completions,
+    contracted_ooh_video_completions:   orig.contracted_ooh_video_completions,
+    bonus_o2o_display_impressions:      orig.bonus_o2o_display_impressions,
+    bonus_ooh_display_impressions:      orig.bonus_ooh_display_impressions,
+    bonus_o2o_video_completions:        orig.bonus_o2o_video_completions,
+    bonus_ooh_video_completions:        orig.bonus_ooh_video_completions,
+    o2o_display_budget:                 orig.o2o_display_budget,
+    ooh_display_budget:                 orig.ooh_display_budget,
+    o2o_video_budget:                   orig.o2o_video_budget,
+    ooh_video_budget:                   orig.ooh_video_budget,
+  };
+}
+
+function recomputeTotalsProportional(detail0, totalsRaw, camp, mainRange) {
+  // Filtro cobre 100% da campanha → totals raw direto, sem proporção.
+  // O número fica idêntico ao "Todo o período" (que pula esse caminho via
+  // mainRange=null), e elimina divergência decorrente de detail/totals
+  // virem de tabelas diferentes no backend.
+  if (camp && rangeCoversWindow(mainRange, camp.start_date, camp.end_date)) {
+    return totalsRaw.map(orig => ({ ...orig, pacing: null }));
+  }
+  const byKey = sumDeliveryFromDetail(detail0);
+  return totalsRaw.map(orig => {
+    const k = `${orig.media_type}|${orig.tactic_type}`;
+    const g = byKey[k] || emptyDeliveryRow(orig.media_type, orig.tactic_type);
+    const isVideo = orig.media_type === "VIDEO";
+    const denom_filtered = isVideo ? (g.completions       || 0) : (g.viewable_impressions    || 0);
+    const denom_total    = isVideo ? (orig.completions    || 0) : (orig.viewable_impressions || 0);
+    const proportion     = denom_total > 0 ? denom_filtered / denom_total : 0;
+
+    const cost_filtered      = (orig.effective_total_cost     || 0) * proportion;
+    const cost_over_filtered = (orig.effective_cost_with_over || 0) * proportion;
+
+    const eff_cpm  = g.viewable_impressions > 0 ? (cost_filtered / g.viewable_impressions) * 1000 : 0;
+    const eff_cpcv = g.completions          > 0 ? (cost_filtered / g.completions)                : 0;
+
+    return {
+      ...g,
+      ...carryOverContractFields(orig),
+      effective_total_cost:     Math.round(cost_filtered      * 100) / 100,
+      effective_cost_with_over: Math.round(cost_over_filtered * 100) / 100,
+      effective_cpm_amount:     Math.round(eff_cpm  * 100) / 100,
+      effective_cpcv_amount:    Math.round(eff_cpcv * 100) / 100,
+      pacing: null,
+    };
+  });
+}
+
+// Custo agregado em janela parcial = Σ (custo proporcional do membro M
+// contra o detail de M dentro do range). Cada membro carrega o seu CPM
+// real — o agregado deixa de ser "CPM médio × imp filtradas" e passa a
+// ser soma honesta dos custos por membro.
+//
+// As contas dependem de:
+//   • members[i].totals: totals single-token de cada membro (vem do backend
+//     em merge_meta.members[i].totals — não somado, não compose).
+//   • Janela de cada membro: [start_date, end_date] em members[i].
+//     PIs sequenciais não sobrepõem (garantia do backend), então cada row
+//     do detail filtrado pertence a no máximo 1 membro.
+//
+// Campos contratados/bonus ficam vindo do `totalsRaw` (que é a soma entre
+// membros) — eles não dependem do filtro de tempo, são da campanha como
+// um todo.
+function recomputeTotalsByMember(members, detail0, totalsRaw, mainRange) {
+  const noSurvey = (r) => !/survey/i.test(r.line_name || "");
+
+  // Pré-classifica cada membro:
+  //   • fullCoverage: filtro engloba toda a janela do membro → contribui
+  //     com totals direto (sem proporção); funil de vídeo (25/50/75/starts)
+  //     vem do detail porque totals não tem.
+  //   • parcial:      janela do filtro intersecta com a do membro mas não
+  //     a engloba → proporção via detail filtrado (lógica original).
+  //   • fora:         filtro não toca o membro → contribui zero.
+  const memberContext = members.map((m) => {
+    const memberRange = (m.start_date && m.end_date)
+      ? { from: parseYmd(m.start_date), to: parseYmd(m.end_date) }
+      : null;
+    const fullCoverage = !!memberRange
+      && rangeCoversWindow(mainRange, m.start_date, m.end_date);
+    const memberRows = memberRange
+      ? detail0.filter(r => inRange(r.date, memberRange) && inRange(r.date, mainRange))
+      : [];
+    return {
+      member: m,
+      fullCoverage,
+      memberDelivery: sumDeliveryFromDetail(memberRows),
+    };
+  });
+
+  return totalsRaw.map(orig => {
+    const isVideo = orig.media_type === "VIDEO";
+    const k = `${orig.media_type}|${orig.tactic_type}`;
+    let cost_filtered      = 0;
+    let cost_over_filtered = 0;
+    const counts = emptyDeliveryRow(orig.media_type, orig.tactic_type);
+
+    memberContext.forEach(({ member, fullCoverage, memberDelivery }) => {
+      const memberTotals = (member.totals || []).filter(noSurvey);
+      const mt = memberTotals.find(t =>
+        t.media_type === orig.media_type && t.tactic_type === orig.tactic_type
+      );
+      if (!mt) return;
+
+      const g = memberDelivery[k];
+
+      if (fullCoverage) {
+        // Fonte canônica: totals do membro (cravado, igual "Todo o período"
+        // do drill-down). Imune à divergência detail vs totals.
+        cost_filtered      += (mt.effective_total_cost     || 0);
+        cost_over_filtered += (mt.effective_cost_with_over || 0);
+        counts.impressions          += (mt.impressions          || 0);
+        counts.viewable_impressions += (mt.viewable_impressions || 0);
+        counts.clicks               += (mt.clicks               || 0);
+        counts.completions          += (mt.completions          || 0);
+        counts.video_view_100       += (mt.video_view_100 || mt.completions || 0);
+        if (g) {
+          counts.video_view_25 += g.video_view_25 || 0;
+          counts.video_view_50 += g.video_view_50 || 0;
+          counts.video_view_75 += g.video_view_75 || 0;
+          counts.video_starts  += g.video_starts  || 0;
+        }
+        return;
+      }
+
+      // Janela parcial: proporção via detail.
+      if (!g) return;
+      const denom_filtered = isVideo ? (g.completions    || 0) : (g.viewable_impressions  || 0);
+      const denom_total    = isVideo ? (mt.completions   || 0) : (mt.viewable_impressions || 0);
+      if (denom_total <= 0) return;
+
+      const proportion = denom_filtered / denom_total;
+      cost_filtered      += (mt.effective_total_cost     || 0) * proportion;
+      cost_over_filtered += (mt.effective_cost_with_over || 0) * proportion;
+
+      counts.impressions          += g.impressions;
+      counts.viewable_impressions += g.viewable_impressions;
+      counts.clicks               += g.clicks;
+      counts.video_view_100       += g.video_view_100;
+      counts.video_view_25        += g.video_view_25;
+      counts.video_view_50        += g.video_view_50;
+      counts.video_view_75        += g.video_view_75;
+      counts.video_starts         += g.video_starts;
+      counts.completions          += g.completions;
+    });
+
+    const eff_cpm  = counts.viewable_impressions > 0 ? (cost_filtered / counts.viewable_impressions) * 1000 : 0;
+    const eff_cpcv = counts.completions          > 0 ? (cost_filtered / counts.completions)                : 0;
+
+    return {
+      ...counts,
+      ...carryOverContractFields(orig),
+      effective_total_cost:     Math.round(cost_filtered      * 100) / 100,
+      effective_cost_with_over: Math.round(cost_over_filtered * 100) / 100,
+      effective_cpm_amount:     Math.round(eff_cpm  * 100) / 100,
+      effective_cpcv_amount:    Math.round(eff_cpcv * 100) / 100,
+      pacing: null,
+    };
+  });
+}
+

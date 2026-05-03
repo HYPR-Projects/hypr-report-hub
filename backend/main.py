@@ -1995,6 +1995,13 @@ def compose_merged_report(group, force_refresh=False):
     if not sheets:
         sheets = active_data.get("sheets_integration")
 
+    # `totals` por membro vai junto pra o frontend conseguir recompor o
+    # custo efetivo correto quando o usuário aplica filtro de período na
+    # visão agregada. Sem isso, a fórmula proporcional acaba aplicando o
+    # CPM médio do grupo sobre as impressões de um único membro — o que
+    # diverge do drill-down do mesmo membro com o mesmo filtro. Cada
+    # `members[i].totals` é o totals single-token (já calculado em
+    # per_token[t]) — não soma, não é compose.
     merge_meta = {
         "merge_id":     group["merge_id"],
         "active_token": active_token,
@@ -2007,6 +2014,7 @@ def compose_merged_report(group, force_refresh=False):
                 "start_date":    (per_token[t].get("campaign") or {}).get("start_date"),
                 "end_date":      (per_token[t].get("campaign") or {}).get("end_date"),
                 "is_active":     t == active_token,
+                "totals":        per_token[t].get("totals") or [],
             }
             for t in members_sorted
         ],
@@ -2102,6 +2110,7 @@ def _get_merge_meta_only(merge_id):
                 "start_date":    (per_token[t].get("campaign") or {}).get("start_date"),
                 "end_date":      (per_token[t].get("campaign") or {}).get("end_date"),
                 "is_active":     t == active_token,
+                "totals":        per_token[t].get("totals") or [],
             }
             for t in members_sorted
         ],

@@ -43,7 +43,7 @@ import { CollapsibleSectionV2 } from "../components/CollapsibleSectionV2";
 import { DailyAggregateTableV2 } from "../components/DailyAggregateTableV2";
 import { AlcanceFrequenciaV2 } from "../components/AlcanceFrequenciaV2";
 
-export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt, mergeMeta = null }) {
+export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt, mergeMeta = null, coreFilter = "ALL" }) {
   const camp = data.campaign;
   const {
     totalImpressions, totalCusto, totalCustoOver,
@@ -85,12 +85,24 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt,
   // entregar — o objetivo da Visão Geral é responder "estamos no ritmo
   // do contrato?", não "cada frente está performando?". Cálculo por
   // tática (com actual_start_date) continua nas abas Display e Video.
-  const pacingDisplay = computeMediaPacing(display, camp, "DISPLAY");
-  const pacingVideo   = computeMediaPacing(video,   camp, "VIDEO");
+  const pacingDisplay = computeMediaPacing(display, camp, "DISPLAY", coreFilter);
+  const pacingVideo   = computeMediaPacing(video,   camp, "VIDEO",   coreFilter);
 
   // Pacing Geral % — média ponderada por budget de Display + Video,
   // usando a mesma fórmula calendar-camp acima.
-  const pacingGeral = computePacingGeral(display, video, camp);
+  const pacingGeral = computePacingGeral(display, video, camp, coreFilter);
+
+  // Budget exibido no card "Budget" precisa respeitar o filtro Core Product.
+  // `aggregates.budgetTotal` vem do campo `budget_contracted` da campaign
+  // (sempre inteiro) — pra filtro O2O/OOH, reconstrói somando os
+  // o2o_<media>_budget ou ooh_<media>_budget das rows.
+  const filteredBudgetTotal = coreFilter === "ALL"
+    ? budgetTotal
+    : pickBudget(display[0], "display", coreFilter)
+    + pickBudget(video[0],   "video",   coreFilter);
+  const filteredBudgetProRata = isFiltered && filteredBudgetTotal && budgetTotal
+    ? Math.round(filteredBudgetTotal * (budgetProRata / budgetTotal) * 100) / 100
+    : filteredBudgetTotal;
 
   // Custo formatado pra hero (separa centavos pra estilo do mockup).
   const { main: custoMain, cents: custoCents } = splitCents(totalCusto);
@@ -114,7 +126,7 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt,
 
         <KpiCardV2
           label="Budget"
-          value={fmtR(isFiltered ? budgetProRata : budgetTotal)}
+          value={fmtR(isFiltered ? filteredBudgetProRata : filteredBudgetTotal)}
           hint={
             isFiltered
               ? "Budget contratado proporcionalizado pelo período do filtro."
@@ -205,7 +217,7 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt,
             <PacingBarV2
               label={`Pacing Display${pacingSuffix}`}
               pacing={pacingDisplay}
-              budget={(display[0]?.o2o_display_budget || 0) + (display[0]?.ooh_display_budget || 0)}
+              budget={pickBudget(display[0], "display", coreFilter)}
               cost={display.reduce((s, r) => s + (r.effective_total_cost || 0), 0)}
             />
           )}
@@ -213,7 +225,7 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt,
             <PacingBarV2
               label={`Pacing Video${pacingSuffix}`}
               pacing={pacingVideo}
-              budget={(video[0]?.o2o_video_budget || 0) + (video[0]?.ooh_video_budget || 0)}
+              budget={pickBudget(video[0], "video", coreFilter)}
               cost={video.reduce((s, r) => s + (r.effective_total_cost || 0), 0)}
             />
           )}
@@ -229,16 +241,10 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt,
       {!isFiltered && daily0 && daily0.length > 0 && (
         <CumulativePacingChartV2
           daily={daily0}
-          contractedDisplay={
-            (display[0]?.contracted_o2o_display_impressions || 0) + (display[0]?.bonus_o2o_display_impressions || 0)
-          + (display[0]?.contracted_ooh_display_impressions || 0) + (display[0]?.bonus_ooh_display_impressions || 0)
-          }
-          contractedVideo={
-            (video[0]?.contracted_o2o_video_completions || 0) + (video[0]?.bonus_o2o_video_completions || 0)
-          + (video[0]?.contracted_ooh_video_completions || 0) + (video[0]?.bonus_ooh_video_completions || 0)
-          }
-          budgetDisplay={(display[0]?.o2o_display_budget || 0) + (display[0]?.ooh_display_budget || 0)}
-          budgetVideo={(video[0]?.o2o_video_budget || 0) + (video[0]?.ooh_video_budget || 0)}
+          contractedDisplay={pickContracted(display[0], "display", coreFilter)}
+          contractedVideo={pickContracted(video[0], "video", coreFilter)}
+          budgetDisplay={pickBudget(display[0], "display", coreFilter)}
+          budgetVideo={pickBudget(video[0], "video", coreFilter)}
           startDate={camp.start_date}
           endDate={camp.end_date}
         />
@@ -322,6 +328,31 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt,
 
 // ─── Helpers locais ───────────────────────────────────────────────────
 
+// Restringe budget/contracted ao tactic filtrado. Sem isso, o filtro
+// Core Product deixaria os componentes de pacing comparando entrega de
+// uma frente contra contrato/budget das duas — ratio errado.
+function pickBudget(row, media, tactic) {
+  if (!row) return 0;
+  const o2o = media === "video" ? (row.o2o_video_budget || 0) : (row.o2o_display_budget || 0);
+  const ooh = media === "video" ? (row.ooh_video_budget || 0) : (row.ooh_display_budget || 0);
+  if (tactic === "O2O") return o2o;
+  if (tactic === "OOH") return ooh;
+  return o2o + ooh;
+}
+
+function pickContracted(row, media, tactic) {
+  if (!row) return 0;
+  const o2o = media === "video"
+    ? (row.contracted_o2o_video_completions   || 0) + (row.bonus_o2o_video_completions   || 0)
+    : (row.contracted_o2o_display_impressions || 0) + (row.bonus_o2o_display_impressions || 0);
+  const ooh = media === "video"
+    ? (row.contracted_ooh_video_completions   || 0) + (row.bonus_ooh_video_completions   || 0)
+    : (row.contracted_ooh_display_impressions || 0) + (row.bonus_ooh_display_impressions || 0);
+  if (tactic === "O2O") return o2o;
+  if (tactic === "OOH") return ooh;
+  return o2o + ooh;
+}
+
 function splitCents(value) {
   // R$ 184220.40 → { main: "R$ 184.220", cents: ",40" }
   if (value == null || Number.isNaN(value)) return { main: "—", cents: "" };
@@ -337,15 +368,24 @@ function splitCents(value) {
 
 // Pacing geral % = média ponderada por budget contratado de Display + Video.
 // Budget exclui bônus (bonificação não fatura), mesmo padrão do backend.
-function computePacingGeral(display, video, camp) {
-  const dpacing = computeMediaPacing(display, camp, "DISPLAY");
-  const vpacing = computeMediaPacing(video,   camp, "VIDEO");
+//
+// `tactic` ("ALL"|"O2O"|"OOH") restringe os pesos (budget) às frentes
+// correspondentes. Sem isso, com filtro Core Product ativo, dpacing já
+// considera só a frente filtrada mas o budget continuaria O2O+OOH —
+// distorcendo a média ponderada.
+function computePacingGeral(display, video, camp, tactic = "ALL") {
+  const dpacing = computeMediaPacing(display, camp, "DISPLAY", tactic);
+  const vpacing = computeMediaPacing(video,   camp, "VIDEO",   tactic);
 
   // Campos *_budget são denormalizados: cada row carrega o2o E ooh da
   // campanha inteira. Pegar de rows[0] evita duplicação quando há 2
   // tactics (O2O+OOH).
-  const dbudget = (display[0]?.o2o_display_budget || 0) + (display[0]?.ooh_display_budget || 0);
-  const vbudget = (video[0]?.o2o_video_budget || 0) + (video[0]?.ooh_video_budget || 0);
+  const includeO2O = tactic === "ALL" || tactic === "O2O";
+  const includeOOH = tactic === "ALL" || tactic === "OOH";
+  const dbudget = (includeO2O ? (display[0]?.o2o_display_budget || 0) : 0)
+                + (includeOOH ? (display[0]?.ooh_display_budget || 0) : 0);
+  const vbudget = (includeO2O ? (video[0]?.o2o_video_budget   || 0) : 0)
+                + (includeOOH ? (video[0]?.ooh_video_budget   || 0) : 0);
   const total = dbudget + vbudget;
   if (!total) return 0;
 

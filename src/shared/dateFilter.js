@@ -114,10 +114,47 @@ export function writeRangeToUrl(range, prefix = "") {
   }
 }
 
+/**
+ * Lê o id do preset que originou o range atual (se houver). Permite
+ * preservar a *intenção* do filtro ao trocar de view num report agrupado:
+ * "Mês passado" deve continuar "Mês passado" mesmo quando o range
+ * absoluto colapsaria com outro preset (ex: "Últimos 30 dias") nos
+ * limites do novo membro.
+ */
+export function readPresetFromUrl(prefix = "") {
+  try {
+    const key = prefix ? `${prefix}_preset` : "preset";
+    const p = new URLSearchParams(window.location.search);
+    const v = p.get(key);
+    return v && v.trim() ? v.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writePresetToUrl(presetId, prefix = "") {
+  try {
+    const key = prefix ? `${prefix}_preset` : "preset";
+    const url = new URL(window.location.href);
+    if (presetId) url.searchParams.set(key, presetId);
+    else          url.searchParams.delete(key);
+    window.history.replaceState({}, "", url.toString());
+  } catch {
+    /* ignore */
+  }
+}
+
 // ─── Presets ─────────────────────────────────────────────────────────────────
 /**
  * Gera presets baseados num "hoje" lógico — geralmente o min(today, campaign.end_date)
  * pra evitar presets futuros em campanhas já encerradas.
+ *
+ * Cada preset carrega um flag `wasClamped`: true quando os limites da
+ * campanha encolheram a janela natural (ex: "Últimos 30 dias" num membro
+ * que começou há 3 dias vira `{start_membro → hoje}`). Vários presets
+ * podem colapsar no mesmo range nesse caso — o consumidor usa esse flag
+ * pra preferir o preset "natural" (não clampado) na hora de exibir label
+ * e marcar o ativo no popover.
  */
 export function buildPresets(refToday, campaignStart, campaignEnd) {
   const today = refToday || new Date();
@@ -128,26 +165,54 @@ export function buildPresets(refToday, campaignStart, campaignEnd) {
   const clamp = (from, to) => {
     let f = from;
     let t = to;
-    if (start && isBefore(f, start)) f = start;
-    if (end && isAfter(t, end)) t = end;
-    if (isAfter(f, t)) return null;
-    return { from: f, to: t };
+    let wasClamped = false;
+    if (start && isBefore(f, start)) { f = start; wasClamped = true; }
+    if (end && isAfter(t, end))      { t = end;   wasClamped = true; }
+    if (isAfter(f, t)) return { range: null, wasClamped: false };
+    return { range: { from: f, to: t }, wasClamped };
+  };
+
+  const make = (id, label, from, to) => {
+    const c = clamp(from, to);
+    return { id, label, range: c.range, wasClamped: c.wasClamped };
   };
 
   const yest = subDays(today, 1);
   return [
-    { id: "all", label: "Todo o período", range: null },
-    { id: "yesterday", label: "Ontem", range: clamp(yest, yest) },
-    { id: "last7", label: "Últimos 7 dias", range: clamp(subDays(today, 6), today) },
-    { id: "last15", label: "Últimos 15 dias", range: clamp(subDays(today, 14), today) },
-    { id: "last30", label: "Últimos 30 dias", range: clamp(subDays(today, 29), today) },
-    { id: "thisMonth", label: "Este mês", range: clamp(startOfMonth(today), today) },
-    {
-      id: "lastMonth",
-      label: "Mês passado",
-      range: clamp(startOfMonth(subMonths(today, 1)), endOfMonth(subMonths(today, 1))),
-    },
+    { id: "all", label: "Todo o período", range: null, wasClamped: false },
+    make("yesterday", "Ontem",            yest,                                            yest),
+    make("last7",     "Últimos 7 dias",   subDays(today, 6),                               today),
+    make("last15",    "Últimos 15 dias",  subDays(today, 14),                              today),
+    make("last30",    "Últimos 30 dias",  subDays(today, 29),                              today),
+    make("thisMonth", "Este mês",         startOfMonth(today),                             today),
+    make("lastMonth", "Mês passado",      startOfMonth(subMonths(today, 1)),               endOfMonth(subMonths(today, 1))),
   ];
+}
+
+/**
+ * Resolve o preset "preferido" entre os que casam com `value`. Quando
+ * vários colapsam no mesmo range (ex: dentro de um membro recém-iniciado),
+ * prefere o que NÃO foi clampado — a janela natural ("Este mês") é mais
+ * informativa que uma artificialmente encolhida ("Últimos 30 dias" virou
+ * 3 dias). Sem nenhum match real, retorna null.
+ *
+ * `hintId` opcional: id do preset que originou o range. Quando vários
+ * presets casam o range, o hint vence sobre as outras heurísticas — assim
+ * a *intenção* do user ("Mês passado" no agregado) é preservada ao trocar
+ * de view, mesmo quando o range numérico colapsaria com outro preset
+ * ("Últimos 30 dias" nos limites apertados do membro).
+ */
+export function pickActivePreset(range, presets, hintId = null) {
+  if (!range) {
+    return presets.find((p) => p.id === "all") || null;
+  }
+  const matches = presets.filter((p) => p.id !== "all" && matchesPreset(range, p));
+  if (!matches.length) return null;
+  if (hintId) {
+    const hinted = matches.find((p) => p.id === hintId);
+    if (hinted) return hinted;
+  }
+  return matches.find((p) => !p.wasClamped) || matches[0];
 }
 
 /** True se o range bate com o preset (compara apenas yyyy-MM-dd). */

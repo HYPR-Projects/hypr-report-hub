@@ -34,6 +34,9 @@ import { useLoadingTask } from "../../shared/loading";
 import {
   readRangeFromUrl,
   writeRangeToUrl,
+  readPresetFromUrl,
+  writePresetToUrl,
+  buildPresets,
 } from "../../shared/dateFilter";
 
 import { Skeleton } from "../../ui/Skeleton";
@@ -48,6 +51,7 @@ import {
 import { TopBarV2 } from "../components/TopBarV2";
 import { CampaignHeaderV2 } from "../components/CampaignHeaderV2";
 import { DateRangeFilterV2 } from "../components/DateRangeFilterV2";
+import { CoreProductFilterV2 } from "../components/CoreProductFilterV2";
 
 import OverviewV2 from "./OverviewV2";
 import DisplayV2 from "./DisplayV2";
@@ -109,6 +113,32 @@ function writeTacticToUrl(paramKey, tactic) {
   }
 }
 
+// Core Product (Visão Geral) — filtro O2O/OOH/Todos exclusivo da aba
+// Visão Geral. Default "ALL" não vai pra URL (limpa). URL: ?core=o2o|ooh.
+const VALID_CORES = ["ALL", "O2O", "OOH"];
+function readCoreFromUrl() {
+  if (typeof window === "undefined") return "ALL";
+  try {
+    const raw = new URLSearchParams(window.location.search).get("core");
+    if (!raw) return "ALL";
+    const upper = raw.toUpperCase();
+    return VALID_CORES.includes(upper) ? upper : "ALL";
+  } catch {
+    return "ALL";
+  }
+}
+function writeCoreToUrl(core) {
+  if (typeof window === "undefined") return;
+  try {
+    const url = new URL(window.location.href);
+    if (!core || core === "ALL") url.searchParams.delete("core");
+    else url.searchParams.set("core", core.toLowerCase());
+    window.history.replaceState({}, "", url.toString());
+  } catch {
+    /* noop */
+  }
+}
+
 // Merge Reports — `?view=<token>` permite drill-down dentro de um report
 // agregado pra ver dados de um único membro do grupo. Sem view → modo
 // agregado (default quando o token base pertence a um grupo).
@@ -157,6 +187,12 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
   useLoadingTask((!data && !error) || refreshing);
 
   const [mainRange, setMainRangeState] = useState(() => readRangeFromUrl());
+  // mainPresetId guarda a *intenção* do filtro (ex: "lastMonth"). Quando
+  // setado, o range é recalculado ao trocar de view (via useEffect mais
+  // abaixo) usando os limites do novo membro/campanha. Sem ele, o range
+  // numérico colapsaria com outros presets nos limites apertados de um
+  // membro (ex: "Mês passado" → "Últimos 30 dias" no membro Abril).
+  const [mainPresetId, setMainPresetIdState] = useState(() => readPresetFromUrl());
   const [tab, setTabState] = useState(() => readTabFromUrl());
   const [displayTactic, setDisplayTacticState] = useState(() =>
     readTacticFromUrl("display_tactic"),
@@ -164,14 +200,19 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
   const [videoTactic, setVideoTacticState] = useState(() =>
     readTacticFromUrl("video_tactic"),
   );
+  const [mainCore, setMainCoreState] = useState(() => readCoreFromUrl());
   const [view, setViewState] = useState(() => readViewFromUrl());
 
   const [displayLines, setDisplayLines] = useState([]);
   const [videoLines, setVideoLines] = useState([]);
 
-  const setMainRange = (r) => {
+  // setMainRange aceita opcionalmente o presetId que originou esse range.
+  // Click em preset → passa o id; ajuste no calendar → passa null (custom).
+  const setMainRange = (r, presetId = null) => {
     setMainRangeState(r);
+    setMainPresetIdState(presetId);
     writeRangeToUrl(r);
+    writePresetToUrl(presetId);
   };
   const setTab = (t) => {
     setTabState(t);
@@ -184,6 +225,10 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
   const setVideoTactic = (t) => {
     setVideoTacticState(t);
     writeTacticToUrl("video_tactic", t);
+  };
+  const setMainCore = (c) => {
+    setMainCoreState(c);
+    writeCoreToUrl(c);
   };
   const setView = (v) => {
     setViewState(v);
@@ -219,18 +264,66 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
   useEffect(() => {
     const onPop = () => {
       setMainRangeState(readRangeFromUrl());
+      setMainPresetIdState(readPresetFromUrl());
       setTabState(readTabFromUrl());
       setDisplayTacticState(readTacticFromUrl("display_tactic"));
       setVideoTacticState(readTacticFromUrl("video_tactic"));
+      setMainCoreState(readCoreFromUrl());
       setViewState(readViewFromUrl());
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
 
+  // Quando a view muda e o usuário tinha um preset escolhido, recalcula
+  // o range no contexto do novo membro/campanha. Ex: "Mês passado" no
+  // agregado vira "Mês passado" no Abril (recomputado contra os limites
+  // do Abril) — sem isso, o range numérico antigo poderia bater com
+  // outro preset.
+  //
+  // Se o preset não existe mais no novo contexto (ex: "Este mês" num
+  // membro que terminou no mês passado), cai pra "Todo o período" em vez
+  // de manter um range incoerente. Custom (presetId=null) e "all" não
+  // disparam recompute.
+  useEffect(() => {
+    if (!data || !mainPresetId || mainPresetId === "all") return;
+    const camp = data.campaign;
+    if (!camp?.start_date || !camp?.end_date) return;
+    const presets = buildPresets(new Date(), camp.start_date, camp.end_date);
+    const p = presets.find(x => x.id === mainPresetId);
+    if (p && p.range) {
+      const newRange = p.range;
+      const cur = mainRange;
+      const sameRange = cur && cur.from?.getTime() === newRange.from.getTime()
+        && cur.to?.getTime() === newRange.to.getTime();
+      if (!sameRange) {
+        setMainRangeState(newRange);
+        writeRangeToUrl(newRange);
+      }
+    } else {
+      // Preset não aplica neste contexto — fallback "Todo o período".
+      setMainRangeState(null);
+      setMainPresetIdState("all");
+      writeRangeToUrl(null);
+      writePresetToUrl("all");
+    }
+    // Dependemos só dos limites da campanha + presetId. mainRange muda
+    // como efeito da própria recomputação — incluí-lo aqui causaria loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.campaign?.start_date, data?.campaign?.end_date, mainPresetId]);
+
+  // mainCore só afeta a Visão Geral. Pra evitar que abrir Display/Video
+  // veja dados filtrados, calculamos DOIS aggregates: um irrestrito
+  // (consumido por todas as outras tabs) e um filtrado por core (só pro
+  // OverviewV2). useMemo separa o custo — quando o user mexe só no core,
+  // só `aggregatesOverview` recalcula.
   const aggregates = useMemo(
     () => (data ? computeAggregates(data, mainRange) : null),
     [data, mainRange],
+  );
+  const aggregatesOverview = useMemo(
+    () => (data ? computeAggregates(data, mainRange, mainCore) : null),
+    [data, mainRange, mainCore],
   );
 
   const handleShare = () => {
@@ -379,10 +472,20 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
                 )}
               </TabsList>
 
-              {/* Filtro de período compacto */}
-              <div className="pb-2">
+              {/* Filtros à direita das tabs. Core Product é exclusivo da
+                  Visão Geral — sai quando outra tab fica ativa pra não
+                  poluir e pra evitar confundir o user (Display/Video tem
+                  seus próprios toggles internos). */}
+              <div className="pb-2 flex items-center gap-2">
+                {effectiveTab === "overview" && (
+                  <CoreProductFilterV2
+                    value={mainCore}
+                    onChange={setMainCore}
+                  />
+                )}
                 <DateRangeFilterV2
                   value={mainRange}
+                  presetId={mainPresetId}
                   campaignStart={camp.start_date}
                   campaignEnd={camp.end_date}
                   availableDates={aggregates.availableDates}
@@ -394,11 +497,12 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
             <TabsContent value="overview">
               <OverviewV2
                 data={data}
-                aggregates={aggregates}
+                aggregates={aggregatesOverview}
                 token={token}
                 isAdmin={isAdmin}
                 adminJwt={adminJwt}
                 mergeMeta={data.merge_meta}
+                coreFilter={mainCore}
               />
             </TabsContent>
 

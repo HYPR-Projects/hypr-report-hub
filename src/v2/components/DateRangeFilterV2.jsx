@@ -44,7 +44,7 @@ import "./DateRangeFilterV2.css";
 
 import {
   buildPresets,
-  matchesPreset,
+  pickActivePreset,
   daysInRange,
   ymd,
   parseYmd,
@@ -59,10 +59,22 @@ export function DateRangeFilterV2({
   campaignEnd,
   availableDates,
   onChange,
+  // ID do preset que originou o `value` atual (quando vier de click em
+  // preset). Usado pra desempatar quando vários presets casam o mesmo
+  // range — preserva intenção do user ao trocar de view.
+  presetId = null,
 }) {
   const presets = useMemo(
     () => buildPresets(new Date(), campaignStart, campaignEnd),
     [campaignStart, campaignEnd],
+  );
+
+  // Preset ativo único. Heurística: hint do caller > não-clampado > primeiro
+  // match. Sem hint, presets que colapsam no mesmo range caíam no primeiro
+  // `find` (= "Últimos 7 dias" sempre vencendo "Este mês" / "Mês passado").
+  const activePreset = useMemo(
+    () => pickActivePreset(value, presets, presetId),
+    [value, presets, presetId],
   );
 
   const [open, setOpen] = useState(false);
@@ -100,15 +112,20 @@ export function DateRangeFilterV2({
   }, [minDate, maxDate, availableSet]);
 
   // Aplica preset diretamente (sem precisar de Aplicar — UX rápida).
+  // Propaga `preset.id` pro caller persistir a *intenção* do filtro: ao
+  // trocar de view num report agrupado, o range é recalculado a partir
+  // do id, não do valor numérico.
   const applyPreset = (preset) => {
     setDraft(preset.range);
-    onChange(preset.range);
+    onChange(preset.range, preset.id);
     setOpen(false);
   };
 
+  // Custom range (ajuste no calendar) → presetId null. Filtros custom
+  // não acompanham troca de view (não há intenção semântica pra recalcular).
   const applyCustom = () => {
     if (draft?.from && draft?.to) {
-      onChange(draft);
+      onChange(draft, null);
       setOpen(false);
     }
   };
@@ -118,9 +135,11 @@ export function DateRangeFilterV2({
     setOpen(false);
   };
 
-  const pillLabel = formatPillLabel(value, presets);
+  const pillLabel = formatPillLabel(value, activePreset);
   const draftRangeLabel =
-    draft?.from && draft?.to ? formatPillLabel(draft, presets) : null;
+    draft?.from && draft?.to
+      ? formatPillLabel(draft, pickActivePreset(draft, presets))
+      : null;
   const draftDayCount = draft?.from && draft?.to ? daysInRange(draft) : 0;
 
   return (
@@ -169,7 +188,7 @@ export function DateRangeFilterV2({
               className="flex flex-col p-2 border-r border-border min-w-[180px]"
             >
               {presets.map((p) => {
-                const active = matchesPreset(value, p);
+                const active = activePreset?.id === p.id;
                 return (
                   <button
                     key={p.id}
@@ -252,14 +271,13 @@ export function DateRangeFilterV2({
 //   1. Sem filtro (value=null) → "Todo o período"
 //   2. Preset que matcha → label do preset ("Últimos 7 dias")
 //   3. Range custom → "15 Abr → 28 Abr"
+//
+// `activePreset` já vem resolvido por pickActivePreset (prefere o preset
+// não-clampado quando vários colapsam no mesmo range).
 
-function formatPillLabel(value, presets) {
+function formatPillLabel(value, activePreset) {
   if (!value) return "Todo o período";
-
-  // Preset com label legível bate antes de cair no formato manual.
-  const preset = presets.find((p) => matchesPreset(value, p));
-  if (preset && preset.id !== "all") return preset.label;
-
+  if (activePreset && activePreset.id !== "all") return activePreset.label;
   return formatRangePill(value);
 }
 
