@@ -91,6 +91,30 @@ export function clearSession() {
   }
 }
 
+/**
+ * Atualiza apenas o `idToken` da sessão existente, preservando o
+ * `expiresAt` original. Usado pelo refresh silencioso do Google: o
+ * id_token novo (~1h de TTL) substitui o antigo, mas a janela de 8h
+ * da sessão admin continua contando desde o login inicial.
+ *
+ * No-op se não há sessão ou se a janela de 8h já expirou.
+ */
+export function updateSessionIdToken(idToken) {
+  try {
+    const raw = localStorage.getItem(LS_SESSION_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.expiresAt || Date.now() > parsed.expiresAt) {
+      localStorage.removeItem(LS_SESSION_KEY);
+      return;
+    }
+    parsed.idToken = idToken;
+    localStorage.setItem(LS_SESSION_KEY, JSON.stringify(parsed));
+  } catch {
+    /* ignore */
+  }
+}
+
 // ─── Google id_token getter (delega para a sessão) ──────────────────────────
 export function getGoogleIdToken() {
   return loadSession()?.idToken || null;

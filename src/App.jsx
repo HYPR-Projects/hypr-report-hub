@@ -13,7 +13,10 @@ import {
   clearSession,
   isClientUnlocked,
   getResolvedShortToken,
+  updateSessionIdToken,
+  decodeJwtPayload,
 } from "./shared/auth";
+import { initGoogleAuth, requestSilentSignIn } from "./shared/googleAuth";
 import { lookupShare } from "./lib/api";
 
 // ── Code-splitting ──────────────────────────────────────────────────────
@@ -72,6 +75,59 @@ export default function App() {
     window.addEventListener("popstate", handler);
     return () => window.removeEventListener("popstate", handler);
   }, []);
+
+  // Refresh silencioso do id_token do Google enquanto admin está logado.
+  //
+  // Sessão admin = 8h (localStorage). id_token do Google = ~1h. Sem refresh,
+  // ações admin (salvar logo, listar campanhas, emitir JWT pro report) começam
+  // a falhar uma hora depois do login mesmo com a sessão local válida.
+  //
+  // Estratégia: agendar `prompt()` ~5min antes do `exp` do id_token. Com FedCM
+  // (Chrome moderno) o callback registrado abaixo recebe um credential novo
+  // sem UI nenhuma; em browsers sem FedCM pode aparecer One Tap brevemente.
+  // Em qualquer caso o `expiresAt` da sessão NÃO é estendido — a janela de 8h
+  // continua contando desde o login inicial.
+  //
+  // Se o refresh falhar (ex: usuário deslogou do Google no browser), as ações
+  // admin vão falhar naturalmente e o backend força relogin via 401.
+  useEffect(() => {
+    if (!user) return;
+
+    let timeoutId = null;
+    let cancelled = false;
+
+    const scheduleNext = () => {
+      if (cancelled) return;
+      const idToken = getGoogleIdToken();
+      if (!idToken) return;
+      const payload = decodeJwtPayload(idToken);
+      if (!payload?.exp) return;
+      const expMs = Number(payload.exp) * 1000;
+      // Refresh 5min antes do exp, com piso de 30s pra evitar stampede caso
+      // o token já esteja perto do fim quando o effect roda (ex: tab reaberto
+      // depois de 55min).
+      const delayMs = Math.max(30_000, expMs - Date.now() - 5 * 60 * 1000);
+      timeoutId = setTimeout(async () => {
+        await requestSilentSignIn();
+        // O callback abaixo dispara assíncrono via GIS; agenda re-check
+        // 60s depois pra pegar o id_token renovado e marcar o próximo.
+        timeoutId = setTimeout(scheduleNext, 60_000);
+      }, delayMs);
+    };
+
+    initGoogleAuth((res) => {
+      const p = decodeJwtPayload(res.credential);
+      if (!p?.email?.endsWith("@hypr.mobi")) return;
+      updateSessionIdToken(res.credential);
+      // Invalida o JWT admin em cache pra que a próxima ação use o id_token novo.
+      clearCachedAdminJwt();
+    }).then(scheduleNext).catch(() => {});
+
+    return () => {
+      cancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [user]);
 
   const path = window.location.pathname;
   const isClient = path.startsWith("/report/");

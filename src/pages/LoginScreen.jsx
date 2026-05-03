@@ -1,7 +1,7 @@
 import { useEffect } from "react";
-import { GOOGLE_CLIENT_ID } from "../shared/config";
 import { C } from "../shared/theme";
 import { saveSession } from "../shared/auth";
+import { initGoogleAuth, renderSignInButton, requestSilentSignIn } from "../shared/googleAuth";
 import GlobalStyle from "../components/GlobalStyle";
 import HyprReportCenterLogo from "../components/HyprReportCenterLogo";
 
@@ -36,25 +36,23 @@ function decodeJwtPayload(token) {
 
 const LoginScreen = ({ onLogin }) => {
   useEffect(()=>{
-    const s=document.createElement("script"); s.src="https://accounts.google.com/gsi/client"; s.async=true;
-    s.onload=()=>{
-      window.google?.accounts.id.initialize({
-        client_id:GOOGLE_CLIENT_ID,
-        callback:(res)=>{
-          const p=decodeJwtPayload(res.credential);
-          if(p.email?.endsWith("@hypr.mobi")) {
-            const user = {name:p.name,email:p.email,picture:p.picture};
-            // Persiste user + id_token com TTL de 8h em localStorage para
-            // sobreviver a refreshes e fechamentos de aba.
-            saveSession(user, res.credential);
-            onLogin(user);
-          }
-          else alert("Acesso restrito a emails @hypr.mobi");
-        },
-      });
-      window.google?.accounts.id.renderButton(document.getElementById("gbtn"),{theme:"filled_black",size:"large",width:280});
-    };
-    document.body.appendChild(s);
+    initGoogleAuth((res)=>{
+      const p=decodeJwtPayload(res.credential);
+      if(p.email?.endsWith("@hypr.mobi")) {
+        const user = {name:p.name,email:p.email,picture:p.picture};
+        // Persiste user + id_token com TTL de 8h em localStorage para
+        // sobreviver a refreshes e fechamentos de aba.
+        saveSession(user, res.credential);
+        onLogin(user);
+      }
+      else alert("Acesso restrito a emails @hypr.mobi");
+    }).then(()=>{
+      renderSignInButton("gbtn");
+      // Tenta auto-login silencioso se o usuário já fez login antes com a
+      // mesma conta do Google neste browser. Se não rolar (sem sessão Google
+      // ou primeiro acesso), o botão renderizado acima fica disponível.
+      requestSilentSignIn();
+    });
   },[]);
   return (
     <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:`radial-gradient(ellipse at 30% 50%,${C.dark3},${C.dark})`,padding:24}}>
