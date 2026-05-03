@@ -39,7 +39,7 @@ import {
 import { createOwnerMatcher } from "../lib/ownerFilter";
 import { useLoadingTask } from "../../../shared/loading";
 import { useTheme } from "../../hooks/useTheme";
-import { normalizeSlug, computeMetricsSummary, computeWorklist } from "../lib/aggregation";
+import { normalizeSlug, computeMetricsSummary, computeWorklist, computeHealthDistribution } from "../lib/aggregation";
 
 import HyprReportCenterLogo from "../../../components/HyprReportCenterLogo";
 import NewCampaignModal from "../../../components/modals/NewCampaignModal";
@@ -63,6 +63,7 @@ import { ClientCard } from "../components/ClientCard";
 import { CampaignCardV2 } from "../components/CampaignCardV2";
 import { CampaignListV2 } from "../components/CampaignListV2";
 import { CampaignDrawer } from "../components/CampaignDrawer";
+import { MonthGroupedSections } from "../components/MonthGroupedSections";
 import { formatMonthLabel } from "../lib/format";
 
 // localStorage key pra persistir o layout escolhido entre sessões.
@@ -427,6 +428,32 @@ export default function CampaignMenuV2({ user, onLogout, onOpenReport, onOpenCli
     return [...filteredClients].sort(compareClients(clientsSortBy, clientsSortDir));
   }, [filteredClients, clientsSortBy, clientsSortDir]);
 
+  // Enriquece cada cliente com `health_distribution` quando o backend
+  // não retorna esse campo (ainda). O fallback `aggregateClients` já
+  // inclui; o backend novo (clients.py) pode ou não — aqui garantimos
+  // sem precisar deploy coordenado.
+  //
+  // Junta via `active_short_tokens` × `campaigns` (mapa de tokens).
+  // Memoizado pra rodar 1× por mudança de campanhas/clients, não a
+  // cada render do ClientLayout.
+  const enrichedClients = useMemo(() => {
+    if (!sortedClients?.length) return sortedClients;
+    let tokenIndex = null;
+    return sortedClients.map((client) => {
+      if (client.health_distribution) return client;
+      if (!tokenIndex) {
+        tokenIndex = new Map(campaigns.map((c) => [c.short_token, c]));
+      }
+      const activeCampaigns = (client.active_short_tokens || [])
+        .map((t) => tokenIndex.get(t))
+        .filter(Boolean);
+      return {
+        ...client,
+        health_distribution: computeHealthDistribution(activeCampaigns),
+      };
+    });
+  }, [sortedClients, campaigns]);
+
   // ── Handlers ─────────────────────────────────────────────────────────────
   const handleCopyLink = useCallback(async (campaign) => {
     const token = campaign.short_token;
@@ -646,7 +673,7 @@ export default function CampaignMenuV2({ user, onLogout, onOpenReport, onOpenCli
           // mostra os cards e refetch corre em background.
           clientsLoading && clients.length === 0
             ? <LoadingState layout="client" />
-            : <ClientLayout clients={sortedClients} onOpen={handleOpenClient} />
+            : <ClientLayout clients={enrichedClients} onOpen={handleOpenClient} />
         ) : layout === "performers" ? (
           <PerformersLayout campaigns={campaigns} teamMap={teamMap} />
         ) : (
@@ -743,122 +770,20 @@ export default function CampaignMenuV2({ user, onLogout, onOpenReport, onOpenCli
 // ─────────────────────────────────────────────────────────────────────────────
 
 function MonthLayout({ groups, onOpen, onOpenReport, teamMap, filterSignature = "" }) {
-  const currentYM = new Date().toISOString().slice(0, 7);
-
-  // Estado de colapso por chave de mês. Default: meses passados começam
-  // colapsados, mês atual/futuros expandidos, E o mês mais recente da lista
-  // sempre aberto (mesmo se for passado — ex: dia 1 do mês novo, sem dados
-  // ainda no mês corrente). Toggles do user persistem entre filtros —
-  // useEffect só inicializa chaves NOVAS, sem sobrescrever.
-  const [collapsed, setCollapsed] = useState({});
-
-  useEffect(() => {
-    setCollapsed((prev) => {
-      const next = { ...prev };
-      let changed = false;
-      const mostRecentKey = groups
-        .map((g) => g.key)
-        .filter((k) => k !== "no-date")
-        .sort()
-        .at(-1);
-      for (const g of groups) {
-        if (g.key === "no-date") continue;
-        if (!(g.key in next)) {
-          next[g.key] = g.key < currentYM && g.key !== mostRecentKey;
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
-  }, [groups, currentYM]);
-
-  // Auto-expand quando o filtro está ATIVO. Dispara em qualquer mudança da
-  // assinatura (search, owner, worklist) — incluindo a transição
-  // inativo→ativo e mudanças entre estados ativos (ex: trocar query).
-  // Se o filtro estiver inativo (signature vazia), preservamos os toggles
-  // do user (defaults do useEffect acima já cobrem o estado inicial).
-  // Toggles durante filtro continuam valendo: o user pode colapsar manual.
-  const isFiltering = !!filterSignature;
-  useEffect(() => {
-    if (isFiltering) setCollapsed({});
-  }, [filterSignature, isFiltering]);
-
-  const toggle = useCallback(
-    (key) => setCollapsed((s) => ({ ...s, [key]: !s[key] })),
-    []
-  );
-
-  if (!groups.length) {
-    return (
-      <div className="rounded-xl border border-border bg-surface p-8 text-center">
-        <p className="text-sm text-fg-muted">Nenhuma campanha encontrada com os filtros atuais.</p>
-      </div>
-    );
-  }
-
+  // Toda a lógica de colapso/expansão/auto-expand foi movida pro
+  // MonthGroupedSections — esse wrapper só liga renderItem a CampaignCardV2.
   return (
-    <div className="space-y-8">
-      {groups.map((g) => {
-        const canCollapse = g.key !== "no-date";
-        const isCollapsed = canCollapse && !!collapsed[g.key];
-        return (
-          <section key={g.key}>
-            <button
-              type="button"
-              onClick={() => canCollapse && toggle(g.key)}
-              disabled={!canCollapse}
-              aria-expanded={!isCollapsed}
-              className={cn(
-                "w-full flex items-center justify-between mb-3 group rounded",
-                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signature/40",
-                canCollapse && "cursor-pointer"
-              )}
-            >
-              <div className="flex items-center gap-2">
-                {canCollapse && (
-                  <svg
-                    width="10"
-                    height="10"
-                    viewBox="0 0 12 12"
-                    aria-hidden="true"
-                    className={cn(
-                      "text-fg-subtle transition-transform duration-150 group-hover:text-fg",
-                      isCollapsed ? "-rotate-90" : "rotate-0"
-                    )}
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <polyline points="3 4.5 6 7.5 9 4.5" />
-                  </svg>
-                )}
-                <h2 className="text-[11px] uppercase tracking-widest font-bold text-fg-muted group-hover:text-fg transition-colors">
-                  {g.label}
-                </h2>
-              </div>
-              <span className="text-[11px] text-fg-subtle">
-                {g.items.length} campanha{g.items.length === 1 ? "" : "s"}
-              </span>
-            </button>
-            {!isCollapsed && (
-              <div className="space-y-2">
-                {g.items.map((c) => (
-                  <CampaignCardV2
-                    key={c.short_token}
-                    campaign={c}
-                    onOpen={onOpen}
-                    onOpenReport={onOpenReport}
-                    teamMap={teamMap}
-                  />
-                ))}
-              </div>
-            )}
-          </section>
-        );
-      })}
-    </div>
+    <MonthGroupedSections groups={groups} filterSignature={filterSignature}
+      renderItem={(c) => (
+        <CampaignCardV2
+          key={c.short_token}
+          campaign={c}
+          onOpen={onOpen}
+          onOpenReport={onOpenReport}
+          teamMap={teamMap}
+        />
+      )}
+    />
   );
 }
 

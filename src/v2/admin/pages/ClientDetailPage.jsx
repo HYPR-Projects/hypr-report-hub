@@ -37,7 +37,9 @@ import { ToolbarV2 } from "../components/ToolbarV2";
 import { CampaignCardV2 } from "../components/CampaignCardV2";
 import { MergeGroupCardV2 } from "../components/MergeGroupCardV2";
 import { CampaignDrawer } from "../components/CampaignDrawer";
+import { MonthGroupedSections } from "../components/MonthGroupedSections";
 import {
+  formatMonthLabel,
   formatPacingValue,
   formatPct,
   formatTimeAgo,
@@ -249,6 +251,39 @@ export default function ClientDetailPage({ slug, user, onLogout, onBack, onOpenR
     return out;
   }, [sorted]);
 
+  // Agrupa os groupedItems (single + merge) por mês de início pra
+  // exibir as campanhas do cliente quebradas como na view "Por mês"
+  // do menu principal. Itens sem `start_date` caem no bucket "no-date".
+  //
+  // Pra merge groups, usa o start_date do membro mais recente (members[0]
+  // já vem ordenado desc dentro de cada grupo). Garante que o merge fica
+  // no mês mais relevante visualmente.
+  //
+  // Ordem dos meses: mais recente primeiro, "no-date" no fim.
+  const monthGroups = useMemo(() => {
+    if (groupedItems.length === 0) return [];
+    const acc = new Map();
+    for (const item of groupedItems) {
+      const startDate =
+        item.kind === "single"
+          ? item.campaign.start_date
+          : item.members[0]?.start_date;
+      const m = startDate?.slice(0, 7) || "no-date";
+      if (!acc.has(m)) acc.set(m, []);
+      acc.get(m).push(item);
+    }
+    const monthsSorted = [...acc.keys()].sort((a, b) => {
+      if (a === "no-date") return 1;
+      if (b === "no-date") return -1;
+      return b.localeCompare(a);
+    });
+    return monthsSorted.map((m) => ({
+      key: m,
+      label: m === "no-date" ? "Sem data" : formatMonthLabel(m),
+      items: acc.get(m),
+    }));
+  }, [groupedItems]);
+
   // ── Handlers ─────────────────────────────────────────────────────────────
   const handleCopyLink = useCallback(async (campaign) => {
     const token = campaign.short_token;
@@ -421,13 +456,15 @@ export default function ClientDetailPage({ slug, user, onLogout, onBack, onOpenR
               <Skeleton key={i} className="h-[88px] rounded-xl" />
             ))}
           </div>
-        ) : groupedItems.length === 0 ? (
-          <div className="rounded-xl border border-border bg-surface p-8 text-center">
-            <p className="text-sm text-fg-muted">Nenhuma campanha encontrada com os filtros atuais.</p>
-          </div>
         ) : (
-          <div className="space-y-2">
-            {groupedItems.map((item) =>
+          // Agrupado por mês (mesmo padrão do "Por mês" no menu principal).
+          // filterSignature dispara auto-expand quando search/owner mudam.
+          <MonthGroupedSections
+            groups={monthGroups}
+            filterSignature={[search.trim(), ownerFilter.join(",")]
+              .filter(Boolean)
+              .join("|")}
+            renderItem={(item) =>
               item.kind === "group" ? (
                 <MergeGroupCardV2
                   key={`merge-${item.merge_id}`}
@@ -445,8 +482,8 @@ export default function ClientDetailPage({ slug, user, onLogout, onBack, onOpenR
                   teamMap={teamMap}
                 />
               )
-            )}
-          </div>
+            }
+          />
         )}
       </main>
 

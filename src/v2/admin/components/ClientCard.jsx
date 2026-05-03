@@ -8,7 +8,8 @@
 //   │▌Kenvue                              ↑ +12% │  ← stripe + name + trend inline
 //   │ 9 campanhas  · 4 ativas         há 10 h    │  ← timestamp no header (era footer)
 //   │                                             │
-//   │ ╱╲╱╲___╱╱─── (sparkline + área sutil)       │
+//   │ ●●●○  (4 dots)                              │  ← distribuição de saúde
+//   │ 3 saudáveis · 1 atenção                     │
 //   │                                             │
 //   │ DSP·VID 108%   CTR 0.74%   VTR 89.2%        │  ← métricas inline (sem boxes)
 //   │                                             │
@@ -24,8 +25,10 @@
 //     régua de cores condicional). Sem grid boxed/divisores verticais.
 //   • Timestamp `há Xh` virou parte do header (subtle), não duplica
 //     espaço no footer. Footer agora é só os pips de owners.
-//   • SparklineV2 ganhou área de fill sutil (fillOpacity 0.10) — dá
-//     corpo visual sem aumentar altura.
+//   • HealthDistribution (dots ≤6 ativas, barra >6) substitui a
+//     sparkline antiga — comunica estado atual da carteira em vez de
+//     trend abstrato. Cores reusam o vocabulário do resto do admin
+//     (verde=saudável, amarelo=atenção, vermelho=crítica, azul=over).
 //
 // Click → navega pra `/admin/client/{slug}`.
 
@@ -33,8 +36,8 @@ import { useMemo } from "react";
 import { cn } from "../../../ui/cn";
 import { Card } from "../../../ui/Card";
 import { Avatar } from "../../../ui/Avatar";
-import { SparklineV2 } from "../../components/SparklineV2";
 import { TrendPill } from "./TrendPill";
+import { HealthDistribution } from "./HealthDistribution";
 import {
   formatTimeAgo,
   formatPacingValue,
@@ -57,12 +60,6 @@ const HEALTH_BAR = {
   critical:  "bg-danger",      // alguma <90%
 };
 
-const SPARK_STROKE = {
-  up:   "var(--color-success)",
-  down: "var(--color-danger)",
-  flat: "var(--color-fg-subtle)",
-};
-
 export function ClientCard({ client, onOpen }) {
   const {
     slug,
@@ -76,7 +73,7 @@ export function ClientCard({ client, onOpen }) {
     top_cs_owners = [],
     last_updated,
     health,
-    sparkline,
+    health_distribution,
     trend,
     // ADMIN-ONLY — custo cru / impressions × 1000. Backend só envia
     // este campo em endpoints admin-gated (action=list_clients), então
@@ -86,11 +83,6 @@ export function ClientCard({ client, onOpen }) {
   } = client || {};
 
   const displayName = display_name || slugToDisplay(slug);
-
-  // Stroke do sparkline conforme trend (fallback signature quando não há trend)
-  const sparkStroke = trend?.direction
-    ? SPARK_STROKE[trend.direction]
-    : "var(--color-signature)";
 
   // Top 1 CP + top 1 CS
   const primaryCp = top_cp_owners[0];
@@ -163,22 +155,14 @@ export function ClientCard({ client, onOpen }) {
         </div>
       </div>
 
-      {/* ── Sparkline com área de gradiente ────────────────────────── */}
-      <div className="py-3 h-[60px] -mx-1 flex items-center">
-        {sparkline?.length > 1 ? (
-          <SparklineV2
-            values={sparkline}
-            stroke={sparkStroke}
-            strokeWidth={1.6}
-            fillOpacity={0.22}
-            width={400}
-            height={36}
-            className="w-full"
-            ariaLabel="Tendência de entrega nas últimas 12 semanas"
-          />
-        ) : (
-          <div className="h-full w-full" aria-hidden="true" />
-        )}
+      {/* ── Distribuição de saúde das campanhas ativas ──────────────
+       *  Substituiu a sparkline (ver doc do componente). Mesma altura
+       *  do bloco anterior pra não rebobinar layout. */}
+      <div className="py-3 h-[60px]">
+        <HealthDistribution
+          distribution={health_distribution}
+          activeCount={active_campaigns}
+        />
       </div>
 
       {/* ── Painel financeiro: eCPM (header tinted) + métricas ──────────

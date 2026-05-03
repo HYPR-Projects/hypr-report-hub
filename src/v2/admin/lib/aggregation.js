@@ -64,7 +64,7 @@ function chooseDisplayName(variants) {
 //   100–124.99  → healthy    (verde)
 //   ≥ 125       → over       (azul/signature; ainda saudável)
 // ─────────────────────────────────────────────────────────────────────────────
-function classifyPacing(p) {
+export function classifyPacing(p) {
   if (p == null) return null;
   if (p < 90)  return "critical";
   if (p < 100) return "attention";
@@ -83,7 +83,7 @@ function aggregateHealth(arr) {
 
 const PACING_TIER_RANK = { critical: 0, attention: 1, healthy: 2, over: 3 };
 
-function worstPacing(dp, vp) {
+export function worstPacing(dp, vp) {
   // Pega o pacing que cai na pior banda (rank crítico=0 < ... < over=3).
   // Antes usávamos distância de 100 — incompatível com over=saudável.
   const candidates = [];
@@ -93,6 +93,24 @@ function worstPacing(dp, vp) {
   return candidates.reduce((a, b) =>
     PACING_TIER_RANK[classifyPacing(a)] <= PACING_TIER_RANK[classifyPacing(b)] ? a : b
   );
+}
+
+/**
+ * Distribuição de saúde — conta campanhas ativas por tier de pacing.
+ * Retorna { healthy, attention, critical, over } sempre (zeros pra
+ * tiers vazios), pra que o caller não precise checar undefined.
+ *
+ * Usado pelo HealthDistribution no ClientCard pra mostrar o mix de
+ * status do cliente (ex: 1 saudável + 1 crítica em vez de só "crítica"
+ * que era o que o `health` (worst-tier) comunicava antes).
+ */
+export function computeHealthDistribution(activeCampaigns) {
+  const out = { healthy: 0, attention: 0, critical: 0, over: 0 };
+  for (const c of activeCampaigns || []) {
+    const tier = classifyPacing(worstPacing(c.display_pacing, c.video_pacing));
+    if (tier && out[tier] != null) out[tier] += 1;
+  }
+  return out;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -148,6 +166,7 @@ export function aggregateClients(campaigns) {
       .map((c) => classifyPacing(worstPacing(c.display_pacing, c.video_pacing)))
       .filter(Boolean);
     const health = aggregateHealth(activeHealths);
+    const healthDistribution = computeHealthDistribution(active);
 
     const activeTokens = active.map((c) => c.short_token).filter(Boolean);
 
@@ -165,6 +184,7 @@ export function aggregateClients(campaigns) {
       top_cs_owners: topByEmail("cs_email", 2),
       last_updated: lastUpdated,
       health,
+      health_distribution: healthDistribution,
       active_short_tokens: activeTokens,
       // sparkline + trend ausentes — backend é quem provê.
     });

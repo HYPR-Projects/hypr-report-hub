@@ -2,28 +2,42 @@
 //
 // Chart cumulativo de pacing × tempo, complementar ao PacingBar.
 //
-// Conceito (Opção G — alinhada com Pacing Geral)
+// Conceito (Display + Video separados)
 //   A barra de pacing mostra delivered/expected_today × 100 — um SNAPSHOT
 //   do ritmo atual. Já este chart mostra a CURVA de pacing acumulado:
 //   eixo X tempo (start → end date), eixo Y % do esperado linear até cada
-//   data, ponderado por budget Display+Video.
+//   data, calculado SEPARADO por mídia.
 //
-//   Linha real (signature): pacing % cumulativo, ponto por dia, vai apenas
-//   até D-1 (ontem). Os ETLs entregam dados defasados 1 dia — incluir hoje
-//   contaria o dia no esperado linear sem ter entrega correspondente, gerando
-//   um drop artificial. Mesma fórmula do KPI Pacing Geral aplicada a cada
-//   dia (média ponderada por budget de pacing Display + pacing Video).
+//   Antes mostrava 1 linha agregada (média ponderada Display + Video).
+//   Trocado pra 2 linhas (Display + Video) porque:
+//     1. A linha agregada não dizia mais que o KPI "Pacing Geral" acima.
+//     2. Display em 130% + Video em 50% dá média ~90%, parece "perto do
+//        alvo" mas tem dois problemas separados se compensando — o agregado
+//        escondia o diagnóstico.
+//     3. A pergunta natural diante do chart é "o que tá puxando o pacing?"
+//        — duas linhas respondem direto.
+//
+//   Linha Display (signature): pacing % cumulativo de viewable_impressions.
+//   Linha Video (signature-light): pacing % cumulativo de video_view_100.
+//   Ambas vão até D-1 (ontem). Os ETLs entregam dados defasados 1 dia —
+//   incluir hoje contaria o dia no esperado linear sem ter entrega
+//   correspondente, gerando um drop artificial.
 //
 //   Linha "no alvo" (cinza tracejado): horizontal em 100% — convenção
 //   universal de pacing em ad-tech (acima = over, abaixo = atrasado).
 //
 //   ReferenceLine vertical em "ontem" marca o último dia com dado completo
-//   (D-1) — coincide com a ponta direita da curva real.
+//   (D-1) — coincide com a ponta direita das curvas.
 //
 // Como ler
-//   - Real ACIMA da linha 100% → over-pacing (entregando mais que o ritmo)
-//   - Real ABAIXO da linha 100% → sub-pacing (atrasado vs ritmo linear)
-//   - Valor no marker "ontem" bate com o KPI Pacing Geral acima.
+//   - Linha ACIMA de 100% → over-pacing daquela mídia
+//   - Linha ABAIXO de 100% → sub-pacing
+//   - Distância entre Display e Video → quanto cada uma destoa da outra
+//
+// Edge cases
+//   - Campanha só Display (sem contracted/budget Video): renderiza só Display.
+//   - Campanha só Video: renderiza só Video.
+//   - Ambas: 2 linhas + tooltip mostra os dois valores.
 //
 // Por que a curva pode oscilar (especialmente nos primeiros dias):
 //   No início da campanha o esperado linear é minúsculo (1/totalDays do
@@ -32,14 +46,11 @@
 //
 // Fonte de dados
 //   - Daily: viewable_impressions (Display) + video_view_100 (Video)
-//     por data, separados por mídia (cada uma comparada com seu próprio
-//     contrato — Display em impressões, Video em completions).
+//     por data, separados por mídia.
 //   - Contratado: contracted+bonus por mídia (denormalizado, lê de rows[0]).
-//   - Budget: o2o_*_budget + ooh_*_budget por mídia (sem bonus — bônus
-//     não fatura).
 //   - Datas: camp.start_date e camp.end_date.
 //
-// Renderiza null se não houver dados suficientes (sem datas, sem
+// Renderiza null se não houver dados suficientes (sem datas, sem nenhum
 // contratado, sem daily).
 
 import {
@@ -72,8 +83,6 @@ function buildSeries({
   daily,
   contractedDisplay,
   contractedVideo,
-  budgetDisplay,
-  budgetVideo,
   startDate,
   endDate,
 }) {
@@ -98,7 +107,6 @@ function buildSeries({
   const cutoff = new Date();
   cutoff.setHours(0, 0, 0, 0);
   cutoff.setDate(cutoff.getDate() - 1);
-  const totalBudget = budgetDisplay + budgetVideo;
 
   let cumDisplay = 0;
   let cumVideo = 0;
@@ -115,27 +123,32 @@ function buildSeries({
       cumVideo += dayData.video;
     }
 
-    let realPct = null;
-    if (isPast && totalBudget > 0) {
+    let displayPct = null;
+    let videoPct = null;
+    if (isPast) {
       // elapsed = i + 1 — cada ponto representa "pacing ao FIM da data X".
       // Como cumDisplay/cumVideo já somaram dayData[X] acima, o numerador
       // tem (i+1) dias de entrega; o denominador tem que casar pra o ponto
-      // de "ontem" bater com o KPI Pacing Geral. Usar elapsed=i (índice)
-      // gerava off-by-one — o ponto de ontem mostrava ~2× o KPI.
+      // de "ontem" bater com os KPIs Pacing DSP / Pacing VID separados.
+      // Usar elapsed=i (índice) gerava off-by-one.
       // Pós-end (campanha encerrada) cap em totalDays.
       const elapsedDays = date > endDate ? totalDays : i + 1;
       const elapsedFrac = elapsedDays / totalDays;
-      const expDisplay = contractedDisplay * elapsedFrac;
-      const expVideo = contractedVideo * elapsedFrac;
-      const pacingD = expDisplay > 0 ? (cumDisplay / expDisplay) * 100 : 0;
-      const pacingV = expVideo > 0 ? (cumVideo / expVideo) * 100 : 0;
-      realPct = (pacingD * budgetDisplay + pacingV * budgetVideo) / totalBudget;
+      if (contractedDisplay > 0) {
+        const expDisplay = contractedDisplay * elapsedFrac;
+        displayPct = expDisplay > 0 ? (cumDisplay / expDisplay) * 100 : 0;
+      }
+      if (contractedVideo > 0) {
+        const expVideo = contractedVideo * elapsedFrac;
+        videoPct = expVideo > 0 ? (cumVideo / expVideo) * 100 : 0;
+      }
     }
 
     points.push({
       date: iso,
       label: formatShortDate(date),
-      real: realPct,
+      display: displayPct,
+      video: videoPct,
       ideal: 100,
     });
   }
@@ -161,30 +174,43 @@ function findCutoffLabel(points, endDate) {
 
 function ChartTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null;
-  const real = payload.find((p) => p.dataKey === "real")?.value;
+  const display = payload.find((p) => p.dataKey === "display")?.value;
+  const video   = payload.find((p) => p.dataKey === "video")?.value;
+  // Filtra entradas null pra não poluir tooltip de campanha mono-mídia.
+  const rows = [
+    display != null && {
+      label: "Display",
+      value: display,
+      dot: "var(--color-signature)",
+    },
+    video != null && {
+      label: "Video",
+      value: video,
+      dot: "var(--color-signature-light)",
+    },
+  ].filter(Boolean);
+
   return (
     <div className="rounded-md border border-border bg-surface-2 px-3 py-2 text-[11px] shadow-md">
       <div className="font-semibold text-fg mb-1">{label}</div>
-      <div className="flex items-center gap-2 text-fg-muted">
-        <span className="size-2 rounded-full bg-signature" />
-        Pacing: <span className="text-fg font-semibold tabular-nums">
-          {real != null ? `${fmt(real, 1)}%` : "—"}
-        </span>
-      </div>
-      <div className="flex items-center gap-2 text-fg-muted mt-0.5">
+      {rows.map((r) => (
+        <div key={r.label} className="flex items-center gap-2 text-fg-muted">
+          <span className="size-2 rounded-full" style={{ background: r.dot }} />
+          {r.label}: <span className="text-fg font-semibold tabular-nums">
+            {fmt(r.value, 1)}%
+          </span>
+          <span
+            className="text-[10px] tabular-nums ml-auto"
+            style={{ color: r.value >= 100 ? "var(--color-success)" : "var(--color-warning)" }}
+          >
+            {r.value >= 100 ? "+" : ""}{fmt(r.value - 100, 1)} pp
+          </span>
+        </div>
+      ))}
+      <div className="flex items-center gap-2 text-fg-muted mt-1 pt-1 border-t border-border">
         <span className="size-2 rounded-full" style={{ background: "var(--color-fg-subtle)" }} />
         No alvo: <span className="text-fg font-semibold tabular-nums">100,0%</span>
       </div>
-      {real != null && (
-        <div className="mt-1 pt-1 border-t border-border text-fg-muted">
-          Δ: <span
-            className="font-semibold tabular-nums"
-            style={{ color: real >= 100 ? "var(--color-success)" : "var(--color-warning)" }}
-          >
-            {real >= 100 ? "+" : ""}{fmt(real - 100, 1)} pp
-          </span>
-        </div>
-      )}
     </div>
   );
 }
@@ -193,7 +219,12 @@ export function CumulativePacingChartV2({
   daily = [],
   contractedDisplay = 0,
   contractedVideo = 0,
+  // budgetDisplay/budgetVideo eram usados pra ponderar a média agregada.
+  // Não são mais necessários (cada linha usa só o seu próprio contracted),
+  // mas mantemos os props no contrato pra evitar quebrar o caller.
+  // eslint-disable-next-line no-unused-vars
   budgetDisplay = 0,
+  // eslint-disable-next-line no-unused-vars
   budgetVideo = 0,
   startDate: startISO,
   endDate: endISO,
@@ -208,33 +239,45 @@ export function CumulativePacingChartV2({
   const series = useMemo(() => {
     if (!startDate || !endDate || !daily.length) return [];
     if (!contractedDisplay && !contractedVideo) return [];
-    if (!budgetDisplay && !budgetVideo) return [];
     return buildSeries({
       daily,
       contractedDisplay,
       contractedVideo,
-      budgetDisplay,
-      budgetVideo,
       startDate,
       endDate,
     });
-  }, [daily, contractedDisplay, contractedVideo, budgetDisplay, budgetVideo, startISO, endISO]);
+  }, [daily, contractedDisplay, contractedVideo, startISO, endISO]);
 
   if (series.length === 0) return null;
 
   const cutoffLabel = findCutoffLabel(series, endDate);
 
+  // Renderiza só linha que tem dado (evita Line vazia em campanha mono-mídia).
+  const showDisplay = contractedDisplay > 0;
+  const showVideo   = contractedVideo > 0;
+
   return (
     <div className="rounded-xl border border-border bg-surface-2 px-5 py-5">
-      <div className="flex items-baseline justify-between gap-3 mb-4">
+      <div className="flex items-baseline justify-between gap-3 mb-4 flex-wrap">
         <span className="inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-fg-muted">
           <span className="size-2 rounded-full bg-signature" aria-hidden />
           Curva de pacing
         </span>
         <div className="flex items-center gap-3 text-[10px] text-fg-muted uppercase tracking-wider">
-          <span className="inline-flex items-center gap-1.5">
-            <span className="h-0.5 w-3 bg-signature" /> Real
-          </span>
+          {showDisplay && (
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-0.5 w-3 bg-signature" /> Display
+            </span>
+          )}
+          {showVideo && (
+            <span className="inline-flex items-center gap-1.5">
+              <span
+                className="h-0.5 w-3"
+                style={{ background: "var(--color-signature-light)" }}
+              />
+              Video
+            </span>
+          )}
           <span className="inline-flex items-center gap-1.5">
             <span
               className="h-0.5 w-3"
@@ -283,17 +326,34 @@ export function CumulativePacingChartV2({
             activeDot={false}
             isAnimationActive={false}
           />
-          <Line
-            type="monotone"
-            dataKey="real"
-            stroke={hypr.signature}
-            strokeWidth={2.5}
-            dot={false}
-            activeDot={{ r: 4, fill: hypr.signature, stroke: hypr.canvas, strokeWidth: 2 }}
-            connectNulls={false}
-            isAnimationActive={true}
-            animationDuration={500}
-          />
+          {showDisplay && (
+            <Line
+              type="monotone"
+              dataKey="display"
+              name="Display"
+              stroke={hypr.signature}
+              strokeWidth={2.5}
+              dot={false}
+              activeDot={{ r: 4, fill: hypr.signature, stroke: hypr.canvas, strokeWidth: 2 }}
+              connectNulls={false}
+              isAnimationActive={true}
+              animationDuration={500}
+            />
+          )}
+          {showVideo && (
+            <Line
+              type="monotone"
+              dataKey="video"
+              name="Video"
+              stroke={hypr.signatureLight}
+              strokeWidth={2.5}
+              dot={false}
+              activeDot={{ r: 4, fill: hypr.signatureLight, stroke: hypr.canvas, strokeWidth: 2 }}
+              connectNulls={false}
+              isAnimationActive={true}
+              animationDuration={500}
+            />
+          )}
 
           {cutoffLabel && (
             <ReferenceLine
