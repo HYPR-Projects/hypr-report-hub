@@ -11,15 +11,43 @@
 //   2. Centralizar evita inconsistência visual entre fallbacks de
 //      rotas diferentes.
 //
-// Estilo: spinner HYPR blue centralizado em fundo escuro neutro
-// (#1C262F = canvas dark). Em light theme o usuário só chega aqui
-// durante a transição entre rotas, então fundo escuro neutro é
-// aceitável (~200ms). Não vale a pena instanciar lógica de tema
-// só pra um fallback de loading.
+// Tema dark/light
+// ───────────────
+// Lê `data-theme` do <html> (setado sincrono pelo anti-FOUC inline em
+// index.html ANTES do React montar — sempre presente). Aplica fundo
+// equivalente a `--color-canvas` do tema correspondente. MutationObserver
+// cobre o caso raro de troca de tema enquanto o loading tá visível.
+//
+// As cores são hex literais (em vez de CSS vars) porque o caller pode
+// estar antes do v2.css ter sido parseado — não dá pra confiar em
+// `var(--color-canvas)` resolver.
 
+import { useEffect, useState } from "react";
 import Spinner from "./Spinner";
 
+const BG_BY_THEME = {
+  dark:  "#1C262F", // = --color-canvas (dark)
+  light: "#F8F9FA", // = --color-canvas (light)
+};
+
+function readTheme() {
+  if (typeof document === "undefined") return "dark";
+  return document.documentElement.getAttribute("data-theme") || "dark";
+}
+
 export default function RouteSuspense() {
+  const [theme, setTheme] = useState(readTheme);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const obs = new MutationObserver(() => setTheme(readTheme()));
+    obs.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme"],
+    });
+    return () => obs.disconnect();
+  }, []);
+
   return (
     <div
       style={{
@@ -28,7 +56,7 @@ export default function RouteSuspense() {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        background: "#1C262F",
+        background: BG_BY_THEME[theme] || BG_BY_THEME.dark,
       }}
     >
       <Spinner size={36} />

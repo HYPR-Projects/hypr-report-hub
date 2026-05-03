@@ -9,8 +9,7 @@
 //   v2.css (Tailwind v4). Quando esse fallback é mostrado, o chunk ainda
 //   não baixou — então as classes Tailwind ainda não foram parsed e nada
 //   estilizaria. Por isso este componente usa CSS inline puro, com cores
-//   literais que casam com os tokens de tema dark do design system
-//   (--color-canvas, --color-surface-2, --color-border).
+//   literais que casam com os tokens de tema.
 //
 // O resultado é uma transição visualmente contínua:
 //   página em branco → LoadingShell (CSS inline)
@@ -18,9 +17,20 @@
 //                    → conteúdo real
 // Sem o "flash de spinner solto" que existia antes.
 //
+// Tema dark/light
+// ───────────────
+// Lê `data-theme` do <html> (setado pelo anti-FOUC inline em index.html
+// ANTES do React montar — sempre presente). Aplica paleta equivalente aos
+// tokens do theme.css correspondente. MutationObserver cobre troca de
+// tema enquanto o loading tá visível (caso raro mas possível).
+//
+// Cores hex literais em vez de CSS vars porque o caller pode estar antes
+// do v2.css ter sido parseado — não dá pra confiar em var(--color-canvas).
+//
 // Mantido enxuto pra entrar no bundle inicial sem custo perceptível
 // (o HyprReportCenterLogo já estava sendo carregado por outras rotas).
 
+import { useEffect, useState } from "react";
 import HyprReportCenterLogo from "./HyprReportCenterLogo";
 
 const SHIMMER = `
@@ -31,31 +41,66 @@ const SHIMMER = `
 }
 `;
 
-const COLORS = {
-  canvas:   "#0C161D", // bg-canvas em dark
-  surface:  "#0F1A22", // bg-surface-2 em dark
-  border:   "#1F2A33", // border em dark
-  shimmer:  "#1F2A33", // mesmo da border, mas com animação de opacidade
-  fgMuted:  "#9CA3AF",
+// Paletas equivalentes aos tokens de cada tema. Hex literais pra não
+// depender de CSS vars (theme.css pode não ter sido parseado ainda).
+const PALETTES = {
+  dark: {
+    canvas:  "#0C161D",
+    surface: "#0F1A22",
+    border:  "#1F2A33",
+    shimmer: "#1F2A33",
+    fgMuted: "#9CA3AF",
+    text:    "#E5E7EB",
+  },
+  light: {
+    canvas:  "#F8F9FA",
+    surface: "#FFFFFF",
+    border:  "#E5E8EC",
+    shimmer: "#ECEEF1",
+    fgMuted: "#6B7280",
+    text:    "#111827",
+  },
 };
 
-const skeleton = (w, h, extra = {}) => ({
-  width: w,
-  height: h,
-  background: COLORS.shimmer,
-  borderRadius: 6,
-  animation: "hypr-shimmer 1.6s ease-in-out infinite",
-  ...extra,
-});
+function readTheme() {
+  if (typeof document === "undefined") return "dark";
+  return document.documentElement.getAttribute("data-theme") || "dark";
+}
+
+function useDataTheme() {
+  const [theme, setTheme] = useState(readTheme);
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const obs = new MutationObserver(() => setTheme(readTheme()));
+    obs.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme"],
+    });
+    return () => obs.disconnect();
+  }, []);
+  return theme;
+}
 
 export default function LoadingShell() {
+  const theme = useDataTheme();
+  const COLORS = PALETTES[theme] || PALETTES.dark;
+
+  const skeleton = (w, h, extra = {}) => ({
+    width: w,
+    height: h,
+    background: COLORS.shimmer,
+    borderRadius: 6,
+    animation: "hypr-shimmer 1.6s ease-in-out infinite",
+    ...extra,
+  });
+
   return (
     <div
       style={{
         minHeight: "100vh",
         width: "100%",
         background: COLORS.canvas,
-        color: "#E5E7EB",
+        color: COLORS.text,
         fontFamily:
           "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
       }}
