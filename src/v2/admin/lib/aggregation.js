@@ -339,6 +339,20 @@ function pacingScore(p) {
   return 0;
 }
 
+// Thresholds por mídia. Quando a campanha tem DV ABS (Authentic Brand
+// Suitability) ativo NAQUELA mídia, o threshold é mais permissivo —
+// inventário com brand safety pre-bid é estruturalmente mais caro.
+// Detecção via flags `display_has_dv_abs` / `video_has_dv_abs` do payload.
+const ECPM_THRESHOLD_DISPLAY     = 0.70;
+const ECPM_THRESHOLD_DISPLAY_ABS = 1.50;
+const ECPM_THRESHOLD_VIDEO       = 2.00;
+const ECPM_THRESHOLD_VIDEO_ABS   = 4.00;
+const CTR_THRESHOLD_DISPLAY      = 0.6;
+const CTR_THRESHOLD_DISPLAY_ABS  = 0.5;
+const CTR_THRESHOLD_VIDEO        = 0.3;
+const CTR_THRESHOLD_VIDEO_ABS    = 0.2;
+const VTR_THRESHOLD              = 80;
+
 // Breakdown completo do score de uma campanha. Retorna pts atuais e máximos
 // por categoria, pesos por mídia, e diagnósticos textuais ordenados por
 // impacto (perda em pts). Usado pelo PerformerDrawer pra explicar onde
@@ -348,17 +362,14 @@ function pacingScore(p) {
 // próprios — Display e Video têm benchmarks naturalmente diferentes
 // (CTR de Display ~0,3% típico; Video raramente passa de 0,5%).
 //
-// Thresholds por formato:
-//   eCPM    Display < R$ 0,70 (30 pts) | Video < R$ 2,00 (30 pts)
-//   CTR     Display > 0,6%    (25 pts) | Video > 0,3%    (25 pts)
-//   VTR     Video   > 80%     (10 pts) — exclusivo de Video
-//   Pacing  100–125% gradiente         (35 pts) — vale pros dois
-//
 // Pesos (wDsp/wVid) = share de viewable_impressions em cada mídia.
 // Campanha 80% Display + 20% Video tem wDsp=0,8 e wVid=0,2.
 //
 // VTR é exclusivo de Video — em campanhas só-Display max_vtr=0 (não
 // penaliza estruturalmente; o "teto realista" é menor que 100).
+//
+// DV ABS: thresholds eCPM/CTR aplicam por mídia conforme as flags
+// `c.display_has_dv_abs` e `c.video_has_dv_abs` do payload.
 function scoreCampaignDetailed(c) {
   const dImpr = Number(c.display_impressions || 0);
   const vImpr = Number(c.video_impressions   || 0);
@@ -391,44 +402,54 @@ function scoreCampaignDetailed(c) {
     maxPacing = 0;
   }
 
-  // ── eCPM (30 pts) — Display < 0,70 | Video < 2,00 ───────────
+  // Thresholds dinâmicos por mídia, baseados em DV ABS. Cada flag é
+  // independente — campanha pode ter ABS só em Display, só em Video, ou
+  // em ambos (linhas diferentes da mesma campanha).
+  const dHasAbs = !!c.display_has_dv_abs;
+  const vHasAbs = !!c.video_has_dv_abs;
+  const dEcpmTh = dHasAbs ? ECPM_THRESHOLD_DISPLAY_ABS : ECPM_THRESHOLD_DISPLAY;
+  const vEcpmTh = vHasAbs ? ECPM_THRESHOLD_VIDEO_ABS   : ECPM_THRESHOLD_VIDEO;
+  const dCtrTh  = dHasAbs ? CTR_THRESHOLD_DISPLAY_ABS  : CTR_THRESHOLD_DISPLAY;
+  const vCtrTh  = vHasAbs ? CTR_THRESHOLD_VIDEO_ABS    : CTR_THRESHOLD_VIDEO;
+
+  // ── eCPM (30 pts) ──────────────────────────────────────────
   const dEcpm = c.display_ecpm != null ? Number(c.display_ecpm) : null;
   const vEcpm = c.video_ecpm   != null ? Number(c.video_ecpm)   : null;
   let ecpmPts = 0;
   let maxEcpm = 30;
   if (dEcpm != null && vEcpm != null) {
-    ecpmPts = (dEcpm < 0.70 ? 30 : 0) * wDsp + (vEcpm < 2.00 ? 30 : 0) * wVid;
+    ecpmPts = (dEcpm < dEcpmTh ? 30 : 0) * wDsp + (vEcpm < vEcpmTh ? 30 : 0) * wVid;
   } else if (dEcpm != null) {
-    ecpmPts = dEcpm < 0.70 ? 30 : 0;
+    ecpmPts = dEcpm < dEcpmTh ? 30 : 0;
   } else if (vEcpm != null) {
-    ecpmPts = vEcpm < 2.00 ? 30 : 0;
+    ecpmPts = vEcpm < vEcpmTh ? 30 : 0;
   } else if (c.admin_ecpm != null) {
     // Fallback: sem split por mídia (dado mais antigo). Usa threshold do mix dominante.
     const ecpm = Number(c.admin_ecpm);
-    const threshold = wVid > wDsp ? 2.00 : 0.70;
+    const threshold = wVid > wDsp ? vEcpmTh : dEcpmTh;
     ecpmPts = ecpm < threshold ? 30 : 0;
   } else {
     maxEcpm = 0;
   }
 
-  // ── CTR (25 pts) — Display > 0,6% | Video > 0,3% ────────────
+  // ── CTR (25 pts) ───────────────────────────────────────────
   const dCtr = c.display_ctr != null ? Number(c.display_ctr) : null;
   const vCtr = c.video_ctr   != null ? Number(c.video_ctr)   : null;
   let ctrPts = 0;
   let maxCtr = 25;
   if (dCtr != null && vCtr != null) {
-    ctrPts = (dCtr > 0.6 ? 25 : 0) * wDsp + (vCtr > 0.3 ? 25 : 0) * wVid;
+    ctrPts = (dCtr > dCtrTh ? 25 : 0) * wDsp + (vCtr > vCtrTh ? 25 : 0) * wVid;
   } else if (dCtr != null) {
-    ctrPts = dCtr > 0.6 ? 25 : 0;
+    ctrPts = dCtr > dCtrTh ? 25 : 0;
   } else if (vCtr != null) {
-    ctrPts = vCtr > 0.3 ? 25 : 0;
+    ctrPts = vCtr > vCtrTh ? 25 : 0;
   } else {
     maxCtr = 0;
   }
 
   // ── VTR (10 pts × wVid) — só Video ──────────────────────────
   const vtrHasData = c.video_vtr != null;
-  const vtrPts = vtrHasData && Number(c.video_vtr) > 80 ? 10 * wVid : 0;
+  const vtrPts = vtrHasData && Number(c.video_vtr) > VTR_THRESHOLD ? 10 * wVid : 0;
   const maxVtr = vtrHasData ? 10 * wVid : 0;
 
   // ── Diagnostics: razões da perda, ordenadas por impacto ─────
@@ -455,11 +476,15 @@ function scoreCampaignDetailed(c) {
   }
   if (maxEcpm > 0 && ecpmPts < maxEcpm - 0.5) {
     const reasons = [];
-    if (dEcpm != null && wDsp > 0 && dEcpm >= 0.70) reasons.push(`Display eCPM R$ ${dEcpm.toFixed(2)} (≥ R$ 0,70)`);
-    if (vEcpm != null && wVid > 0 && vEcpm >= 2.00) reasons.push(`Video eCPM R$ ${vEcpm.toFixed(2)} (≥ R$ 2,00)`);
+    if (dEcpm != null && wDsp > 0 && dEcpm >= dEcpmTh) {
+      reasons.push(`Display eCPM R$ ${dEcpm.toFixed(2)} (≥ R$ ${dEcpmTh.toFixed(2)}${dHasAbs ? " ABS" : ""})`);
+    }
+    if (vEcpm != null && wVid > 0 && vEcpm >= vEcpmTh) {
+      reasons.push(`Video eCPM R$ ${vEcpm.toFixed(2)} (≥ R$ ${vEcpmTh.toFixed(2)}${vHasAbs ? " ABS" : ""})`);
+    }
     if (!reasons.length && c.admin_ecpm != null) {
       const ecpm = Number(c.admin_ecpm);
-      const threshold = wVid > wDsp ? 2.00 : 0.70;
+      const threshold = wVid > wDsp ? vEcpmTh : dEcpmTh;
       if (ecpm >= threshold) reasons.push(`eCPM R$ ${ecpm.toFixed(2)} (≥ R$ ${threshold.toFixed(2)})`);
     }
     if (reasons.length) {
@@ -468,16 +493,20 @@ function scoreCampaignDetailed(c) {
   }
   if (maxCtr > 0 && ctrPts < maxCtr - 0.5) {
     const reasons = [];
-    if (dCtr != null && wDsp > 0 && dCtr <= 0.6) reasons.push(`Display CTR ${dCtr.toFixed(2)}% (≤ 0,6%)`);
-    if (vCtr != null && wVid > 0 && vCtr <= 0.3) reasons.push(`Video CTR ${vCtr.toFixed(2)}% (≤ 0,3%)`);
+    if (dCtr != null && wDsp > 0 && dCtr <= dCtrTh) {
+      reasons.push(`Display CTR ${dCtr.toFixed(2)}% (≤ ${dCtrTh.toFixed(1)}%${dHasAbs ? " ABS" : ""})`);
+    }
+    if (vCtr != null && wVid > 0 && vCtr <= vCtrTh) {
+      reasons.push(`Video CTR ${vCtr.toFixed(2)}% (≤ ${vCtrTh.toFixed(1)}%${vHasAbs ? " ABS" : ""})`);
+    }
     if (reasons.length) {
       diagnostics.push({ category: "ctr", lost: maxCtr - ctrPts, reason: reasons.join(" · ") });
     }
   }
   if (maxVtr > 0.5 && vtrPts < maxVtr - 0.5 && vtrHasData) {
     const vtr = Number(c.video_vtr);
-    if (vtr <= 80) {
-      diagnostics.push({ category: "vtr", lost: maxVtr - vtrPts, reason: `VTR ${vtr.toFixed(1)}% (≤ 80%)` });
+    if (vtr <= VTR_THRESHOLD) {
+      diagnostics.push({ category: "vtr", lost: maxVtr - vtrPts, reason: `VTR ${vtr.toFixed(1)}% (≤ ${VTR_THRESHOLD}%)` });
     }
   }
   diagnostics.sort((a, b) => b.lost - a.lost);
@@ -488,6 +517,7 @@ function scoreCampaignDetailed(c) {
     max_total: maxPacing + maxEcpm + maxCtr + maxVtr,
     max_pacing: maxPacing, max_ecpm: maxEcpm, max_ctr: maxCtr, max_vtr: maxVtr,
     weights: { dsp: wDsp, vid: wVid },
+    abs: { display: dHasAbs, video: vHasAbs },
     diagnostics,
   };
 }

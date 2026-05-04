@@ -5,11 +5,13 @@
 // com métricas agregadas completas em cada linha.
 //
 // Score (0–100) vem de aggregation.js#computeTopPerformers e pondera por
-// formato (Display vs Video) com thresholds próprios:
-//   eCPM    Display < R$ 0,70 | Video < R$ 2,00  (30 pts)
-//   CTR     Display > 0,6%    | Video > 0,3%     (25 pts)
-//   VTR     Video > 80%                          (10 pts)
-//   Pacing  100–125% gradiente                   (35 pts)
+// formato (Display vs Video) com thresholds próprios. Quando a campanha
+// tem DoubleVerify ABS ativo numa mídia, os thresholds dessa mídia são
+// mais permissivos (inventário com brand safety pre-bid é mais caro):
+//   eCPM    Display < R$ 0,70 / R$ 1,50 ABS | Video < R$ 2,00 / R$ 4,00 ABS  (30 pts)
+//   CTR     Display > 0,6% / 0,5% ABS       | Video > 0,3% / 0,2% ABS       (25 pts)
+//   VTR     Video > 80%                                                     (10 pts)
+//   Pacing  100–125% gradiente                                              (35 pts)
 // Pontos por métrica = soma ponderada pelo share de impressões da campanha
 // em cada mídia (campanha 80% Display + 20% Video → DSP pesa 80% no score).
 //
@@ -288,14 +290,17 @@ export function PerformersLayout({ campaigns, teamMap = {}, onOpenReport }) {
       {/* Legenda */}
       <p className="text-[11px] text-fg-subtle px-1 leading-relaxed">
         Score (0–100) · Pacing 100–125% (35 pts) · eCPM Display &lt; R$ 0,70
-        / Video &lt; R$ 2,00 (30 pts) · CTR Display &gt; 0,6% / Video
-        &gt; 0,3% (25 pts) · VTR Video &gt; 80% (10 pts). Pontos de cada
-        métrica são ponderados pelo share de impressões da campanha em
-        cada mídia. Score do CS é a média ponderada por impressões
-        regredida à média do time via Empirical Bayes — CSs com poucas
-        campanhas convergem pra média do time pra evitar viés de amostra
-        pequena. Métricas exibidas (Pacing/CTR/VTR/eCPM) são agregadas via
-        Σnumerador / Σdenominador sobre as campanhas ativas do owner.
+        (ABS R$ 1,50) / Video &lt; R$ 2,00 (ABS R$ 4,00) (30 pts) · CTR
+        Display &gt; 0,6% (ABS 0,5%) / Video &gt; 0,3% (ABS 0,2%) (25 pts) ·
+        VTR Video &gt; 80% (10 pts). Quando a campanha tem DoubleVerify ABS
+        ativo numa mídia, os thresholds eCPM/CTR daquela mídia são mais
+        permissivos. Pontos de cada métrica são ponderados pelo share de
+        impressões da campanha em cada mídia. Score do CS é a média
+        ponderada por impressões regredida à média do time via Empirical
+        Bayes — CSs com poucas campanhas convergem pra média do time pra
+        evitar viés de amostra pequena. Métricas exibidas
+        (Pacing/CTR/VTR/eCPM) são agregadas via Σnumerador / Σdenominador
+        sobre as campanhas ativas do owner.
       </p>
     </div>
   );

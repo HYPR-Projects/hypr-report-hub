@@ -2936,6 +2936,24 @@ def query_campaigns_list():
             WHERE media_type IN ('DISPLAY', 'VIDEO')
               AND UPPER(line_name) NOT LIKE '%SURVEY%'
             GROUP BY short_token
+        ),
+        -- DoubleVerify ABS detection por mídia. dv360_daily_costs registra
+        -- `doubleverify_pre_bid_fee` quando a line item passou por filtro
+        -- pre-bid da DV (Authentic Brand Suitability é uma feature pre-bid).
+        -- Se SUM > 0 pra alguma linha Display da campanha → display_has_dv_abs;
+        -- idem para Video. Critério "qualquer linha" (B do plano de score) —
+        -- a campanha pode misturar linhas com e sem ABS, e cada mídia é
+        -- avaliada independente.
+        dv_abs AS (
+            SELECT
+                m.short_token,
+                MAX(IF(d.media_type = 'DISPLAY' AND d.doubleverify_pre_bid_fee_advertiser_currency > 0, TRUE, FALSE))
+                    AS display_has_dv_abs,
+                MAX(IF(d.media_type = 'VIDEO'   AND d.doubleverify_pre_bid_fee_advertiser_currency > 0, TRUE, FALSE))
+                    AS video_has_dv_abs
+            FROM `site-hypr.prod_assets.dv360_daily_costs` d
+            JOIN `site-hypr.prod_assets.client_line_item_mapping` m USING (line_item_id)
+            GROUP BY m.short_token
         )
         SELECT
             b.short_token, b.client_name, b.campaign_name,
@@ -2952,11 +2970,13 @@ def query_campaigns_list():
             u.d_days_with_delivery,   u.d_viewable_impressions,
             u.admin_total_cost,       u.admin_impressions,
             u.d_admin_total_cost,     u.d_admin_impressions,
-            u.v_admin_total_cost,     u.v_admin_impressions
+            u.v_admin_total_cost,     u.v_admin_impressions,
+            dv.display_has_dv_abs,    dv.video_has_dv_abs
         FROM base b
         LEFT JOIN agg       a USING (short_token)
         LEFT JOIN checklist c USING (short_token)
         LEFT JOIN unified   u USING (short_token)
+        LEFT JOIN dv_abs    dv USING (short_token)
         ORDER BY b.start_date DESC
     """
 
@@ -3126,6 +3146,16 @@ def query_campaigns_list():
             entry["display_ecpm"] = round(d_admin_cost / d_admin_impr * 1000, 2)
         if v_admin_impr > 0 and v_admin_cost > 0:
             entry["video_ecpm"] = round(v_admin_cost / v_admin_impr * 1000, 2)
+
+        # DoubleVerify ABS por mídia. Quando a flag é TRUE, scoreCampaignDetailed
+        # no frontend usa thresholds mais permissivos pra eCPM e CTR daquela mídia
+        # (inventário com brand safety pre-bid é estruturalmente mais caro).
+        # Só emite no payload se TRUE — economiza bytes e deixa o frontend usar
+        # `if (c.display_has_dv_abs)` direto.
+        if r["display_has_dv_abs"]:
+            entry["display_has_dv_abs"] = True
+        if r["video_has_dv_abs"]:
+            entry["video_has_dv_abs"] = True
 
         result.append(entry)
 

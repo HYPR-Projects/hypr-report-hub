@@ -185,8 +185,13 @@ function CampaignCard({ item, onOpenReport }) {
       {/* Header: nome + score numérico + potencial */}
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold text-fg truncate leading-tight">
-            {campaign.campaign_name || campaign.client_name || campaign.short_token}
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="text-sm font-semibold text-fg truncate leading-tight">
+              {campaign.campaign_name || campaign.client_name || campaign.short_token}
+            </span>
+            {(breakdown.abs?.display || breakdown.abs?.video) && (
+              <AbsBadge display={breakdown.abs.display} video={breakdown.abs.video} />
+            )}
           </div>
           {campaign.client_name && campaign.campaign_name !== campaign.client_name && (
             <div className="text-[10px] text-fg-subtle uppercase tracking-wider mt-0.5">
@@ -461,5 +466,26 @@ function TargetIcon({ className }) {
       <circle cx="8" cy="8" r="3" />
       <circle cx="8" cy="8" r="1" fill="currentColor" />
     </svg>
+  );
+}
+
+// Badge "ABS" — sinaliza que a campanha tem DoubleVerify Authentic Brand
+// Suitability ativo. Quando só uma das mídias tem ABS, indica qual.
+function AbsBadge({ display, video }) {
+  const both = display && video;
+  const label = both ? "ABS" : display ? "ABS·D" : "ABS·V";
+  return (
+    <span
+      className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wider uppercase bg-signature-soft text-signature border border-signature/30"
+      title={
+        both
+          ? "DoubleVerify ABS ativo em Display e Video — thresholds eCPM/CTR mais permissivos"
+          : display
+            ? "DoubleVerify ABS ativo em Display — thresholds eCPM/CTR mais permissivos pra Display"
+            : "DoubleVerify ABS ativo em Video — thresholds eCPM/CTR mais permissivos pra Video"
+      }
+    >
+      {label}
+    </span>
   );
 }
