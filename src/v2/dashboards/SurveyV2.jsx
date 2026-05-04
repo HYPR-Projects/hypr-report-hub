@@ -91,6 +91,15 @@ export default function SurveyV2({ token, data, isAdmin, adminJwt }) {
     );
   }
 
+  // Período pro cliente — só renderizamos a badge pra !isAdmin porque:
+  //   - Cliente VÊ os dados filtrados pelo clientRange → badge é descritiva.
+  //   - Admin vê tudo por padrão (clientRange é ignorado), e o admin bar do
+  //     SurveyTab já mostra "Cliente vê: X" com label que evita confusão.
+  // Single-token (items.length === 1): badge no header global.
+  // Merged (items.length > 1): badge no header de cada seção.
+  const singleTokenCfg = items.length === 1 ? parseSurveyConfig(items[0].survey) : null;
+  const singleTokenRange = singleTokenCfg?.clientRange || null;
+
   return (
     <div className="space-y-6">
       <header className="space-y-1">
@@ -101,6 +110,11 @@ export default function SurveyV2({ token, data, isAdmin, adminJwt }) {
             ? " Esta campanha tem múltiplos meses agrupados — cada seção abaixo mostra o survey daquele período."
             : isAdmin ? " Você pode editar perguntas e respostas." : ""}
         </p>
+        {!isAdmin && singleTokenRange && (
+          <p className="text-xs text-fg-muted pt-1">
+            Período exibido: <span className="font-semibold text-fg">{fmtClientRange(singleTokenRange)}</span>
+          </p>
+        )}
       </header>
 
       {items.map((it, idx) => (
@@ -116,19 +130,18 @@ export default function SurveyV2({ token, data, isAdmin, adminJwt }) {
               <span className="text-[11px] text-fg-subtle font-mono">
                 {it.short_token}
               </span>
-              {(() => {
-                // Mostra o período exibido ao cliente (clientRange salvo)
-                // alinhado ao header do mês. Visível a admin E cliente:
-                // pro cliente é contexto útil ("estes resultados são de
-                // 01/04 a 30/04"); pro admin é lembrete do que está publicado.
+              {!isAdmin && (() => {
+                // Pro cliente: badge descreve com precisão o que ele vê
+                // naquela seção (dados filtrados pelo clientRange salvo).
+                // Pro admin: omitido — admin não vê filtrado, o admin bar
+                // dentro do SurveyTab já mostra "Cliente vê: X" com label
+                // próprio pra não dar a impressão de que admin está vendo
+                // só aquele período.
                 const cfg = parseSurveyConfig(it.survey);
                 const cr = cfg?.clientRange;
                 if (!cr) return null;
                 return (
-                  <span
-                    title="Período configurado para exibição ao cliente nesta seção."
-                    className="text-[11px] text-fg-muted bg-signature-soft/40 border border-border rounded px-2 py-0.5"
-                  >
+                  <span className="text-[11px] text-fg-muted bg-signature-soft/40 border border-border rounded px-2 py-0.5">
                     Período: <span className="font-semibold text-fg">{fmtClientRange(cr)}</span>
                   </span>
                 );
