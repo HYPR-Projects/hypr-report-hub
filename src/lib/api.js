@@ -26,6 +26,7 @@
 
 import { API_URL } from "../shared/config";
 import { adminAuthHeaders, getOrIssueAdminJwt } from "../shared/auth";
+import { isDemoToken, buildDemoPayload, DEMO_TOKEN } from "../shared/demoData";
 
 // ── Helpers internos ─────────────────────────────────────────────────────────
 
@@ -53,6 +54,9 @@ async function postJson(url, body, extraHeaders = {}) {
  * detecta o grupo e devolve o payload merged com `merge_meta`.
  */
 export async function getCampaign(token, options = {}) {
+  // Demo report (`/report/DEMO`) — payload sintético gerado client-side.
+  // Não toca BigQuery. Ver shared/demoData.js.
+  if (isDemoToken(token)) return buildDemoPayload();
   const params = new URLSearchParams({ token });
   if (options.view) params.set("view", options.view);
   const r = await fetch(`${API_URL}?${params.toString()}`);
@@ -67,6 +71,7 @@ export async function getCampaign(token, options = {}) {
  * sem lançar erro em "não encontrado". Retorna { campaign } ou null.
  */
 export async function checkCampaignToken(token) {
+  if (isDemoToken(token)) return buildDemoPayload();
   try {
     const r = await fetch(`${API_URL}?token=${encodeURIComponent(token)}`);
     const d = await r.json();
@@ -299,6 +304,8 @@ export function setCachedShareId(short_token, share_id) {
  * (URL com short_token) sem quebrar o fluxo.
  */
 export async function getShareId(short_token) {
+  // Demo report: usa o próprio token como share_id (mantém URL `/report/DEMO`).
+  if (isDemoToken(short_token)) return DEMO_TOKEN;
   // Fast path: cache hit (clicks subsequentes na mesma campanha)
   const cached = getCachedShareId(short_token);
   if (cached) return cached;
@@ -434,6 +441,10 @@ export async function saveSurvey({ short_token, survey_data }) {
  * pra entrar em modo de edição.
  */
 export async function getSurvey({ short_token }) {
+  // Demo report: devolve o JSON sintético do payload demo, sem JWT.
+  if (isDemoToken(short_token)) {
+    return buildDemoPayload().survey;
+  }
   const jwt = await getOrIssueAdminJwt();
   const r = await fetch(
     `${API_URL}?action=get_survey&short_token=${encodeURIComponent(short_token)}`,
@@ -499,6 +510,7 @@ export async function fetchTypeformViaProxy(formUrl, range = null) {
  * `options.signal` permite cancelamento via AbortController (usado pelo TabChat).
  */
 export async function getComments(token, options = {}) {
+  if (isDemoToken(token)) return [];
   try {
     const r = await fetch(
       `${API_URL}?action=get_comments&token=${encodeURIComponent(token)}`,
@@ -517,6 +529,8 @@ export async function getComments(token, options = {}) {
  * alguém poderia se passar pela HYPR. Cliente comenta sem auth.
  */
 export async function saveComment({ short_token, metric_name, author, comment, adminJwt }) {
+  // Demo report — comentários não persistem (no-op silencioso).
+  if (isDemoToken(short_token)) return new Response(null, { status: 200 });
   const authHeaders = author === "HYPR" ? adminAuthHeaders(adminJwt) : {};
   return postJson(
     `${API_URL}?action=save_comment`,

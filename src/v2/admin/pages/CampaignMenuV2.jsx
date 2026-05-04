@@ -597,9 +597,22 @@ export default function CampaignMenuV2({ user, onLogout, onOpenReport, onOpenCli
               <span>{new Date().getFullYear()}</span>
             </p>
           </div>
-          <Button variant="primary" size="md" onClick={() => setShowNewCampaign(true)}>
-            + Novo Report
-          </Button>
+          <div className="flex items-center gap-2">
+            {/* Atalho pro report demo (`/report/DEMO`) — payload mockado em
+                shared/demoData.js, sem custo de backend. Vendedor abre,
+                apresenta, fecha. */}
+            <Button
+              variant="ghost"
+              size="md"
+              onClick={() => window.open("/report/DEMO", "_blank")}
+              title="Abre o report de demonstração em nova aba"
+            >
+              Abrir Demo
+            </Button>
+            <Button variant="primary" size="md" onClick={() => setShowNewCampaign(true)}>
+              + Novo Report
+            </Button>
+          </div>
         </div>
 
         {/* MetricStrip no topo — KPIs das campanhas ativas em grid de cards

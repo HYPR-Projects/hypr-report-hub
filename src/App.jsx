@@ -19,6 +19,7 @@ import {
 } from "./shared/auth";
 import { initGoogleAuth, requestSilentSignIn } from "./shared/googleAuth";
 import { lookupShare } from "./lib/api";
+import { isDemoToken } from "./shared/demoData";
 
 // ── Code-splitting ──────────────────────────────────────────────────────
 // Cada rota é um chunk próprio, EXCETO o ClientPasswordScreen — esse é
@@ -147,8 +148,12 @@ export default function App() {
   const [resolvedToken, setResolvedToken] = useState(() =>
     clientToken ? getResolvedShortToken(clientToken) : null
   );
+  // DEMO bypass: vendedor abre `/report/DEMO` direto sem senha — payload
+  // é mockado em shared/demoData.js, não há nada secreto pra proteger.
   const [unlocked, setUnlocked] = useState(() =>
-    clientToken ? isClientUnlocked(clientToken) : false
+    clientToken
+      ? (isDemoToken(clientToken) || isClientUnlocked(clientToken))
+      : false,
   );
 
   // Bootstrap do adminJwt vindo da URL (`?adm=`). É o "primeiro JWT" da aba
