@@ -2899,6 +2899,7 @@ def query_campaigns_list():
                 SUM(IF(media_type='DISPLAY', clicks,                   0)) AS d_clicks,
                 SUM(IF(media_type='DISPLAY', effective_total_cost,     0)) AS d_cost,
                 SUM(IF(media_type='VIDEO',   vi,                       0)) AS v_vi,
+                SUM(IF(media_type='VIDEO',   clicks,                   0)) AS v_clicks,
                 SUM(IF(media_type='VIDEO',   v100_complete,            0)) AS v_completions,
                 SUM(IF(media_type='VIDEO',   effective_cost_with_over, 0)) AS v_cost
             FROM dedup
@@ -2923,7 +2924,14 @@ def query_campaigns_list():
                 -- na view "Por cliente". NÃO BUBBLE para client-facing endpoints.
                 -- Mesma varredura — custo BQ zero adicional.
                 SUM(total_cost)  AS admin_total_cost,
-                SUM(impressions) AS admin_impressions
+                SUM(impressions) AS admin_impressions,
+                -- Splits por mídia pra calcular display_ecpm/video_ecpm
+                -- separadamente. Usados pelo Top Performers que avalia score
+                -- por formato (Display e Video têm benchmarks diferentes).
+                SUM(IF(media_type='DISPLAY', total_cost,  0)) AS d_admin_total_cost,
+                SUM(IF(media_type='DISPLAY', impressions, 0)) AS d_admin_impressions,
+                SUM(IF(media_type='VIDEO',   total_cost,  0)) AS v_admin_total_cost,
+                SUM(IF(media_type='VIDEO',   impressions, 0)) AS v_admin_impressions
             FROM `site-hypr.prod_assets.unified_daily_performance_metrics`
             WHERE media_type IN ('DISPLAY', 'VIDEO')
               AND UPPER(line_name) NOT LIKE '%SURVEY%'
@@ -2933,7 +2941,7 @@ def query_campaigns_list():
             b.short_token, b.client_name, b.campaign_name,
             b.start_date, b.end_date, b.updated_at,
             a.d_vi, a.d_clicks, a.d_cost,
-            a.v_vi, a.v_completions, a.v_cost,
+            a.v_vi, a.v_clicks, a.v_completions, a.v_cost,
             c.cpm_amount, c.cpcv_amount,
             c.contracted_o2o_display, c.contracted_ooh_display,
             c.contracted_o2o_video,   c.contracted_ooh_video,
@@ -2942,7 +2950,9 @@ def query_campaigns_list():
             u.v_actual_start_date,    u.v_days_with_delivery,  u.v_viewable_completions,
             u.v_viewable_impressions,
             u.d_days_with_delivery,   u.d_viewable_impressions,
-            u.admin_total_cost,       u.admin_impressions
+            u.admin_total_cost,       u.admin_impressions,
+            u.d_admin_total_cost,     u.d_admin_impressions,
+            u.v_admin_total_cost,     u.v_admin_impressions
         FROM base b
         LEFT JOIN agg       a USING (short_token)
         LEFT JOIN checklist c USING (short_token)
@@ -3042,12 +3052,17 @@ def query_campaigns_list():
             return negotiated / total_days * elapsed_days
 
         d_clicks = float(r["d_clicks"] or 0)
+        v_clicks = float(r["v_clicks"] or 0)
         d_expected = pacing_expected_to_date(d_neg, start_date, end_date)
         v_expected = pacing_expected_to_date(v_neg, start_date, end_date)
 
         display_pacing = round(d_viewable_impr / d_expected     * 100, 1) if d_expected and d_expected > 0 else None
         video_pacing   = round(v_viewable_comp  / v_expected    * 100, 1) if v_expected and v_expected > 0 else None
         display_ctr    = round(d_clicks         / d_vi          * 100, 2) if d_vi             > 0       else None
+        # video_ctr: cliques de vídeo são raros (geralmente skip-button ou
+        # clickthrough do creative). Quando existem, o threshold do score
+        # é mais brando que Display (>0,3% vs >0,6%) — formatos diferentes.
+        video_ctr      = round(v_clicks         / v_vi          * 100, 2) if v_vi             > 0       else None
         # VTR: viewable_completions / viewable_impressions (mesma fonte —
         # CTE `unified`). ANTES o denominador era v_vi (total impressions
         # vindo da CTE `agg`/dedup), o que descasava com o numerador e dava
@@ -3065,6 +3080,7 @@ def query_campaigns_list():
         if display_pacing is not None: entry["display_pacing"] = display_pacing
         if video_pacing   is not None: entry["video_pacing"]   = video_pacing
         if display_ctr    is not None: entry["display_ctr"]    = display_ctr
+        if video_ctr      is not None: entry["video_ctr"]      = video_ctr
         if video_vtr      is not None: entry["video_vtr"]      = video_vtr
 
         # Campos brutos pra agregação correta no frontend. CTR/VTR/Pacing
@@ -3078,6 +3094,8 @@ def query_campaigns_list():
         if d_expected and d_expected > 0: entry["display_expected_impressions"] = int(d_expected)
         # Pra VTR usamos viewable/viewable (não total). v_viewable_impr é o
         # denominador correto vindo da mesma fonte do numerador (v_viewable_comp).
+        if v_vi              > 0: entry["video_impressions"]               = int(v_vi)
+        if v_clicks          > 0: entry["video_clicks"]                    = int(v_clicks)
         if v_viewable_impr   > 0: entry["video_viewable_impressions"]     = int(v_viewable_impr)
         if v_viewable_comp   > 0: entry["video_viewable_completions"]     = int(v_viewable_comp)
         if v_expected and v_expected > 0: entry["video_expected_completions"]  = int(v_expected)
@@ -3096,6 +3114,18 @@ def query_campaigns_list():
             entry["admin_total_cost"] = round(admin_total_cost, 2)
             entry["admin_impressions"] = admin_impressions
             entry["admin_ecpm"] = round(admin_total_cost / admin_impressions * 1000, 2)
+
+        # eCPM por mídia (admin-only, mesmo conceito do admin_ecpm — custo cru
+        # do DSP / impressions gross). Usado pelo Top Performers que avalia
+        # com thresholds diferentes por formato (Display < R$ 0,70; Video < R$ 2,00).
+        d_admin_cost = float(r["d_admin_total_cost"] or 0)
+        d_admin_impr = int(r["d_admin_impressions"] or 0)
+        v_admin_cost = float(r["v_admin_total_cost"] or 0)
+        v_admin_impr = int(r["v_admin_impressions"] or 0)
+        if d_admin_impr > 0 and d_admin_cost > 0:
+            entry["display_ecpm"] = round(d_admin_cost / d_admin_impr * 1000, 2)
+        if v_admin_impr > 0 and v_admin_cost > 0:
+            entry["video_ecpm"] = round(v_admin_cost / v_admin_impr * 1000, 2)
 
         result.append(entry)
 

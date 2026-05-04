@@ -4,9 +4,14 @@
 // `layout === "performers"`. Mostra ranking de CS ou CP (toggle interno)
 // com métricas agregadas completas em cada linha.
 //
-// Score (0–100) vem de aggregation.js#computeTopPerformers e pondera:
-//   eCPM < R$ 0,70 (30 pts) · Pacing 100–125 (35 pts) ·
-//   CTR > 0,6 (25 pts) · VTR > 80 (10 pts).
+// Score (0–100) vem de aggregation.js#computeTopPerformers e pondera por
+// formato (Display vs Video) com thresholds próprios:
+//   eCPM    Display < R$ 0,70 | Video < R$ 2,00  (30 pts)
+//   CTR     Display > 0,6%    | Video > 0,3%     (25 pts)
+//   VTR     Video > 80%                          (10 pts)
+//   Pacing  100–125% gradiente                   (35 pts)
+// Pontos por métrica = soma ponderada pelo share de impressões da campanha
+// em cada mídia (campanha 80% Display + 20% Video → DSP pesa 80% no score).
 //
 // Cada linha exibe:
 //   - rank · avatar (iniciais) · nome
@@ -261,13 +266,15 @@ export function PerformersLayout({ campaigns, teamMap = {} }) {
 
       {/* Legenda */}
       <p className="text-[11px] text-fg-subtle px-1 leading-relaxed">
-        Score (0–100) · eCPM &lt; R$ 0,70 (30 pts) · Pacing 100–125% (35 pts)
-        · CTR &gt; 0,6% (25 pts) · VTR &gt; 80% (10 pts) · ponderado por
-        impressões e regredido à média do time via Empirical Bayes —
-        CSs com poucas campanhas convergem pra média do time pra evitar
-        viés de amostra pequena. Métricas (Pacing/CTR/VTR/eCPM) são
-        agregadas via Σnumerador / Σdenominador sobre as campanhas ativas
-        do owner.
+        Score (0–100) · Pacing 100–125% (35 pts) · eCPM Display &lt; R$ 0,70
+        / Video &lt; R$ 2,00 (30 pts) · CTR Display &gt; 0,6% / Video
+        &gt; 0,3% (25 pts) · VTR Video &gt; 80% (10 pts). Pontos de cada
+        métrica são ponderados pelo share de impressões da campanha em
+        cada mídia. Score do CS é a média ponderada por impressões
+        regredida à média do time via Empirical Bayes — CSs com poucas
+        campanhas convergem pra média do time pra evitar viés de amostra
+        pequena. Métricas exibidas (Pacing/CTR/VTR/eCPM) são agregadas via
+        Σnumerador / Σdenominador sobre as campanhas ativas do owner.
       </p>
     </div>
   );

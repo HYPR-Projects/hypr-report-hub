@@ -317,6 +317,9 @@ export function computeMetricsSummary(campaigns) {
 // Retorna array ordenado desc por score regredido. raw_score fica
 // disponível pra debug/tooltip.
 // ─────────────────────────────────────────────────────────────────────────────
+// Pacing "médio simples" (DSP+VID)/2. Usado APENAS pra contar campanhas
+// com pacing ideal no card (ideal_pacing_count) — não entra no score.
+// O score usa pacing por mídia ponderado por impressões em scoreCampaign.
 function pacingAvg(c) {
   const dp = c.display_pacing != null ? Number(c.display_pacing) : null;
   const vp = c.video_pacing   != null ? Number(c.video_pacing)   : null;
@@ -326,6 +329,8 @@ function pacingAvg(c) {
   return null;
 }
 
+// Score de pacing — gradiente linear, ramp 90→100 e 125→150.
+// Recebe pacing % (0–∞), retorna pontos 0–35.
 function pacingScore(p) {
   if (p == null) return 0;
   if (p >= 100 && p <= 125) return 35;
@@ -334,13 +339,87 @@ function pacingScore(p) {
   return 0;
 }
 
+// Score de uma campanha (0–100). Avalia cada métrica POR FORMATO
+// (Display vs Video) com thresholds próprios, e pondera os pontos pelo
+// share de impressões da campanha em cada formato.
+//
+// Por que ponderar por formato:
+//   - Display e Video têm benchmarks naturalmente diferentes (CTR de
+//     Display típico ~0,3%; Video raramente passa de 0,5%).
+//   - Aplicar o mesmo threshold pra ambos castiga campanhas de Video
+//     ou as de mix, mesmo quando estão performando bem pro próprio formato.
+//
+// Thresholds por formato:
+//   eCPM    Display < R$ 0,70 (30 pts) | Video < R$ 2,00 (30 pts)
+//   CTR     Display > 0,6%    (25 pts) | Video > 0,3%    (25 pts)
+//   VTR     Video   > 80%     (10 pts) — exclusivo de Video
+//   Pacing  100–125% gradiente         (35 pts) — vale pros dois
+//
+// Pesos (w_dsp / w_vid) = % de viewable_impressions da campanha em cada
+// mídia. Campanha 80% Display + 20% Video tem w_dsp=0,8 e w_vid=0,2;
+// um overdelivery em Video pesa só 20% no score, não 50% como antes.
+//
+// VTR é exclusivo de Video — em campanhas só-Display contribui 0
+// estruturalmente. Aceito o teto de ~90 pra só-Display porque VTR não
+// tem equivalente estrutural em Display, e a maioria das campanhas tem mix.
 function scoreCampaign(c) {
-  let s = 0;
-  if (c.admin_ecpm != null && Number(c.admin_ecpm) < 0.70) s += 30;
-  s += pacingScore(pacingAvg(c));
-  if (c.display_ctr != null && Number(c.display_ctr) > 0.6) s += 25;
-  if (c.video_vtr   != null && Number(c.video_vtr)   > 80)  s += 10;
-  return s;
+  const dImpr = Number(c.display_impressions || 0);
+  const vImpr = Number(c.video_impressions   || 0);
+  const totalImpr = dImpr + vImpr;
+  if (totalImpr === 0) return 0;
+
+  const wDsp = dImpr / totalImpr;
+  const wVid = vImpr / totalImpr;
+
+  // Pacing por mídia (35 pts)
+  const dPacingPts = c.display_pacing != null ? pacingScore(Number(c.display_pacing)) : null;
+  const vPacingPts = c.video_pacing   != null ? pacingScore(Number(c.video_pacing))   : null;
+  let pacingPts = 0;
+  if (dPacingPts != null && vPacingPts != null) {
+    pacingPts = dPacingPts * wDsp + vPacingPts * wVid;
+  } else if (dPacingPts != null) {
+    pacingPts = dPacingPts;
+  } else if (vPacingPts != null) {
+    pacingPts = vPacingPts;
+  }
+
+  // eCPM por mídia (30 pts) — Display < 0,70 | Video < 2,00
+  const dEcpm = c.display_ecpm != null ? Number(c.display_ecpm) : null;
+  const vEcpm = c.video_ecpm   != null ? Number(c.video_ecpm)   : null;
+  let ecpmPts = 0;
+  if (dEcpm != null && vEcpm != null) {
+    ecpmPts = (dEcpm < 0.70 ? 30 : 0) * wDsp + (vEcpm < 2.00 ? 30 : 0) * wVid;
+  } else if (dEcpm != null) {
+    ecpmPts = dEcpm < 0.70 ? 30 : 0;
+  } else if (vEcpm != null) {
+    ecpmPts = vEcpm < 2.00 ? 30 : 0;
+  } else if (c.admin_ecpm != null) {
+    // Fallback: sem split por mídia disponível (dado mais antigo, antes do
+    // backend expor display_ecpm/video_ecpm). Usa threshold do mix dominante.
+    const ecpm = Number(c.admin_ecpm);
+    const threshold = wVid > wDsp ? 2.00 : 0.70;
+    ecpmPts = ecpm < threshold ? 30 : 0;
+  }
+
+  // CTR por mídia (25 pts) — Display > 0,6% | Video > 0,3%
+  const dCtr = c.display_ctr != null ? Number(c.display_ctr) : null;
+  const vCtr = c.video_ctr   != null ? Number(c.video_ctr)   : null;
+  let ctrPts = 0;
+  if (dCtr != null && vCtr != null) {
+    ctrPts = (dCtr > 0.6 ? 25 : 0) * wDsp + (vCtr > 0.3 ? 25 : 0) * wVid;
+  } else if (dCtr != null) {
+    ctrPts = dCtr > 0.6 ? 25 : 0;
+  } else if (vCtr != null) {
+    ctrPts = vCtr > 0.3 ? 25 : 0;
+  }
+
+  // VTR (10 pts) — só Video; ponderado por wVid pra não premiar campanhas
+  // mistas além do que o share de Video justifica.
+  const vtrPts = c.video_vtr != null && Number(c.video_vtr) > 80
+    ? 10 * wVid
+    : 0;
+
+  return pacingPts + ecpmPts + ctrPts + vtrPts;
 }
 
 // Variância amostral (n-1). Retorna 0 se < 2 elementos.
