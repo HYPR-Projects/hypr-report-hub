@@ -88,3 +88,14 @@ export function serializeSurveyConfig(questions, clientRange) {
   }
   return JSON.stringify(questions);
 }
+
+// Formata um clientRange pra exibição compacta em PT-BR.
+// "2026-04-01" + "2026-04-30" → "01/04 a 30/04/2026" (mesmo ano) ou
+// "01/04/2026 a 30/04/2027" (anos diferentes). "" se range inválido.
+export function fmtClientRange(r) {
+  if (!r?.from || !r?.to) return "";
+  const [yf, mf, df] = r.from.split("-");
+  const [yt, mt, dt] = r.to.split("-");
+  if (yf === yt) return `${df}/${mf} a ${dt}/${mt}/${yt}`;
+  return `${df}/${mf}/${yf} a ${dt}/${mt}/${yt}`;
+}

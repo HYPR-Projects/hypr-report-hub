@@ -20,7 +20,7 @@
 import SurveyTab from "../../dashboards/SurveyTab";
 import { useTheme } from "../hooks/useTheme";
 import { legacyThemeObj } from "../legacyThemeBridge";
-import { parseSurveyConfig } from "../../shared/surveyConfig";
+import { parseSurveyConfig, fmtClientRange } from "../../shared/surveyConfig";
 
 // Espelha backend/_extract_typeform_form_id — aceita URL `typeform.com/to/<id>`
 // ou ID puro alfanumérico de 4-32 chars. Vazio = inválido.
@@ -109,13 +109,30 @@ export default function SurveyV2({ token, data, isAdmin, adminJwt }) {
           className={isMerged && items.length > 1 ? "space-y-3" : ""}
         >
           {isMerged && items.length > 1 && it.label && (
-            <div className="flex items-center gap-3 pb-2 border-b border-border">
+            <div className="flex items-center gap-3 pb-2 border-b border-border flex-wrap">
               <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-signature-soft border border-signature/40 text-signature text-[11px] font-bold tracking-wider uppercase">
                 {it.label}
               </span>
               <span className="text-[11px] text-fg-subtle font-mono">
                 {it.short_token}
               </span>
+              {(() => {
+                // Mostra o período exibido ao cliente (clientRange salvo)
+                // alinhado ao header do mês. Visível a admin E cliente:
+                // pro cliente é contexto útil ("estes resultados são de
+                // 01/04 a 30/04"); pro admin é lembrete do que está publicado.
+                const cfg = parseSurveyConfig(it.survey);
+                const cr = cfg?.clientRange;
+                if (!cr) return null;
+                return (
+                  <span
+                    title="Período configurado para exibição ao cliente nesta seção."
+                    className="text-[11px] text-fg-muted bg-signature-soft/40 border border-border rounded px-2 py-0.5"
+                  >
+                    Período: <span className="font-semibold text-fg">{fmtClientRange(cr)}</span>
+                  </span>
+                );
+              })()}
             </div>
           )}
           <SurveyTab

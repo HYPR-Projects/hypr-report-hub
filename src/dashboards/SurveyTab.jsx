@@ -6,17 +6,7 @@ import TabChat from "../components/TabChat";
 import SurveyChart from "./SurveyChart";
 import DateRangeFilter from "../components/DateRangeFilter";
 import { ymd } from "../shared/dateFilter";
-import { parseSurveyConfig } from "../shared/surveyConfig";
-
-// "2026-04-01" + "2026-04-30" → "01/04 a 30/04/2026" (anos iguais) ou
-// "01/04/2026 a 30/04/2026" (anos diferentes). Formato compacto pro badge.
-const fmtClientRange = (r) => {
-  if (!r?.from || !r?.to) return "";
-  const [yf,mf,df] = r.from.split("-");
-  const [yt,mt,dt] = r.to.split("-");
-  if (yf === yt) return `${df}/${mf} a ${dt}/${mt}/${yt}`;
-  return `${df}/${mf}/${yf} a ${dt}/${mt}/${yt}`;
-};
+import { parseSurveyConfig, fmtClientRange } from "../shared/surveyConfig";
 
 const SurveyTab=({surveyJson,token,isAdmin,adminJwt,theme})=>{
   const [questions,setQuestions]=useState(null);
