@@ -997,22 +997,31 @@ def report_data(request):
         # Filtro de data opcional (admin-only no front, sem auth aqui — o param
         # apenas restringe o range; não expõe nenhum dado a mais que o caller
         # já não tivesse acesso).
-        # Aceita YYYY-MM-DD e converte pro formato ISO 8601 que o Typeform espera.
-        # IMPORTANTE: o filtro é interpretado em horário de Brasília (UTC-03:00,
-        # sem horário de verão desde 2019). Sem isso, "01/04 → 30/04" digitado
-        # por um admin no Brasil acabava virando 31/03 21:00 BRT → 30/04 20:59 BRT
-        # após conversão UTC, perdendo as últimas 3h do dia final e incluindo
-        # 3h indevidas do dia anterior.
+        #
+        # Typeform API aceita só dois formatos: timestamp Unix ou ISO 8601 em UTC
+        # (com `Z` ou sem timezone). NÃO aceita offset não-UTC tipo `-03:00` —
+        # retorna 400 BAD_REQUEST. Por isso convertemos manualmente: o admin
+        # digita "01/04" pensando em horário de Brasília (BRT, UTC-03:00, sem
+        # horário de verão desde 2019), e enviamos pro Typeform como UTC
+        # equivalente (01/04 00:00 BRT = 01/04 03:00 UTC).
         date_from = request.args.get("date_from", "").strip()
         date_to = request.args.get("date_to", "").strip()
         since_param = ""
         until_param = ""
-        # `:` no offset (-03:00) é caractere reservado em URL query — quote
-        # explicitamente pra evitar interpretação ambígua por proxies/CDN.
+        BRT_OFFSET = timedelta(hours=3)  # BRT = UTC-3 → soma 3h pra UTC
         if re.match(r"^\d{4}-\d{2}-\d{2}$", date_from):
-            since_param = f"&since={urllib.parse.quote(f'{date_from}T00:00:00-03:00')}"
+            try:
+                d0 = datetime.strptime(date_from, "%Y-%m-%d") + BRT_OFFSET
+                since_param = f"&since={d0.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+            except ValueError:
+                pass
         if re.match(r"^\d{4}-\d{2}-\d{2}$", date_to):
-            until_param = f"&until={urllib.parse.quote(f'{date_to}T23:59:59-03:00')}"
+            try:
+                # 23:59:59 BRT do dia X = 02:59:59 UTC do dia X+1
+                d1 = datetime.strptime(date_to, "%Y-%m-%d") + timedelta(hours=23, minutes=59, seconds=59) + BRT_OFFSET
+                until_param = f"&until={d1.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+            except ValueError:
+                pass
 
         flat_counts = Counter()
         matrix_rows = {}
