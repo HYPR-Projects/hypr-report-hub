@@ -142,7 +142,7 @@ const SurveyTab=({surveyJson,token,isAdmin,adminJwt,theme})=>{
       return{key:k,abs,rel,isFocus:k===focusRow};
     });
     return(
-      <div style={{border:`1px solid ${bdr}`,borderRadius:12,padding:20,marginBottom:16,background:bgCard}}>
+      <div key={qIdx} style={{border:`1px solid ${bdr}`,borderRadius:12,padding:20,marginBottom:16,background:bgCard}}>
         <div style={{fontSize:12,color:mt,marginBottom:2}}>{isLegacy?`Pergunta ${qIdx+1}`:nome}</div>
         {isLegacy&&<div style={{fontSize:15,fontWeight:600,color:txt,marginBottom:16}}>{legacyQ.label}</div>}
 
