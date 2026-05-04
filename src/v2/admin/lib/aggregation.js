@@ -506,6 +506,16 @@ function variance(arr) {
 //   - within = 0 (sem ruído): k = 0 (raw é confiável)
 //   - between ≈ 0 (todos iguais): k grande, força regressão à média
 // Cap em k=50 evita explodir em casos patológicos.
+//
+// Piso K_FLOOR=5: garante regressão mínima mesmo quando o estimator dá
+// k baixo. Razão: com poucos owners (~6), o estimator é instável e
+// frequentemente devolve k≈1–2, deixando CSs com 1–2 campanhas escaparem
+// da regressão e dominarem o topo do ranking só por amostra pequena. O
+// piso é estatística boa: incerteza maior em n pequeno justifica puxar
+// pra média do time. Calibrado pra time de 5–10 owners; revisar se
+// crescer muito.
+const K_FLOOR = 5;
+
 function computeEBParams(ownersData) {
   if (!ownersData || ownersData.length < 2) {
     const teamMean = ownersData?.[0]?.rawScore ?? 0;
@@ -522,9 +532,9 @@ function computeEBParams(ownersData) {
   const teamMean = ownerMeans.reduce((a, b) => a + b, 0) / ownerMeans.length;
 
   let k;
-  if (sigma2 <= 0) k = 0;            // sem ruído entre campanhas — raw é fiel
-  else if (tau2 <= 0.01) k = 50;     // CSs indistinguíveis — força regressão
-  else k = Math.min(50, sigma2 / tau2);
+  if (sigma2 <= 0) k = K_FLOOR;       // sem ruído entre campanhas, mas piso ainda aplica
+  else if (tau2 <= 0.01) k = 50;      // CSs indistinguíveis — força regressão máxima
+  else k = Math.max(K_FLOOR, Math.min(50, sigma2 / tau2));
 
   return { k, teamMean };
 }
