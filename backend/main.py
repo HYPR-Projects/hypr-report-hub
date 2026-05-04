@@ -2944,6 +2944,10 @@ def query_campaigns_list():
         -- idem para Video. Critério "qualquer linha" (B do plano de score) —
         -- a campanha pode misturar linhas com e sem ABS, e cada mídia é
         -- avaliada independente.
+        --
+        -- Mapping line_item_id → short_token vem de unified_daily_performance_metrics
+        -- (que já tem ambos nativamente). Antes usávamos client_line_item_mapping,
+        -- mas essa tabela está abandonada (10 rows totais de mar/2026, inútil).
         dv_abs AS (
             SELECT
                 m.short_token,
@@ -2952,7 +2956,11 @@ def query_campaigns_list():
                 MAX(IF(d.media_type = 'VIDEO'   AND d.doubleverify_pre_bid_fee_advertiser_currency > 0, TRUE, FALSE))
                     AS video_has_dv_abs
             FROM `site-hypr.prod_assets.dv360_daily_costs` d
-            JOIN `site-hypr.prod_assets.client_line_item_mapping` m USING (line_item_id)
+            JOIN (
+                SELECT DISTINCT short_token, line_item_id
+                FROM `site-hypr.prod_assets.unified_daily_performance_metrics`
+                WHERE line_item_id IS NOT NULL
+            ) m USING (line_item_id)
             GROUP BY m.short_token
         )
         SELECT
