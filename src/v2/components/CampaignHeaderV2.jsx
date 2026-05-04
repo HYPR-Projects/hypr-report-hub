@@ -270,25 +270,34 @@ function MergeIcon({ className }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MergeViewSwitcher — pills "Visão agregada" + cada membro do grupo.
-// Default = agregada (currentView === null). Click em outra pill atualiza
-// URL `?view=<token>` e o ClientDashboardV2 refaz a chamada single-token.
+// MergeViewSwitcher — pills do mês (mais recente → mais antigo) + "Visão
+// agregada" no fim. Convenção de URL:
+//   ?view=aggregated   → visão agregada explícita
+//   ?view=<token>      → drill-down em um membro
+//   (sem ?view=)       → default backend = active_token (mês atual);
+//                        no UI, o pill do active_token vem destacado.
+// Click em qualquer pill atualiza URL e o ClientDashboardV2 refaz o fetch.
 // ─────────────────────────────────────────────────────────────────────────────
 function MergeViewSwitcher({ members, activeToken, currentView, onChange }) {
+  // Ordem desc por start_date — mais recente primeiro. Cliente abre o
+  // report e vê o mês atual em destaque, com os anteriores em ordem
+  // decrescente. A agregada vem por último (resumo do conjunto).
   const sortedMembers = [...(members || [])].sort((a, b) =>
-    (a.start_date || "").localeCompare(b.start_date || "")
+    (b.start_date || "").localeCompare(a.start_date || "")
   );
+  const isAggregatedSelected =
+    currentView === "aggregated" || currentView === "all";
   return (
     <div className="mt-4 flex items-center gap-1.5 flex-wrap">
-      <ViewPill
-        label="Visão agregada"
-        sublabel="todos os meses"
-        selected={!currentView}
-        onClick={() => onChange?.(null)}
-      />
       {sortedMembers.map((m) => {
         const isActive = m.short_token === activeToken;
         const monthLabel = formatMonthShort(m.start_date);
+        // Sem view explícito: o backend retorna active_token, então o
+        // pill do active_token vem destacado por default. Click em outro
+        // pill seta view e recarrega.
+        const selected =
+          currentView === m.short_token ||
+          (!currentView && isActive);
         return (
           <ViewPill
             key={m.short_token}
@@ -296,12 +305,18 @@ function MergeViewSwitcher({ members, activeToken, currentView, onChange }) {
             sublabel={
               <span className="font-mono text-[9px]">{m.short_token}</span>
             }
-            selected={currentView === m.short_token}
+            selected={selected}
             badge={isActive ? "atual" : null}
             onClick={() => onChange?.(m.short_token)}
           />
         );
       })}
+      <ViewPill
+        label="Visão agregada"
+        sublabel="todos os meses"
+        selected={isAggregatedSelected}
+        onClick={() => onChange?.("aggregated")}
+      />
     </div>
   );
 }

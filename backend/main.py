@@ -1517,17 +1517,27 @@ def report_data(request):
         if force_refresh:
             _cache_invalidate_token(short_token)
 
-        # Detecta merge group: se o token pertence a um grupo, e o caller
-        # NÃO pediu visão por-token específica (?view=token), delega ao
-        # composer. Lookup é cacheado (_safe_get_merges, TTL 5min) — custo
-        # zero no warm path.
+        # Detecta merge group e resolve a visão pedida.
+        #
+        # Convenção de URLs (mudou em 2026-05):
+        #   ?view=aggregated    → visão agregada explícita
+        #   ?view=<short_token> → drill-down em um membro específico
+        #   (sem ?view=)        → DEFAULT pra token merged: active_token
+        #                         (mês mais recente). Pra token não-merged:
+        #                         comportamento normal single-token.
+        #
+        # O default mudou de "agregada" pra "active_token" porque na maioria
+        # dos casos o cliente quer ver primeiro o resultado mais atual; a
+        # visão agregada é mais útil pra análise comparativa, e fica como
+        # último item nos pills do switcher.
         view_param = (request.args.get("view") or "").strip()
+        view_is_aggregated = view_param.lower() in ("aggregated", "all")
         merges_lookup = _safe_get_merges()
         merge_info = (
             merges_lookup.get(short_token)
             or merges_lookup.get(short_token.upper())
         )
-        if merge_info and not view_param:
+        if merge_info and view_is_aggregated:
             merge_id = merge_info["merge_id"]
             data, hit = _get_merged_report_cached(merge_id, force_refresh=force_refresh)
             if data is None:
@@ -1544,12 +1554,14 @@ def report_data(request):
                 resp_headers,
             )
 
-        # Caminho single-token (intocado). Se ?view=<token> foi passado e
-        # bate com um membro do grupo OU é o próprio token base, usa esse
-        # como alvo do fetch single — permite deep-link "ver só fevereiro"
-        # de dentro de um report merged.
+        # Caminho single-token. Resolve target_token na seguinte prioridade:
+        #   1. ?view=<token> que bate com algum membro do grupo OU o próprio
+        #      short_token base → usa view_param.
+        #   2. Sem ?view= e token pertence a grupo → usa active_token (mais
+        #      recente) via _get_merge_meta_only.
+        #   3. Fallback: short_token base (caso não-merged).
         target_token = short_token
-        if view_param and merge_info:
+        if view_param and not view_is_aggregated and merge_info:
             members_set = {short_token.upper()}
             try:
                 group = merges.get_merge_group(merge_info["merge_id"])
@@ -1561,16 +1573,25 @@ def report_data(request):
                 logger.warning(f"[WARN view-resolve get_merge_group] {e}")
             if view_param.upper() in members_set:
                 target_token = view_param
+        elif merge_info and not view_param:
+            # Default novo: active_token. _get_merge_meta_only é cacheado
+            # via _get_report_cached por membro — warm na maioria dos hits.
+            try:
+                meta_only = _get_merge_meta_only(merge_info["merge_id"])
+                if meta_only and meta_only.get("active_token"):
+                    target_token = meta_only["active_token"]
+            except Exception as e:
+                logger.warning(f"[WARN default-active-token resolve] {e}")
 
         data, hit = _get_report_cached(target_token, force_refresh=force_refresh)
         if data is None:
             return (jsonify({"error": "Campanha não encontrada"}), 404, headers)
 
-        # Quando o token base pertence a um grupo mas o caller pediu
-        # ?view=<token>, ainda anexamos merge_meta no payload single-token —
-        # senão o frontend perde os pills do switcher e o usuário fica
-        # "preso" na visão por mês sem conseguir voltar pra agregada.
-        if merge_info and view_param:
+        # Quando o token base pertence a um grupo, SEMPRE anexamos merge_meta
+        # no payload single-token — senão o frontend perde os pills do
+        # switcher e o usuário fica "preso" na visão por mês. Inclui o caso
+        # default (sem ?view=, target = active_token).
+        if merge_info:
             try:
                 meta = _get_merge_meta_only(merge_info["merge_id"])
                 if meta:

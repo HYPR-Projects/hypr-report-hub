@@ -49,14 +49,26 @@ export default function DetalhamentoV2({ data, aggregates, token, view, isAdmin,
   }
 
   // Decide o target da integração:
-  //   - aggregate view (token base pertence a grupo + view não setado) → merge
-  //   - single-token view (?view=X), ou token sem grupo                → token
-  // Quando o target é token e estamos em visão de mês (?view=X), usamos
-  // o token do mês como target_id (não o token base do URL).
+  //   - view = "aggregated"/"all" + merge_meta → target=(merge, merge_id)
+  //   - view = "<short_token>"                  → target=(token, <view>)
+  //   - sem view + merge_meta (default novo)    → token = active_token
+  //   - sem view + sem merge_meta               → token = base
+  // Quando o target é um token específico, usamos o token desse mês
+  // (não o token base do URL).
   const mergeMeta = data?.merge_meta || null;
-  const isAggregatedMerge = !!mergeMeta && !view;
+  const isAggregatedMerge =
+    !!mergeMeta && (view === "aggregated" || view === "all");
   const targetType = isAggregatedMerge ? "merge" : "token";
-  const targetId   = isAggregatedMerge ? mergeMeta.merge_id : (view || token);
+  let targetId;
+  if (isAggregatedMerge) {
+    targetId = mergeMeta.merge_id;
+  } else if (view && view !== "aggregated" && view !== "all") {
+    targetId = view;
+  } else if (mergeMeta?.active_token) {
+    targetId = mergeMeta.active_token;
+  } else {
+    targetId = token;
+  }
 
   return (
     <div className="space-y-6 pb-12">
