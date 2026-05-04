@@ -38,6 +38,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 
 from auth import (
+    JWT_TTL_SECONDS,
     authenticate_admin,
     issue_admin_jwt,
     verify_google_id_token,
@@ -424,7 +425,7 @@ def report_data(request):
     # ── Endpoint: emitir JWT admin a partir de um Google id_token ─────────────
     # Front envia `Authorization: Bearer <google_id_token>`. Backend valida
     # via tokeninfo do Google (email verified + domínio @hypr.mobi) e devolve
-    # um JWT custom assinado, com TTL de 5 min, que será usado em chamadas
+    # um JWT custom assinado, com TTL de 30 min, que será usado em chamadas
     # admin subsequentes.
     if request.method == "POST" and request.args.get("action") == "issue_admin_token":
         try:
@@ -436,7 +437,7 @@ def report_data(request):
             if not info:
                 return (jsonify({"error": "id_token inválido ou domínio não autorizado"}), 401, headers)
             jwt = issue_admin_jwt(info["email"])
-            return (jsonify({"token": jwt, "email": info["email"], "ttl": 300}), 200, headers)
+            return (jsonify({"token": jwt, "email": info["email"], "ttl": JWT_TTL_SECONDS}), 200, headers)
         except Exception as e:
             logger.error(f"[ERROR issue_admin_token] {e}")
             return (jsonify({"error": "Erro ao emitir token"}), 500, headers)

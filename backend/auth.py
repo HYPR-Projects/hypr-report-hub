@@ -21,13 +21,15 @@ Auth flow
 2. Front calls POST ?action=issue_admin_token with
    `Authorization: Bearer <google_id_token>`. The backend validates the
    id_token via Google's tokeninfo endpoint and confirms the email ends
-   in @hypr.mobi, then issues a short-lived custom JWT (5min, HS256).
+   in @hypr.mobi, then issues a short-lived custom JWT (30min, HS256).
 3. For any admin write, front sends the custom JWT in
    `Authorization: Bearer <custom_jwt>`. Backend verifies signature,
    issuer, expiry and the admin claim before executing.
 
 Why a custom JWT instead of just forwarding the Google id_token:
-* 5min lifetime limits exposure if the URL leaks.
+* 30min lifetime limits exposure if the URL leaks (curto o suficiente
+  pra reduzir risco, longo o suficiente pra cobrir uma sessão admin típica
+  sem 401 inesperado).
 * No round-trip to Google on every admin write (verifying signature
   is local).
 * Decouples our admin model from Google's OAuth specifics.
@@ -60,7 +62,7 @@ logger = logging.getLogger(__name__)
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 JWT_SECRET = os.environ.get("JWT_SECRET", "")
-JWT_TTL_SECONDS = 5 * 60       # 5 min — short to limit exposure if leaked.
+JWT_TTL_SECONDS = 30 * 60      # 30 min — balance entre exposição se vazar e UX (evita 401 em cliques admin após poucos minutos).
 JWT_ISSUER = "hypr-report-hub"
 ADMIN_EMAIL_DOMAIN = "@hypr.mobi"
 

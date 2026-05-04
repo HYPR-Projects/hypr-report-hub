@@ -88,7 +88,17 @@ async function postAdmin(action, body, adminJwt) {
     body: JSON.stringify(body || {}),
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+  if (!res.ok) {
+    // 401 quase sempre = JWT admin expirou (sessão de 30min). Mensagem
+    // específica orienta o user a recarregar pelo menu — o erro genérico
+    // "Não autorizado" do backend confunde porque o user acabou de logar.
+    if (res.status === 401) {
+      throw new Error(
+        "Sessão admin expirou. Recarregue o report pelo menu admin e tente de novo."
+      );
+    }
+    throw new Error(json.error || `HTTP ${res.status}`);
+  }
   return json;
 }
 

@@ -8,6 +8,7 @@ import {
   isJwtExpired,
   getGoogleIdToken,
   issueAdminJwt,
+  getOrIssueAdminJwt,
   clearCachedAdminJwt,
   loadSession,
   clearSession,
@@ -150,14 +151,89 @@ export default function App() {
     clientToken ? isClientUnlocked(clientToken) : false
   );
 
-  // Computa status admin sincronamente — usado tanto no effect abaixo
-  // quanto na renderização condicional.
+  // Bootstrap do adminJwt vindo da URL (`?adm=`). É o "primeiro JWT" da aba
+  // de report — mintado pelo menu admin no momento de abrir o link. Tem TTL
+  // de 30min (ver backend/auth.py:JWT_TTL_SECONDS).
   const adminJwtFromUrl = isClient ? getAdminJwtFromUrl() : null;
-  const hasValidAdminJwt = !!adminJwtFromUrl && !isJwtExpired(adminJwtFromUrl);
+  const initialUrlJwtValid = !!adminJwtFromUrl && !isJwtExpired(adminJwtFromUrl);
+
+  // `adminJwt` é state — começa com o JWT da URL (se válido) e é renovado em
+  // background via `getOrIssueAdminJwt()` enquanto o Google id_token (TTL 1h,
+  // refrescado pelo effect mais acima quando há `user`) estiver disponível no
+  // localStorage. Sem isso, deixar a aba de report aberta por mais de 30min
+  // gerava 401 silencioso na próxima ação admin (ex: "Conectar Google Sheets").
+  const [adminJwt, setAdminJwt] = useState(() =>
+    initialUrlJwtValid ? adminJwtFromUrl : null
+  );
   const hasLegacyAk = isClient
     ? new URLSearchParams(window.location.search).get("ak") === "hypr2026"
     : false;
-  const isAdminMode = !!user || hasValidAdminJwt || hasLegacyAk;
+  // `isAdminMode` aceita: sessão admin local, JWT URL inicial válido (mesmo
+  // que tenha expirado depois — a aba já assumiu identidade admin), JWT
+  // renovado em state, ou `?ak=` legacy.
+  const isAdminMode = !!user || initialUrlJwtValid || !!adminJwt || hasLegacyAk;
+
+  // Renovação automática do adminJwt em background.
+  //
+  // Cobre o cenário: aba `/report/<token>?adm=<jwt>` aberta sem sessão admin
+  // local (ex: link colado direto, ou aba que ficou aberta após o menu fechar).
+  // O JWT da URL expira em 30min; sem isso, o user vê "Não autorizado" no card
+  // de Google Sheets e em qualquer outra ação admin.
+  //
+  // Estratégia: agendar refresh ~1min antes do `exp`. A renovação usa o Google
+  // id_token do localStorage (cross-tab, TTL 8h da sessão; o id_token em si é
+  // ~1h mas é refrescado pelo effect anterior quando `user` existe).
+  // Se o id_token não estiver disponível (ex: aba filha sem sessão Google),
+  // a função retorna null silenciosamente — o JWT atual continua valendo até
+  // expirar de fato; aí cai no fluxo normal de re-login.
+  useEffect(() => {
+    if (!isClient) return;
+    if (!isAdminMode) return;
+
+    let cancelled = false;
+    let timeoutId = null;
+
+    const renew = async () => {
+      if (cancelled) return;
+      const newJwt = await getOrIssueAdminJwt();
+      if (cancelled) return;
+      if (newJwt) {
+        setAdminJwt(newJwt);
+        const payload = decodeJwtPayload(newJwt);
+        const expMs = payload?.exp ? Number(payload.exp) * 1000 : 0;
+        // Renova 1min antes do exp; piso de 30s pra evitar stampede.
+        const delayMs = Math.max(30_000, expMs - Date.now() - 60 * 1000);
+        timeoutId = setTimeout(renew, delayMs);
+      } else {
+        // Sem id_token disponível (aba filha sem sessão Google, ou sessão
+        // expirou). Tenta de novo em 1min — se o user re-logar em outra aba,
+        // o id_token volta pro localStorage e a próxima tentativa funciona.
+        timeoutId = setTimeout(renew, 60_000);
+      }
+    };
+
+    // Bootstrap: se o JWT atual está válido por mais de 1min, agenda renovação
+    // pra ~1min antes do exp. Senão, renova já.
+    const currentJwt = adminJwt;
+    const payload = currentJwt ? decodeJwtPayload(currentJwt) : null;
+    const expMs = payload?.exp ? Number(payload.exp) * 1000 : 0;
+    const remainingMs = expMs - Date.now();
+    if (!currentJwt || remainingMs < 60 * 1000) {
+      renew();
+    } else {
+      timeoutId = setTimeout(renew, Math.max(30_000, remainingMs - 60 * 1000));
+    }
+
+    return () => {
+      cancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+    // `adminJwt` intencionalmente fora das deps: o effect lê o valor inicial
+    // pra agendar o primeiro refresh, e cada renovação re-agenda via timeoutId
+    // dentro do mesmo ciclo do effect. Inclui-lo causaria re-execução e cancel
+    // em cascata a cada setAdminJwt.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isClient, isAdminMode]);
 
   // Quando o admin abre uma URL com share_id direto (ex: "Link Cliente"
   // colado em outra aba enquanto ainda logado), o app pula a tela de
@@ -235,7 +311,7 @@ export default function App() {
     const dashboardProps = {
       token: dashboardToken,
       isAdmin: isAdminMode,
-      adminJwt: hasValidAdminJwt ? adminJwtFromUrl : null,
+      adminJwt: adminJwt,
     };
 
     return (
