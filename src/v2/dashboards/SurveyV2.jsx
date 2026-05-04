@@ -20,6 +20,7 @@
 import SurveyTab from "../../dashboards/SurveyTab";
 import { useTheme } from "../hooks/useTheme";
 import { legacyThemeObj } from "../legacyThemeBridge";
+import { parseSurveyConfig } from "../../shared/surveyConfig";
 
 // Espelha backend/_extract_typeform_form_id — aceita URL `typeform.com/to/<id>`
 // ou ID puro alfanumérico de 4-32 chars. Vazio = inválido.
@@ -43,24 +44,15 @@ function extractTypeformFormId(value) {
 // (lift = exposto vs controle, não dá pra calcular com só um lado).
 // Modelo legado (CSV pré-Typeform): sem URLs, mas com `questions`.
 function isRenderableSurvey(json) {
-  if (!json) return false;
-  let parsed;
-  try {
-    parsed = JSON.parse(json);
-  } catch {
-    return false;
+  const cfg = parseSurveyConfig(json);
+  if (!cfg) return false;
+  if (cfg.isLegacyCsv) {
+    return !!(cfg.legacyObject && Array.isArray(cfg.legacyObject.questions) && cfg.legacyObject.questions.length);
   }
-  if (Array.isArray(parsed)) {
-    return parsed.some((q) => {
-      if (!q) return false;
-      const validTypeform =
-        !!extractTypeformFormId(q.ctrlUrl) && !!extractTypeformFormId(q.expUrl);
-      const hasLegacy = Array.isArray(q.questions) && q.questions.length > 0;
-      return validTypeform || hasLegacy;
-    });
-  }
-  // Objeto único (legado puro)
-  return !!(parsed && Array.isArray(parsed.questions) && parsed.questions.length);
+  if (!Array.isArray(cfg.questions)) return false;
+  return cfg.questions.some((q) =>
+    !!q && !!extractTypeformFormId(q.ctrlUrl) && !!extractTypeformFormId(q.expUrl),
+  );
 }
 
 export default function SurveyV2({ token, data, isAdmin, adminJwt }) {

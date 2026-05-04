@@ -1028,6 +1028,11 @@ def report_data(request):
         has_matrix = False
         total = 0
         before_token = None
+        # Min/max submitted_at (ISO UTC string) — usado pelo modal de setup
+        # pra hint "primeira/última resposta em DD/MM" e pra ajudar admin a
+        # escolher um período de exibição pro cliente.
+        first_at = None
+        last_at = None
         try:
             # Busca definição do form uma vez pra mapear field_id → row_label
             # quando há perguntas matrix. Sem isso, respostas de matrix vêm
@@ -1054,6 +1059,18 @@ def report_data(request):
                         matrix_rows[row_label] = Counter()
                     matrix_rows[row_label].update(row_counter)
 
+                # Tracking min/max — submitted_at vem ISO 8601 UTC (ex.
+                # "2026-04-15T13:45:00Z"). Comparação lexicográfica funciona
+                # como ordenação cronológica nesse formato.
+                for it in items:
+                    sub = it.get("submitted_at")
+                    if not sub:
+                        continue
+                    if first_at is None or sub < first_at:
+                        first_at = sub
+                    if last_at is None or sub > last_at:
+                        last_at = sub
+
                 if len(items) < 1000:
                     break
                 before_token = items[-1].get("token")
@@ -1069,12 +1086,16 @@ def report_data(request):
                     "rows": rows_out,
                     "total": total,
                     "form_id": form_id,
+                    "first_response_at": first_at,
+                    "last_response_at": last_at,
                 }), 200, headers)
             return (jsonify({
                 "type": "choice",
                 "counts": dict(flat_counts),
                 "total": total,
                 "form_id": form_id,
+                "first_response_at": first_at,
+                "last_response_at": last_at,
             }), 200, headers)
         except urllib.error.HTTPError as e:
             logger.error(f"[ERROR typeform_proxy] HTTP {e.code} for form {form_id}: {e.reason}")

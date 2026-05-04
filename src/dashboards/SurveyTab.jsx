@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { C } from "../shared/theme";
 import { fetchTypeformViaProxy } from "../lib/api";
 import Spinner from "../components/Spinner";
@@ -6,23 +6,43 @@ import TabChat from "../components/TabChat";
 import SurveyChart from "./SurveyChart";
 import DateRangeFilter from "../components/DateRangeFilter";
 import { ymd } from "../shared/dateFilter";
+import { parseSurveyConfig } from "../shared/surveyConfig";
+
+// "2026-04-01" + "2026-04-30" → "01/04 a 30/04/2026" (anos iguais) ou
+// "01/04/2026 a 30/04/2026" (anos diferentes). Formato compacto pro badge.
+const fmtClientRange = (r) => {
+  if (!r?.from || !r?.to) return "";
+  const [yf,mf,df] = r.from.split("-");
+  const [yt,mt,dt] = r.to.split("-");
+  if (yf === yt) return `${df}/${mf} a ${dt}/${mt}/${yt}`;
+  return `${df}/${mf}/${yf} a ${dt}/${mt}/${yt}`;
+};
 
 const SurveyTab=({surveyJson,token,isAdmin,adminJwt,theme})=>{
   const [questions,setQuestions]=useState(null);
   const [loading,setLoading]=useState(true);
   const [error,setError]=useState(null);
-  // Filtro de data — admin-only. Não persiste em URL nem afeta visão do
-  // cliente; é apenas instrumento de inspeção. Range = {from: Date, to: Date}.
+  // Filtro de data — admin-only de inspeção. Não persiste em URL nem afeta
+  // visão do cliente. Quando setado, ignora o `clientRange` salvo no survey.
   const [adminRange,setAdminRange]=useState(null);
 
-  // Busca respostas agregadas via proxy do backend. Resposta pode vir em
-  // dois formatos:
-  //   { type: "choice", counts: {label: n}, total: N }
-  //   { type: "matrix", rows: {row: {counts, total}}, total: N }
-  // Devolve o objeto cru pro caller decidir como agregar.
-  const rangeParam = isAdmin && adminRange?.from && adminRange?.to
-    ? { from: ymd(adminRange.from), to: ymd(adminRange.to) }
-    : null;
+  // clientRange é o filtro persistido pelo admin no setup pra restringir
+  // o que o cliente vê. Admin não fica preso a ele — quando admin não
+  // tem `adminRange` ativo, mostramos tudo (ignoramos clientRange) pra
+  // facilitar inspeção.
+  const config = useMemo(()=>parseSurveyConfig(surveyJson),[surveyJson]);
+  const clientRange = config?.clientRange || null;
+
+  // Range efetivo: admin com filtro próprio ganha; admin sem filtro vê tudo;
+  // cliente respeita o clientRange salvo.
+  const rangeParam = isAdmin
+    ? (adminRange?.from && adminRange?.to
+        ? { from: ymd(adminRange.from), to: ymd(adminRange.to) }
+        : null)
+    : clientRange;
+  // useMemo na chave do JSON pra estabilidade do effect — sem isso o objeto
+  // novo a cada render dispararia o efeito repetidamente.
+  const rangeKey = rangeParam ? `${rangeParam.from}|${rangeParam.to}` : "";
   const fetchTypeformData = (url) => fetchTypeformViaProxy(url, rangeParam);
 
   useEffect(()=>{
@@ -30,11 +50,11 @@ const SurveyTab=({surveyJson,token,isAdmin,adminJwt,theme})=>{
     const load=async()=>{
       setLoading(true);setError(null);
       try{
-        const parsed=JSON.parse(surveyJson);
-        // Modelo atual: array de {nome, ctrlUrl, expUrl, focusRow?}.
-        // focusRow é opcional, só aplica a forms tipo matrix.
-        if(Array.isArray(parsed)&&parsed[0]?.ctrlUrl){
-          const results=await Promise.all(parsed.map(async(q)=>{
+        if(!config){throw new Error("Configuração de survey inválida.");}
+        // Modelo Typeform (v1 array ou v2 com clientRange): questions[i] tem
+        // ctrlUrl/expUrl/focusRow. focusRow é opcional, só aplica a matrix.
+        if(!config.isLegacyCsv && Array.isArray(config.questions) && config.questions[0]?.ctrlUrl){
+          const results=await Promise.all(config.questions.map(async(q)=>{
             const [ctrlData, expData] = await Promise.all([
               fetchTypeformData(q.ctrlUrl),
               fetchTypeformData(q.expUrl),
@@ -64,18 +84,20 @@ const SurveyTab=({surveyJson,token,isAdmin,adminJwt,theme})=>{
             };
           }));
           if(!cancelled)setQuestions(results);
-        } else {
+        } else if(config.isLegacyCsv){
           // Modelo antigo (CSV pré-Typeform) — retrocompatibilidade
-          const surveys=Array.isArray(parsed)?parsed:[parsed];
-          const results=surveys.map(s=>({
+          const s=config.legacyObject;
+          const results=[{
             nome:s.nome||"Survey",
             type:"legacy",
             control_total:s.control_total,
             exposed_total:s.exposed_total,
             legacy:true,
             questions:s.questions,
-          }));
+          }];
           if(!cancelled)setQuestions(results);
+        } else {
+          if(!cancelled)setQuestions([]);
         }
       }catch(e){
         if(!cancelled){
@@ -87,9 +109,9 @@ const SurveyTab=({surveyJson,token,isAdmin,adminJwt,theme})=>{
     };
     load();
     return()=>{cancelled=true;};
-  // adminRange entra na chave: quando admin troca o filtro, refetcha tudo.
-  // Não-admin nunca seta adminRange, então o efeito é estável.
-  },[surveyJson,adminRange?.from,adminRange?.to,isAdmin]);
+  // rangeKey absorve adminRange (admin) e clientRange (cliente) — quando
+  // qualquer um muda, refetcha. surveyJson cobre mudança de configuração.
+  },[surveyJson,isAdmin,rangeKey]);
 
   const bgCard=theme?.bg2||C.dark2;
   const bgInner=theme?.bg||C.dark;
@@ -360,7 +382,7 @@ const SurveyTab=({surveyJson,token,isAdmin,adminJwt,theme})=>{
           border:`1px dashed ${C.blue}55`,
           borderRadius:10,
         }}>
-          <div style={{display:"flex",alignItems:"center",gap:8,flex:"0 0 auto"}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,flex:"0 0 auto",flexWrap:"wrap"}}>
             <span style={{
               fontSize:10,
               fontWeight:700,
@@ -376,6 +398,23 @@ const SurveyTab=({surveyJson,token,isAdmin,adminJwt,theme})=>{
               Filtro de período aplicado às respostas do Typeform.{" "}
               <span style={{color:txt,fontWeight:600}}>Não afeta a visão do cliente.</span>
             </span>
+            {clientRange && (
+              <span
+                title="O cliente só vê respostas neste período. Configurado em Gerenciar Survey."
+                style={{
+                  fontSize:11,
+                  color:mt,
+                  background:`${C.blue}10`,
+                  border:`1px solid ${C.blue}30`,
+                  padding:"3px 8px",
+                  borderRadius:6,
+                }}
+              >
+                Cliente vê: <span style={{color:txt,fontWeight:600}}>
+                  {fmtClientRange(clientRange)}
+                </span>
+              </span>
+            )}
           </div>
           <div style={{flex:1}}/>
           <div style={{display:"flex",alignItems:"center",gap:14}}>

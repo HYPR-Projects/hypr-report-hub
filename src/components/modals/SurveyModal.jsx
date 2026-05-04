@@ -5,9 +5,11 @@ import {
   getSurvey as getSurveyApi,
   listTypeformForms,
   fetchTypeformFormMeta,
+  fetchTypeformViaProxy,
 } from "../../lib/api";
 import ModalShell from "./ModalShell";
 import { toast } from "../../lib/toast";
+import { parseSurveyConfig, serializeSurveyConfig } from "../../shared/surveyConfig";
 
 /**
  * Modal pra configurar surveys (controle vs. exposto) via API do Typeform.
@@ -231,6 +233,13 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
   // Cache de meta por formId — populado sob demanda quando admin seleciona um form.
   // valor: { type: "matrix"|"choice"|"other", rows: [str], loading?: bool, error?: str }
   const [metaById, setMetaById] = useState(() => new Map());
+  // Período salvo — exibido na visão do cliente. null = cliente vê tudo (default).
+  // Strings YYYY-MM-DD pra evitar problemas de timezone com Date.
+  const [clientRange, setClientRange] = useState({ from: "", to: "" });
+  // Cache de first/last response_at por formId — alimenta o hint "primeira
+  // resposta em DD/MM" próximo aos inputs de data. Carregado sob demanda
+  // (quando admin seleciona forms) via typeform_proxy.
+  const [responseSpanByForm, setResponseSpanByForm] = useState(() => new Map());
 
   const text     = theme?.text     || C.white;
   const muted    = theme?.muted    || C.muted;
@@ -293,6 +302,54 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
     })();
   }, [blocks]);
 
+  // ── Lazy-fetch de first/last response_at por formId pra hint do clientRange.
+  // Cada form vai precisar 1 chamada ao typeform_proxy (sem range) — pesado
+  // se o form tem milhares de respostas, mas roda só na 1ª seleção e o
+  // resultado é cached pelo backend (quase de graça em hits subsequentes).
+  const responseSpanRef = useRef(responseSpanByForm);
+  useEffect(() => { responseSpanRef.current = responseSpanByForm; });
+  const responseSpanInflightRef = useRef(new Set());
+  useEffect(() => {
+    const idsNeeded = new Set();
+    for (const b of blocks) {
+      for (const f of b.forms) {
+        const id = f.mode === "list" ? f.formId : extractFormId(f.url);
+        if (id) idsNeeded.add(id);
+      }
+    }
+    const current = responseSpanRef.current;
+    const missing = [...idsNeeded].filter(
+      (id) => !current.has(id) && !responseSpanInflightRef.current.has(id),
+    );
+    if (missing.length === 0) return;
+    for (const id of missing) responseSpanInflightRef.current.add(id);
+    (async () => {
+      const results = await Promise.all(
+        missing.map(async (id) => {
+          try {
+            const url = `https://form.typeform.com/to/${id}`;
+            const data = await fetchTypeformViaProxy(url, null);
+            return [id, {
+              first: data?.first_response_at || null,
+              last: data?.last_response_at || null,
+              total: typeof data?.total === "number" ? data.total : null,
+            }];
+          } catch {
+            return [id, { first: null, last: null, total: null, error: true }];
+          }
+        }),
+      );
+      setResponseSpanByForm((prev) => {
+        const next = new Map(prev);
+        for (const [id, val] of results) {
+          next.set(id, val);
+          responseSpanInflightRef.current.delete(id);
+        }
+        return next;
+      });
+    })();
+  }, [blocks]);
+
   // ── Bootstrap: carrega config existente + lista de forms em paralelo ─────
   useEffect(() => {
     let cancelled = false;
@@ -316,43 +373,41 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
 
       const defaultMode = listFailed || formsList.length === 0 ? "manual" : "list";
 
-      // Hidrata blocos com config existente. O formato salvo continua
-      // ctrlFormId/expFormId; mapeamos pra forms[0]=controle, forms[1]=exposto
-      // e setamos groupOverride explicitamente (assim a classificação salva
-      // sobrevive mesmo se o nome do form mudar no Typeform).
+      // Hidrata blocos com config existente. O formato salvo aceita v1
+      // (array puro) ou v2 ({version:2, questions, clientRange}); ambos
+      // entregues normalizados via parseSurveyConfig.
       if (savedRaw.status === "fulfilled" && savedRaw.value) {
-        try {
-          const parsed = JSON.parse(savedRaw.value);
-          if (Array.isArray(parsed) && parsed.length) {
-            const idsInList = new Set(formsList.map((f) => f.id));
-            const hydrated = parsed.map((q) => {
-              const ctrlId = q.ctrlFormId || extractFormId(q.ctrlUrl);
-              const expId  = q.expFormId  || extractFormId(q.expUrl);
-              const ctrlMatched = ctrlId && idsInList.has(ctrlId);
-              const expMatched  = expId  && idsInList.has(expId);
-              return {
-                nome: q.nome || "",
-                forms: [
-                  {
-                    mode: ctrlMatched ? "list" : "manual",
-                    formId: ctrlMatched ? ctrlId : "",
-                    url: q.ctrlUrl || "",
-                    groupOverride: "controle",
-                  },
-                  {
-                    mode: expMatched ? "list" : "manual",
-                    formId: expMatched ? expId : "",
-                    url: q.expUrl || "",
-                    groupOverride: "exposto",
-                  },
-                ],
-                focusRow: q.focusRow || "",
-              };
-            });
-            setBlocks(hydrated);
+        const cfg = parseSurveyConfig(savedRaw.value);
+        if (cfg && Array.isArray(cfg.questions) && cfg.questions.length) {
+          const idsInList = new Set(formsList.map((f) => f.id));
+          const hydrated = cfg.questions.map((q) => {
+            const ctrlId = q.ctrlFormId || extractFormId(q.ctrlUrl);
+            const expId  = q.expFormId  || extractFormId(q.expUrl);
+            const ctrlMatched = ctrlId && idsInList.has(ctrlId);
+            const expMatched  = expId  && idsInList.has(expId);
+            return {
+              nome: q.nome || "",
+              forms: [
+                {
+                  mode: ctrlMatched ? "list" : "manual",
+                  formId: ctrlMatched ? ctrlId : "",
+                  url: q.ctrlUrl || "",
+                  groupOverride: "controle",
+                },
+                {
+                  mode: expMatched ? "list" : "manual",
+                  formId: expMatched ? expId : "",
+                  url: q.expUrl || "",
+                  groupOverride: "exposto",
+                },
+              ],
+              focusRow: q.focusRow || "",
+            };
+          });
+          setBlocks(hydrated);
+          if (cfg.clientRange) {
+            setClientRange({ from: cfg.clientRange.from, to: cfg.clientRange.to });
           }
-        } catch {
-          // JSON corrompido — mantém bloco vazio
         }
       } else if (defaultMode === "manual") {
         setBlocks([EMPTY_BLOCK("manual")]);
@@ -411,6 +466,18 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
       }
     }
 
+    // Validação do clientRange — aceita totalmente vazio (cliente vê tudo)
+    // ou totalmente preenchido com from <= to. Preenchido parcial é erro.
+    const cr = { from: clientRange.from?.trim() || "", to: clientRange.to?.trim() || "" };
+    if ((cr.from && !cr.to) || (!cr.from && cr.to)) {
+      toast.error("Período exibido ao cliente: preencha as duas datas ou deixe ambas vazias.");
+      return;
+    }
+    if (cr.from && cr.to && cr.from > cr.to) {
+      toast.error("Período exibido ao cliente: a data inicial não pode ser maior que a final.");
+      return;
+    }
+
     // Detecção de duplicatas (mesmo formId em 2+ slots) — modo list apenas.
     const dupes = [];
     for (const [fid, uses] of usageMap.entries()) {
@@ -464,9 +531,10 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
         if (b.focusRow && b.focusRow.trim()) out.focusRow = b.focusRow.trim();
         return out;
       });
+      const rangeOut = cr.from && cr.to ? cr : null;
       await saveSurveyApi({
         short_token: shortToken,
-        survey_data: JSON.stringify(payload),
+        survey_data: serializeSurveyConfig(payload, rangeOut),
       });
       toast.success(`Survey de ${shortToken} salvo`);
       if (onSaved) onSaved();
@@ -725,6 +793,15 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
         </button>
       )}
 
+      {!loading && (
+        <ClientRangeField
+          value={clientRange}
+          onChange={setClientRange}
+          spanHint={getCombinedResponseSpan(blocks, formsById, responseSpanByForm)}
+          theme={{ text, muted, modalBdr, inputBg, cardBg }}
+        />
+      )}
+
       <div style={{ display: "flex", gap: 8 }}>
         <button
           onClick={handleClose}
@@ -765,6 +842,137 @@ const SurveyModal = ({ shortToken, onClose, onSaved, theme }) => {
     </ModalShell>
   );
 };
+
+// Combina spans de respostas de todos os forms do bloco em um único intervalo
+// (min de firsts, max de lasts) — pra mostrar ao admin "tem dados de A a B"
+// como hint pra escolher o clientRange.
+function getCombinedResponseSpan(blocks, formsById, spanByForm) {
+  let firstISO = null;
+  let lastISO = null;
+  let totalForms = 0;
+  let formsWithData = 0;
+  for (const b of blocks) {
+    for (const f of b.forms) {
+      const id = f.mode === "list" ? f.formId : extractFormId(f.url);
+      if (!id) continue;
+      totalForms++;
+      const span = spanByForm.get(id);
+      if (!span || (!span.first && !span.last)) continue;
+      formsWithData++;
+      if (span.first && (!firstISO || span.first < firstISO)) firstISO = span.first;
+      if (span.last && (!lastISO || span.last > lastISO)) lastISO = span.last;
+    }
+  }
+  return { firstISO, lastISO, totalForms, formsWithData };
+}
+
+// "2026-04-15T13:45:00Z" → "15/04/2026" (em BRT — soma offset de -3h pra
+// não passar pro dia anterior). Retorna "" se inválido.
+function fmtIsoToBRDate(iso) {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  // Converte UTC pra BRT (-03:00) somando -3h aos millis e formatando como UTC
+  const brt = new Date(t - 3 * 3600 * 1000);
+  const dd = String(brt.getUTCDate()).padStart(2, "0");
+  const mm = String(brt.getUTCMonth() + 1).padStart(2, "0");
+  const yy = brt.getUTCFullYear();
+  return `${dd}/${mm}/${yy}`;
+}
+
+// ─── ClientRangeField ──────────────────────────────────────────────────────
+// Bloco de configuração do período exibido ao cliente. Usa <input type="date">
+// nativo (YYYY-MM-DD direto, sem dependência de timezone). Mostra hint de
+// primeira/última resposta dos forms selecionados quando disponível.
+
+function ClientRangeField({ value, onChange, spanHint, theme }) {
+  const { text, muted, modalBdr, inputBg, cardBg } = theme;
+  const hasSpan = !!(spanHint?.firstISO || spanHint?.lastISO);
+  const hint = hasSpan
+    ? `Primeira resposta em ${fmtIsoToBRDate(spanHint.firstISO) || "—"}, última em ${fmtIsoToBRDate(spanHint.lastISO) || "—"}.`
+    : spanHint?.totalForms > 0
+      ? "Sem respostas registradas ainda — você ainda pode escolher um período pra exibir."
+      : "Selecione os forms acima pra ver as datas disponíveis de resposta.";
+  const isSet = !!(value.from && value.to);
+
+  return (
+    <div
+      style={{
+        background: cardBg,
+        border: `1px solid ${modalBdr}`,
+        borderRadius: 10,
+        padding: 14,
+        marginBottom: 16,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: C.blue, letterSpacing: 1, textTransform: "uppercase" }}>
+          Período exibido ao cliente
+        </div>
+        <span style={{ fontSize: 11, color: muted }}>(opcional)</span>
+        {isSet && (
+          <button
+            type="button"
+            onClick={() => onChange({ from: "", to: "" })}
+            style={{
+              marginLeft: "auto",
+              background: "none",
+              border: "none",
+              color: C.blue,
+              fontSize: 11,
+              cursor: "pointer",
+              textDecoration: "underline",
+            }}
+          >
+            limpar
+          </button>
+        )}
+      </div>
+      <div style={{ fontSize: 12, color: muted, marginBottom: 10, lineHeight: 1.5 }}>
+        Restringe o que o cliente vê na aba Survey àquele intervalo. Não afeta sua visão de admin (você continua vendo todas as respostas, com filtros próprios).
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: muted, flex: "1 1 140px" }}>
+          De
+          <input
+            type="date"
+            value={value.from || ""}
+            onChange={(e) => onChange({ ...value, from: e.target.value })}
+            style={{
+              background: inputBg,
+              color: text,
+              border: `1px solid ${modalBdr}`,
+              borderRadius: 6,
+              padding: "8px 10px",
+              fontSize: 13,
+              fontFamily: "inherit",
+            }}
+          />
+        </label>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: muted, flex: "1 1 140px" }}>
+          Até
+          <input
+            type="date"
+            value={value.to || ""}
+            onChange={(e) => onChange({ ...value, to: e.target.value })}
+            style={{
+              background: inputBg,
+              color: text,
+              border: `1px solid ${modalBdr}`,
+              borderRadius: 6,
+              padding: "8px 10px",
+              fontSize: 13,
+              fontFamily: "inherit",
+            }}
+          />
+        </label>
+      </div>
+      <div style={{ fontSize: 11, color: muted, marginTop: 8, fontStyle: "italic" }}>
+        {hint}
+      </div>
+    </div>
+  );
+}
 
 // ─── FormPicker ─────────────────────────────────────────────────────────────
 // Picker neutro (sem rótulo fixo de Controle/Exposto). Mostra chip do grupo
