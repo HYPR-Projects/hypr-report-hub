@@ -439,48 +439,114 @@ function buildDailyAndDetail({ totals, dates, today }) {
   return { daily, detail };
 }
 
-// ─── RMND (Amazon Ads) ─────────────────────────────────────────────────
+// ─── RMND (Amazon Ads · formato amazon-ads-2026 V2) ────────────────────
+// Schema espelhado do RmndUploadModal — admin sobe relatório do Amazon
+// Ads Console e o front filtra/persiste no shape canônico { date,
+// adProduct, campaign, adGroup, asin, sku, productName, purchases,
+// sales, units, atc, ctSales, vtSales }. NÃO contém impressões/spend/
+// cliques (decisão de produto).
 function buildRmnd(today) {
   const start = addDays(today, -30);
   const dates = dateRange(ymd(start), ymd(today));
-  const targetings = [
-    { name: "Brand Defense — Demo",        cpcBase: 0.85, ctrBase: 0.95, roas: 6.2 },
-    { name: "Category — Verão Premium",    cpcBase: 1.20, ctrBase: 0.62, roas: 3.1 },
-    { name: "Lookalike — High Spenders",   cpcBase: 1.05, ctrBase: 0.78, roas: 4.4 },
+  // 2 grupos Sponsored Products + 1 grupo DSP — combinação realista
+  // que o relatório Amazon entrega numa campanha mid-funnel.
+  const adGroups = [
+    {
+      adProduct: "Sponsored Products",
+      campaign:  "DEMO_Lancamento_Verao_2026",
+      adGroup:   "DEMO_Lancamento_Verao_Hero",
+      ctShare:   0.96, // SP é quase tudo CT
+      products: [
+        { asin: "B07ZRY5Q16", productName: "Demo Solar Protetor Antioxidante FPS 50, 60ml" },
+        { asin: "B0954R6FNH", productName: "Demo Hidratante Facial Antiidade, 30ml" },
+        { asin: "B085CZ2F4J", productName: "Demo Sérum Vitamina C 10% Concentrado, 30ml" },
+      ],
+      ticketBase: 95,
+      atcBase: 28,
+      purchasesBase: 12,
+    },
+    {
+      adProduct: "Sponsored Products",
+      campaign:  "DEMO_Lancamento_Verao_2026",
+      adGroup:   "DEMO_Lancamento_Verao_Crossell",
+      ctShare:   0.95,
+      products: [
+        { asin: "B0CMW43F8H", productName: "Demo Pós-sol Hidratante Calmante, 200ml" },
+        { asin: "B09D8X2QYZ", productName: "Demo Loção Corporal Reparadora Pós-Sol, 400ml" },
+      ],
+      ticketBase: 70,
+      atcBase: 18,
+      purchasesBase: 7,
+    },
+    {
+      adProduct: "Amazon DSP",
+      campaign:  "DEMO_Lancamento_Verao_2026_DSP",
+      adGroup:   "DEMO_Display_Audience_Awareness",
+      ctShare:   0.42, // DSP costuma ter mais venda view-through
+      products: [
+        { asin: "B07ZRY5Q16", productName: "Demo Solar Protetor Antioxidante FPS 50, 60ml" },
+        { asin: "B0954R6FNH", productName: "Demo Hidratante Facial Antiidade, 30ml" },
+      ],
+      ticketBase: 110,
+      atcBase: 22,
+      purchasesBase: 4,
+    },
   ];
 
   const rows = [];
   for (const date of dates) {
-    for (const t of targetings) {
-      const seed = `rmnd|${date}|${t.name}`;
-      const dailyImp = Math.round(noise(seed, "imp", 0.8, 1.2) * 14000);
-      const ctr = t.ctrBase * noise(seed, "ctr", 0.85, 1.15) / 100;
-      const clicks = Math.max(1, Math.round(dailyImp * ctr));
-      const cpc = t.cpcBase * noise(seed, "cpc", 0.9, 1.1);
-      const spend = round2(clicks * cpc);
-      const ticket = noise(seed, "ticket", 90, 220);
-      const orders = Math.max(0, Math.round(spend * t.roas / ticket));
-      const sales = round2(orders * ticket);
-      const units = Math.max(orders, Math.round(orders * noise(seed, "units", 1.0, 1.6)));
-      rows.push({
-        Date: date,
-        Campaign: "Lançamento Verão 2026 — Demo",
-        Targeting: t.name,
-        Impressions: dailyImp,
-        Clicks: clicks,
-        Spend: spend,
-        "14 Day Total Sales (R$)": sales,
-        "14 Day Total Orders (#)": orders,
-        "14 Day Total Units (#)": units,
+    for (const g of adGroups) {
+      // Distribui as compras do dia entre os produtos do grupo de forma
+      // estável (PRNG seedado pela data+grupo+asin)
+      const dayPurchases = Math.max(0, Math.round(g.purchasesBase * noise(`${date}|${g.adGroup}`, "buy", 0.6, 1.45)));
+      const dayAtc       = Math.max(dayPurchases, Math.round(g.atcBase * noise(`${date}|${g.adGroup}`, "atc", 0.7, 1.35)));
+      // Reparte por produto
+      const weights = g.products.map((p, i) => noise(`${date}|${g.adGroup}|${p.asin}`, `w${i}`, 0.6, 1.4));
+      const wSum = weights.reduce((s, x) => s + x, 0);
+      g.products.forEach((p, i) => {
+        const share = weights[i] / wSum;
+        const purchases = Math.round(dayPurchases * share);
+        const atc       = Math.round(dayAtc * share);
+        const units     = Math.max(purchases, Math.round(purchases * noise(`${date}|${p.asin}`, "u", 1.0, 1.6)));
+        const ticket    = g.ticketBase * noise(`${date}|${p.asin}`, "t", 0.85, 1.18);
+        const sales     = round2(purchases * ticket);
+        const ctSales   = round2(sales * g.ctShare);
+        const vtSales   = round2(sales - ctSales);
+        // Pula linhas zeradas pra deixar o dataset mais realista
+        if (purchases === 0 && atc === 0 && sales === 0) return;
+        rows.push({
+          date,
+          adProduct: g.adProduct,
+          campaign: g.campaign,
+          adGroup: g.adGroup,
+          asin: p.asin,
+          sku: p.asin,
+          productName: p.productName,
+          purchases,
+          sales,
+          units,
+          atc,
+          ctSales,
+          vtSales,
+        });
       });
     }
   }
+
+  const minDate = dates[0];
+  const maxDate = dates[dates.length - 1];
+
   return {
+    version: 2,
     type: "RMND",
-    rows,
-    headers: ["Date", "Campaign", "Targeting", "Impressions", "Clicks", "Spend",
-              "14 Day Total Sales (R$)", "14 Day Total Orders (#)", "14 Day Total Units (#)"],
+    format: "amazon-ads-2026",
     uploadedAt: new Date().toISOString(),
+    sourceFileName: "DEMO_AmazonAds_Report.csv",
+    filters: {
+      adGroups: adGroups.map((g) => g.adGroup),
+      dateRange: { from: minDate, to: maxDate },
+    },
+    rows,
   };
 }
 
