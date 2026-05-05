@@ -173,8 +173,12 @@ function PacingSubBarRow({ label, pacing }) {
           />
         )}
       </div>
+      {/* Coluna direita com largura fixa pra que as barras O2O e OOH
+          fiquem alinhadas independente do tamanho do pill (ex: "OVER 21%"
+          vs "OVER 403%"). Sem isso, a barra com flex-1 absorve a diferença
+          e as duas linhas saem com larguras diferentes. */}
       <span
-        className="text-[11px] font-bold tabular-nums whitespace-nowrap inline-flex items-center gap-1.5 justify-end"
+        className="text-[11px] font-bold tabular-nums whitespace-nowrap inline-flex items-center gap-1.5 justify-end shrink-0 w-[148px]"
         style={{ color: labelColor }}
       >
         {fmt(realPct, 1)}%
