@@ -69,12 +69,31 @@ export function DailyAggregateTableV2({
   // DisplayV2 / VideoV2, onde o toggle seria redundante (o usuário já
   // está num contexto de mídia específica).
   lockedMedia = null,
+  // Quando passado, restringe as opções do toggle a esse subset (ex:
+  // campanha só Display passa ["DISPLAY"]). Default = ambas. Quando
+  // resta só uma opção, o toggle é escondido (1 botão é UI ruim) e a
+  // mídia única vira a selecionada.
+  availableMedia = null,
 }) {
-  // Toggle interno — Display por padrão (mais comum + mais colunas
-  // contratuais relevantes pra mídia gráfica). Quando lockedMedia é
-  // passado, ignora estado interno.
-  const [internalMedia, setInternalMedia] = useState("DISPLAY");
-  const media = lockedMedia || internalMedia;
+  // Filtra MEDIA_OPTIONS pelo conjunto disponível (se passado). Mantém
+  // ordem original (Display antes de Video).
+  const filteredMediaOptions = useMemo(
+    () => availableMedia
+      ? MEDIA_OPTIONS.filter((opt) => availableMedia.includes(opt.value))
+      : MEDIA_OPTIONS,
+    [availableMedia],
+  );
+  const showToggle = !lockedMedia && filteredMediaOptions.length > 1;
+  const fallbackMedia = filteredMediaOptions[0]?.value || "DISPLAY";
+
+  // Toggle interno — Display por padrão se disponível, senão a primeira
+  // opção válida. Quando lockedMedia ou availableMedia restringe, o state
+  // interno pode ficar dessincronizado; effectiveMedia abaixo cobre.
+  const [internalMedia, setInternalMedia] = useState(fallbackMedia);
+  const media = lockedMedia
+    || (filteredMediaOptions.some((o) => o.value === internalMedia)
+      ? internalMedia
+      : fallbackMedia);
 
   const aggregated = useMemo(
     () => aggregateByDay(daily, media),
@@ -112,10 +131,10 @@ export function DailyAggregateTableV2({
         </span>
 
         <div className="flex items-center gap-2 flex-wrap">
-          {!lockedMedia && (
+          {showToggle && (
             <SegmentedControlV2
               label="Mídia"
-              options={MEDIA_OPTIONS}
+              options={filteredMediaOptions}
               value={media}
               onChange={setInternalMedia}
             />

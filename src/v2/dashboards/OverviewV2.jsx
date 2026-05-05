@@ -325,11 +325,17 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt,
       )}
 
       {/* ─── 5. Tabela Entrega Agregada por Dia ─────────────────────── */}
+      {/* availableMedia restringe o toggle Display/Video às mídias que
+          a campanha realmente tem (contrato OU entrega). Mesma lógica
+          que oculta as tabs Display/Video em ClientDashboardV2 — assim
+          campanha só-Display não mostra um toggle "Video" que ao ser
+          clicado sempre vai dizer "Sem entregas de Video". */}
       {daily0 && daily0.length > 0 && (
         <CollapsibleSectionV2 title="Entrega Agregada por Dia" defaultOpen>
           <DailyAggregateTableV2
             daily={daily0}
             campaignName={camp.campaign_name}
+            availableMedia={availableMediaFromData(data)}
           />
         </CollapsibleSectionV2>
       )}
@@ -347,6 +353,32 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt,
 }
 
 // ─── Helpers locais ───────────────────────────────────────────────────
+
+// Quais mídias a campanha tem (Display, Video, ambas). Critério: contrato
+// (incluindo bonus) OU entrega real em data.totals. Mesma lógica que
+// ClientDashboardV2 usa pra esconder as tabs Display/Video — replicada
+// aqui pra DailyAggregateTableV2 da Visão Geral aplicar o mesmo filtro
+// no toggle Display/Video. Duplicação intencional pra evitar prop
+// drilling de 3 níveis (ClientDashboard → Overview → DailyAggregate).
+function availableMediaFromData(data) {
+  const t0 = (data?.totals || [])[0] || {};
+  const hasDisplayContract =
+    (t0.contracted_o2o_display_impressions || 0) > 0 ||
+    (t0.contracted_ooh_display_impressions || 0) > 0 ||
+    (t0.bonus_o2o_display_impressions || 0) > 0 ||
+    (t0.bonus_ooh_display_impressions || 0) > 0;
+  const hasVideoContract =
+    (t0.contracted_o2o_video_completions || 0) > 0 ||
+    (t0.contracted_ooh_video_completions || 0) > 0 ||
+    (t0.bonus_o2o_video_completions || 0) > 0 ||
+    (t0.bonus_ooh_video_completions || 0) > 0;
+  const hasDisplayDelivery = (data?.totals || []).some((r) => r.media_type === "DISPLAY");
+  const hasVideoDelivery = (data?.totals || []).some((r) => r.media_type === "VIDEO");
+  const out = [];
+  if (hasDisplayContract || hasDisplayDelivery) out.push("DISPLAY");
+  if (hasVideoContract || hasVideoDelivery) out.push("VIDEO");
+  return out;
+}
 
 // Restringe budget/contracted ao tactic filtrado. Sem isso, o filtro
 // Core Product deixaria os componentes de pacing comparando entrega de
