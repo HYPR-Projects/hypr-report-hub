@@ -375,12 +375,27 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
   const showSurvey = isAdmin || hasSurvey;
   const hasAnySecondary = showRmnd || showPdooh || showLoom || showSurvey;
 
-  // Se deep-link aponta pra tab secundária que esse user não vê (cliente
-  // sem dado cadastrado), downgrade pra overview no render — evita tela
-  // vazia sem trigger ativo no menu. URL pode ficar momentaneamente fora
-  // de sync com a UI até o próximo clique em tab; preço aceitável pra
+  // Display/Video também escondem pro cliente quando a campanha não tem a
+  // mídia no contrato — evita a aba ficar visível só pra mostrar "Não há
+  // entrega Video O2O nesta campanha". Admin sempre vê (pode estar
+  // configurando uma campanha que ainda não começou a entregar).
+  //
+  // Baseado em `data.totals` cru (não em `aggregates.display/.video` que é
+  // filtrado pelo mainRange) — assim filtrar período sem entrega não some
+  // com a aba. Mesma lógica de `hasRmnd = !!data.rmnd` acima.
+  const hasDisplay = (data.totals || []).some((r) => r.media_type === "DISPLAY");
+  const hasVideo = (data.totals || []).some((r) => r.media_type === "VIDEO");
+  const showDisplay = isAdmin || hasDisplay;
+  const showVideo = isAdmin || hasVideo;
+
+  // Se deep-link aponta pra tab que esse user não vê (cliente sem dado
+  // cadastrado), downgrade pra overview no render — evita tela vazia
+  // sem trigger ativo no menu. URL pode ficar momentaneamente fora de
+  // sync com a UI até o próximo clique em tab; preço aceitável pra
   // evitar setState em effect (anti-padrão React 19).
   const effectiveTab =
+    (tab === "display" && !showDisplay) ||
+    (tab === "video" && !showVideo) ||
     (tab === "rmnd" && !showRmnd) ||
     (tab === "pdooh" && !showPdooh) ||
     (tab === "loom" && !showLoom) ||
@@ -419,12 +434,16 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
                 <TabsTrigger value="overview" iconLeft={<GridIcon />}>
                   Visão Geral
                 </TabsTrigger>
-                <TabsTrigger value="display" iconLeft={<MonitorIcon />}>
-                  Display
-                </TabsTrigger>
-                <TabsTrigger value="video" iconLeft={<VideoIcon />}>
-                  Video
-                </TabsTrigger>
+                {showDisplay && (
+                  <TabsTrigger value="display" iconLeft={<MonitorIcon />}>
+                    Display
+                  </TabsTrigger>
+                )}
+                {showVideo && (
+                  <TabsTrigger value="video" iconLeft={<VideoIcon />}>
+                    Video
+                  </TabsTrigger>
+                )}
                 <TabsTrigger value="base" iconLeft={<TableIcon />}>
                   Base de Dados
                 </TabsTrigger>
