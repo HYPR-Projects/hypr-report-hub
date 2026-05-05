@@ -538,12 +538,34 @@ def resolve_owner_for_client(
     Caller tem 3 dicts em mãos (overrides, lookup, aliases) e aplica nessa
     ordem. Esta função cuida dos passos 2-3 (normalize+alias+lookup); o
     override fica fora porque é chaveado por short_token, não por nome.
+
+    Fallback "sem espaços": se o match direto falha, comprime espaços dos
+    dois lados e tenta de novo. Cobre casos onde uma fonte escreve o nome
+    colado (BQ: "GENERALMOTORS", "BANCOBV") e a outra com espaço (planilha:
+    "General Motors", "Banco BV"). Só vale com match único — se duas
+    entradas distintas no lookup compactam pro mesmo nome, retorna None
+    (admin desambigua via alias explícito).
     """
     n = normalize_client_name(client_name or "")
     if not n:
         return (None, None)
     canonical = aliases.get(n, n)
-    return lookup.get(canonical, (None, None))
+
+    # 1. Match direto pela chave normalizada.
+    direct = lookup.get(canonical)
+    if direct is not None:
+        return direct
+
+    # 2. Fallback "compact" (sem espaços). O(N) pelo lookup mas N ~300, custo
+    #    irrelevante (<1ms por chamada). Não pré-computamos índice porque
+    #    isso aqui só roda no fallback — match direto cobre 90%+ dos casos.
+    target = canonical.replace(" ", "")
+    if target:
+        matches = [k for k in lookup if k.replace(" ", "") == target]
+        if len(matches) == 1:
+            return lookup[matches[0]]
+
+    return (None, None)
 
 
 def get_overrides_dict() -> Dict[str, Tuple[Optional[str], Optional[str]]]:
