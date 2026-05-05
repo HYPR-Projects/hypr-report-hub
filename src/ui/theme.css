@@ -306,10 +306,13 @@
   --color-surface-3: #F1F3F6;
 
   /* Track no light: precisa ser visivelmente mais escuro que a card
-   * hospedeira (bg-surface = ~#F1F2F3 sobre canvas claro). Esse valor
-   * dá ~#DADDE0 percebido sobre a surface, contraste suficiente sem
-   * virar bloco cinza pesado. */
-  --color-track: rgba(15, 20, 25, 0.10);
+   * hospedeira (bg-surface = ~#F1F2F3 sobre canvas claro). Antes era
+   * 0.10 mas em sub-bars (que aplicam bg-track só em 1 camada, vs as
+   * pacing bars principais que dobram o token via 2 wrappers) ficava
+   * imperceptível — a barra colorida cobria parte e o resto parecia
+   * fundo da card. Bumpado pra 0.14 dá ~#D2D5D9 percebido sobre a
+   * surface, visibilidade clara sem virar bloco pesado. */
+  --color-track: rgba(15, 20, 25, 0.14);
 
   /* Chart colors — light invert as barras/linhas pra contrastar
    * com canvas claro: bar vira o canvas dark (#1C262F), line vira

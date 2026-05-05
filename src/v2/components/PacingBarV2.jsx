@@ -152,6 +152,13 @@ function PacingSubBarRow({ label, pacing }) {
   const barColor = pickColor(visiblePct);
   const labelColor = realPct > 100 ? palette.signature : barColor;
 
+  // Layout em 4 colunas com larguras fixas pros slots de label, % e pill
+  // — assim O2O e OOH ficam ALINHADOS verticalmente independente do
+  // pacing/over de cada um. Antes o `% + pill` ficavam numa span única
+  // com `justify-end`: quando não havia over, o % colava na borda
+  // direita; quando havia over, ficavam pra esquerda — ritmo visual
+  // inconsistente. Slot do pill reserva espaço mesmo vazio (no-op visual
+  // quando pacing ≤ 100%) pra preservar a coluna do %.
   return (
     <div className="flex items-center gap-3">
       <span className="text-[10px] font-bold uppercase tracking-wider text-fg-subtle w-9 shrink-0">
@@ -173,15 +180,13 @@ function PacingSubBarRow({ label, pacing }) {
           />
         )}
       </div>
-      {/* Coluna direita com largura fixa pra que as barras O2O e OOH
-          fiquem alinhadas independente do tamanho do pill (ex: "OVER 21%"
-          vs "OVER 403%"). Sem isso, a barra com flex-1 absorve a diferença
-          e as duas linhas saem com larguras diferentes. */}
       <span
-        className="text-[11px] font-bold tabular-nums whitespace-nowrap inline-flex items-center gap-1.5 justify-end shrink-0 w-[148px]"
+        className="text-[11px] font-bold tabular-nums whitespace-nowrap shrink-0 w-[52px] text-right"
         style={{ color: labelColor }}
       >
         {fmt(realPct, 1)}%
+      </span>
+      <span className="shrink-0 w-[88px] inline-flex justify-start">
         <PacingOverPillV2 pacing={realPct} size="sm" />
       </span>
     </div>
