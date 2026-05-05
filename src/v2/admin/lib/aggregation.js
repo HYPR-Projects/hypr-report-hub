@@ -292,6 +292,10 @@ export function computeMetricsSummary(campaigns) {
     vtr_prev:     prev.vtr,
     ecpm:         cur.ecpm,
     ecpm_prev:    prev.ecpm,
+    ecpm_display:      cur.ecpm_display,
+    ecpm_display_prev: prev.ecpm_display,
+    ecpm_video:        cur.ecpm_video,
+    ecpm_video_prev:   prev.ecpm_video,
   };
 }
 

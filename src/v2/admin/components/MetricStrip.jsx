@@ -120,12 +120,22 @@ export function MetricStrip({ summary, className }) {
     vtr_prev,
     ecpm,
     ecpm_prev,
+    ecpm_display,
+    ecpm_display_prev,
+    ecpm_video,
+    ecpm_video_prev,
   } = summary;
+
+  // Fallback pra eCPM combinado quando o backend ainda não envia os splits
+  // por mídia (d_admin_total_cost / v_admin_total_cost). Mantém o card único
+  // de eCPM até o redeploy.
+  const hasSplit = ecpm_display != null || ecpm_video != null;
 
   return (
     <div
       className={cn(
-        "grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3",
+        "grid grid-cols-2 sm:grid-cols-3 gap-3",
+        hasSplit ? "lg:grid-cols-7" : "lg:grid-cols-6",
         className
       )}
       role="region"
@@ -154,11 +164,26 @@ export function MetricStrip({ summary, className }) {
         tone={toneVtr(vtr)}
         footer={<MetricDelta current={vtr} previous={vtr_prev} goodDirection="up" />}
       />
-      <MetricCard
-        label="eCPM"
-        value={formatBRL(ecpm)}
-        footer={<MetricDelta current={ecpm} previous={ecpm_prev} goodDirection="down" />}
-      />
+      {hasSplit ? (
+        <>
+          <MetricCard
+            label="eCPM Display"
+            value={formatBRL(ecpm_display)}
+            footer={<MetricDelta current={ecpm_display} previous={ecpm_display_prev} goodDirection="down" />}
+          />
+          <MetricCard
+            label="eCPM Video"
+            value={formatBRL(ecpm_video)}
+            footer={<MetricDelta current={ecpm_video} previous={ecpm_video_prev} goodDirection="down" />}
+          />
+        </>
+      ) : (
+        <MetricCard
+          label="eCPM"
+          value={formatBRL(ecpm)}
+          footer={<MetricDelta current={ecpm} previous={ecpm_prev} goodDirection="down" />}
+        />
+      )}
     </div>
   );
 }
