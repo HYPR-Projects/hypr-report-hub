@@ -172,6 +172,30 @@ function writeViewToUrl(view) {
 const SECONDARY_TAB_CLASS =
   "text-xs font-medium text-fg-subtle hover:text-fg-muted";
 
+// Detecta presença de O2O/OOH na campanha. Critério "tem frente": contrato
+// (incl. bonus, em qualquer mídia) OU entrega real em data.totals. Aceita
+// `data` null/undefined (cenário pré-carga) e devolve ambos false.
+function computeTacticAvailability(data) {
+  if (!data) return { hasO2O: false, hasOOH: false };
+  const t0 = (data.totals || [])[0] || {};
+  const hasO2OContract =
+    (t0.contracted_o2o_display_impressions || 0) > 0 ||
+    (t0.bonus_o2o_display_impressions || 0) > 0 ||
+    (t0.contracted_o2o_video_completions || 0) > 0 ||
+    (t0.bonus_o2o_video_completions || 0) > 0;
+  const hasOOHContract =
+    (t0.contracted_ooh_display_impressions || 0) > 0 ||
+    (t0.bonus_ooh_display_impressions || 0) > 0 ||
+    (t0.contracted_ooh_video_completions || 0) > 0 ||
+    (t0.bonus_ooh_video_completions || 0) > 0;
+  const hasO2ODelivery = (data.totals || []).some((r) => r.tactic_type === "O2O");
+  const hasOOHDelivery = (data.totals || []).some((r) => r.tactic_type === "OOH");
+  return {
+    hasO2O: hasO2OContract || hasO2ODelivery,
+    hasOOH: hasOOHContract || hasOOHDelivery,
+  };
+}
+
 // ─── Componente principal ──────────────────────────────────────────────
 
 export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
@@ -314,6 +338,19 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data?.campaign?.start_date, data?.campaign?.end_date, mainPresetId]);
 
+  // Core Product filter (Visão Geral): só faz sentido quando a campanha
+  // tem AS DUAS frentes (O2O e OOH). Critério: contrato (incl. bonus) em
+  // qualquer mídia OU entrega real. Quando só uma frente existe, o
+  // filtro é ruído visual e o effectiveMainCore vira "ALL" pra evitar
+  // zerar agregados se o state vier de URL antiga (ex: ?core=OOH numa
+  // campanha que só tem O2O). Computado aqui em cima pra ser usado
+  // dentro do useMemo logo abaixo.
+  const tacticAvail = computeTacticAvailability(data);
+  const showCoreFilter = tacticAvail.hasO2O && tacticAvail.hasOOH;
+  const effectiveMainCore = showCoreFilter && (mainCore === "O2O" || mainCore === "OOH")
+    ? mainCore
+    : "ALL";
+
   // mainCore só afeta a Visão Geral. Pra evitar que abrir Display/Video
   // veja dados filtrados, calculamos DOIS aggregates: um irrestrito
   // (consumido por todas as outras tabs) e um filtrado por core (só pro
@@ -324,8 +361,8 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
     [data, mainRange],
   );
   const aggregatesOverview = useMemo(
-    () => (data ? computeAggregates(data, mainRange, mainCore) : null),
-    [data, mainRange, mainCore],
+    () => (data ? computeAggregates(data, mainRange, effectiveMainCore) : null),
+    [data, mainRange, effectiveMainCore],
   );
 
   const handleShare = () => {
@@ -511,11 +548,14 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
               {/* Filtros à direita das tabs. Core Product é exclusivo da
                   Visão Geral — sai quando outra tab fica ativa pra não
                   poluir e pra evitar confundir o user (Display/Video tem
-                  seus próprios toggles internos). */}
+                  seus próprios toggles internos). E só renderiza quando a
+                  campanha tem AS DUAS frentes (O2O + OOH); campanhas
+                  mono-frente não precisam do filtro (1 opção é UI ruim e
+                  os dados já refletem a frente única). */}
               <div className="pb-2 flex items-center gap-2">
-                {effectiveTab === "overview" && (
+                {effectiveTab === "overview" && showCoreFilter && (
                   <CoreProductFilterV2
-                    value={mainCore}
+                    value={effectiveMainCore}
                     onChange={setMainCore}
                   />
                 )}
@@ -538,7 +578,7 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
                 isAdmin={isAdmin}
                 adminJwt={adminJwt}
                 mergeMeta={data.merge_meta}
-                coreFilter={mainCore}
+                coreFilter={effectiveMainCore}
               />
             </TabsContent>
 
