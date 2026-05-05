@@ -1960,8 +1960,17 @@ def _compose_asset_payload(per_token, active_token, mode, key, members_sorted):
 
     `mode='latest'` → retorna o payload do MEMBRO MAIS RECENTE (por start_date)
                       que tenha valor não-nulo. Fallback ativo, depois ordenado.
-    `mode='merge'`  → tenta parsear cada payload como JSON array e concatena.
-                      Se algum membro não parseia, faz log e cai pra latest.
+    `mode='merge'`  → 2 caminhos, dependendo do formato dos payloads:
+        a) **Formato V2 RMND** (`{format: "amazon-ads-2026", rows: [...]}`):
+           concat das `rows` de todos members + dedup por
+           (date, adGroup, asin, sku, adProduct) — quando o mesmo registro
+           aparece em 2+ tokens (períodos sobrepostos no upload), o do
+           membro MAIS RECENTE prevalece. Resultado retornado como objeto
+           V2 com `filters` somando os intervalos cobertos.
+        b) **Formato legacy (array JSON)**: concatena os arrays como antes.
+        Se um membro tem formato e outro tem outro, faz log e cai pra latest
+        (ambos legacy e V2 numa mesma campanha não devia acontecer; se
+        acontecer é sinal de migração incompleta).
 
     Retorna a string final (já JSON-encoded) ou None.
     """
@@ -1980,27 +1989,108 @@ def _compose_asset_payload(per_token, active_token, mode, key, members_sorted):
     if mode == "latest":
         return latest_non_null()
 
-    # mode == 'merge': concatena arrays JSON
-    accumulated = []
+    # mode == 'merge': parseia cada membro e classifica formato
+    parsed_by_token = {}
+    has_v2 = False
+    has_legacy = False
     for t in members_sorted:
         raw = raw_by_token.get(t)
         if not raw:
             continue
         try:
             parsed = json.loads(raw) if isinstance(raw, str) else raw
-            if isinstance(parsed, list):
-                accumulated.extend(parsed)
-            else:
-                # Não é array — não dá pra concat semanticamente.
-                logger.warning(f"[WARN _compose_asset_payload {key}] token={t} payload não é array, mode=merge cai pra latest")
-                return latest_non_null()
         except Exception as e:
-            logger.warning(f"[WARN _compose_asset_payload {key}] token={t} parse falhou: {e}; mode=merge cai pra latest")
+            logger.warning(f"[WARN _compose_asset_payload {key}] token={t} parse falhou: {e}; cai pra latest")
+            return latest_non_null()
+        parsed_by_token[t] = parsed
+        if isinstance(parsed, dict) and parsed.get("format") == "amazon-ads-2026":
+            has_v2 = True
+        elif isinstance(parsed, list):
+            has_legacy = True
+        else:
+            logger.warning(f"[WARN _compose_asset_payload {key}] token={t} payload em formato desconhecido; cai pra latest")
             return latest_non_null()
 
+    if has_v2 and has_legacy:
+        logger.warning(f"[WARN _compose_asset_payload {key}] mistura V2 + legacy entre membros; cai pra latest")
+        return latest_non_null()
+
+    if has_v2:
+        return _merge_v2_amazon_ads(parsed_by_token, members_sorted)
+
+    # Legacy: concatena arrays
+    accumulated = []
+    for t in members_sorted:
+        parsed = parsed_by_token.get(t)
+        if isinstance(parsed, list):
+            accumulated.extend(parsed)
     if not accumulated:
         return None
     return json.dumps(accumulated)
+
+
+def _merge_v2_amazon_ads(parsed_by_token, members_sorted):
+    """Concat + dedup das rows V2 do RMND.
+
+    Dedup key: (date, adProduct, adGroup, asin, sku). Quando o mesmo registro
+    aparece em N members (períodos que se sobrepõem no upload do admin), o
+    do membro mais RECENTE (último em members_sorted asc) prevalece — assume
+    que dado mais novo é mais correto que retroativo. Sem dedup, totais
+    duplicariam silenciosamente em qualquer dia coberto por 2 bases.
+    """
+    by_key = {}
+    earliest_from = None
+    latest_to = None
+    all_ad_groups = set()
+    uploaded_ats = []
+    for t in members_sorted:
+        parsed = parsed_by_token.get(t)
+        if not isinstance(parsed, dict):
+            continue
+        rows = parsed.get("rows") or []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            key = (
+                row.get("date"),
+                row.get("adProduct"),
+                row.get("adGroup"),
+                row.get("asin"),
+                row.get("sku"),
+            )
+            by_key[key] = row  # último (mais recente) prevalece
+        flt = parsed.get("filters") or {}
+        dr = flt.get("dateRange") or {}
+        f, to = dr.get("from"), dr.get("to")
+        if f and (earliest_from is None or f < earliest_from):
+            earliest_from = f
+        if to and (latest_to is None or to > latest_to):
+            latest_to = to
+        for g in flt.get("adGroups") or []:
+            all_ad_groups.add(g)
+        ua = parsed.get("uploadedAt")
+        if ua:
+            uploaded_ats.append(ua)
+
+    if not by_key:
+        return None
+
+    composed = {
+        "version": 2,
+        "type": "RMND",
+        "format": "amazon-ads-2026",
+        "uploadedAt": max(uploaded_ats) if uploaded_ats else None,
+        "filters": {
+            "adGroups": sorted(all_ad_groups),
+            "dateRange": {"from": earliest_from, "to": latest_to} if (earliest_from and latest_to) else None,
+        },
+        "rows": list(by_key.values()),
+        "_merged": {
+            "members": list(parsed_by_token.keys()),
+            "rows_total": len(by_key),
+        },
+    }
+    return json.dumps(composed)
 
 
 def compose_merged_report(group, force_refresh=False):
