@@ -410,8 +410,11 @@ function scoreCampaignDetailed(c) {
   }
 
   // Thresholds Display dinâmicos baseados em ABS. Video não tem threshold
-  // porque eCPM/CTR de Video deixaram de pontuar.
+  // porque eCPM/CTR de Video deixaram de pontuar — mas mantemos `vHasAbs`
+  // pro retorno (`breakdown.abs.video`), que o PerformerDrawer usa pra
+  // renderizar o badge "ABS·V" quando o sinal automático marca só Video.
   const dHasAbs = !!c.display_has_abs;
+  const vHasAbs = !!c.video_has_abs;
   const dEcpmTh = dHasAbs ? ECPM_THRESHOLD_DISPLAY_ABS : ECPM_THRESHOLD_DISPLAY;
   const dCtrTh  = dHasAbs ? CTR_THRESHOLD_DISPLAY_ABS  : CTR_THRESHOLD_DISPLAY;
 
