@@ -3,6 +3,7 @@ import RouteSuspense from "./components/RouteSuspense";
 import LoadingShell from "./components/LoadingShell";
 import V2ErrorBoundary from "./v2/components/ErrorBoundary";
 import ClientPasswordScreen from "./pages/ClientPasswordScreen";
+import { SessionExpiredModalV2 } from "./v2/components/SessionExpiredModalV2";
 import {
   getAdminJwtFromUrl,
   isJwtExpired,
@@ -64,6 +65,18 @@ function isLikelyShareId(token) {
 }
 
 export default function App() {
+  // SessionExpiredModalV2 é montado uma vez aqui pra cobrir todas as
+  // rotas — ouve o evento global emitido pelo postJson em api.js quando
+  // uma call admin 401a mesmo após auto-retry (ver lib/sessionEvents.js).
+  return (
+    <>
+      <SessionExpiredModalV2 />
+      <AppRoutes />
+    </>
+  );
+}
+
+function AppRoutes() {
   // Restaura sessão admin (8h TTL) e unlock de cliente direto do localStorage
   // para que um refresh não derrube o login.
   const [user, setUser] = useState(() => loadSession()?.user || null);

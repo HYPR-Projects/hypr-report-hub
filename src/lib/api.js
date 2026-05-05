@@ -25,19 +25,69 @@
  */
 
 import { API_URL } from "../shared/config";
-import { adminAuthHeaders, getOrIssueAdminJwt } from "../shared/auth";
+import {
+  adminAuthHeaders,
+  getOrIssueAdminJwt,
+  clearCachedAdminJwt,
+} from "../shared/auth";
+import { emitSessionExpired } from "./sessionEvents";
 import { isDemoToken, buildDemoPayload, DEMO_TOKEN } from "../shared/demoData";
 
 // ── Helpers internos ─────────────────────────────────────────────────────────
 
 const jsonHeaders = { "Content-Type": "application/json" };
 
+/**
+ * POST com JSON. Quando o caller passa header `Authorization` (ou seja,
+ * é uma call admin), `postJson` detecta 401/403 e tenta uma vez:
+ *   1) Invalida o JWT em cache
+ *   2) Re-minta via getOrIssueAdminJwt() (que tenta localStorage primeiro,
+ *      depois mint via id_token)
+ *   3) Refaz o request com o JWT novo
+ *
+ * Se o retry também falha (ou se não foi possível mintar JWT novo),
+ * emite `session-expired` event pro modal global pegar — e devolve a
+ * Response do retry (caller decide se trata).
+ *
+ * Por que dentro do postJson e não num wrapper separado: zero refactor
+ * dos call sites existentes (saveLogo/saveLoom/etc continuam chamando
+ * com a mesma assinatura).
+ */
 async function postJson(url, body, extraHeaders = {}) {
-  return fetch(url, {
+  const init = {
     method: "POST",
     headers: { ...jsonHeaders, ...extraHeaders },
     body: JSON.stringify(body),
-  });
+  };
+  const res = await fetch(url, init);
+
+  if (res.status !== 401 && res.status !== 403) return res;
+
+  // Não-admin (sem Authorization) → não tem o que retry, devolve como tá.
+  const wasAdminCall = !!(extraHeaders && extraHeaders.Authorization);
+  if (!wasAdminCall) return res;
+
+  // Tenta uma vez: invalida cache, re-minta, retry.
+  clearCachedAdminJwt();
+  const newJwt = await getOrIssueAdminJwt();
+  if (newJwt) {
+    const retryHeaders = {
+      ...jsonHeaders,
+      ...extraHeaders,
+      Authorization: `Bearer ${newJwt}`,
+    };
+    const retryRes = await fetch(url, { ...init, headers: retryHeaders });
+    if (retryRes.status !== 401 && retryRes.status !== 403) {
+      return retryRes;
+    }
+    // Retry também 401 — sessão genuinamente expirou (8h estourados ou
+    // backend rejeitou JWT novo).
+  }
+
+  // Mint falhou ou retry 401 — emite evento pro modal global. Retorna a
+  // response original (caller decide o que fazer).
+  emitSessionExpired();
+  return res;
 }
 
 // ── Campaign reads (públicas, usam short_token como ticket) ──────────────────
