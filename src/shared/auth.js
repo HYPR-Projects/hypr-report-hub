@@ -1,18 +1,19 @@
 /**
  * Auth helpers for the HYPR Report Center front-end.
  *
- * Three jobs:
+ * Três responsabilidades:
  *
- *  1. Persist the admin session (user + Google id_token) across page
- *     refreshes and tab restarts. Lives in localStorage with an 8h TTL
- *     so a refresh doesn't kick the user back to the login screen.
- *     The Google id_token itself expires in 1h (per its `exp` claim),
- *     so admin write actions may fail before the 8h are up — at which
- *     point the user is asked to log in again.
+ *  1. Persistir a sessão admin (user + Google id_token + admin JWT) entre
+ *     refreshes e fechamentos de aba. Vive no localStorage com TTL de 8h.
+ *     O admin JWT é persistido junto pra que o refresh da aba não force
+ *     re-mintar via id_token (que pode ter expirado e silent refresh
+ *     falhado em silêncio quando FedCM tá bloqueado).
  *
- *  2. Trade the id_token for a short-lived admin JWT via the backend
- *     endpoint `?action=issue_admin_token`. The custom JWT (5min TTL)
- *     is what we attach to admin write requests.
+ *  2. Trocar o id_token pelo admin JWT via `?action=issue_admin_token`
+ *     (backend faz com TTL 8h, ver backend/auth.py). Esse JWT é o que vai
+ *     no header `Authorization: Bearer` de toda call admin. Como o JWT
+ *     do backend dura 8h, depois do login inicial não dependemos mais do
+ *     id_token do Google (que dura ~1h).
  *
  *  3. Build `Authorization: Bearer <jwt>` headers and read the `?adm=`
  *     query param the menu sets when opening a report.
@@ -24,11 +25,11 @@
 
 import { API_URL } from "./config";
 
-// Sessão persiste 8h (jornada de trabalho) em localStorage para sobreviver
-// a refreshes e fechamentos de aba. O id_token do Google em si expira em 1h
-// (controlado pelo `exp` do JWT), então ações admin podem falhar antes das
-// 8h — nesse caso o backend rejeita e o usuário precisa relogar para
-// emitir novos JWTs admin.
+// Sessão persiste 8h (jornada de trabalho) em localStorage. Diferente do
+// modelo antigo, agora o admin JWT do backend (também 8h) é persistido
+// junto, então mesmo que o id_token do Google expire (1h) e o silent
+// refresh falhe (FedCM bloqueado, etc.), o usuário continua trabalhando
+// até a janela de 8h estourar.
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const LS_SESSION_KEY = "hypr.session";
 const LS_CLIENT_UNLOCK_PREFIX = "hypr.clientUnlock.";
@@ -36,13 +37,15 @@ const LS_CLIENT_UNLOCK_PREFIX = "hypr.clientUnlock.";
 // ─── Admin session persistence (localStorage, 8h TTL) ────────────────────────
 /**
  * Persiste user + Google id_token com TTL de 8h. Substitui o antigo
- * sessionStorage que morria com a aba.
+ * sessionStorage que morria com a aba. O admin JWT é persistido depois
+ * via `updateSessionAdminJwt()` (depois do primeiro mint via id_token).
  */
 export function saveSession(user, idToken) {
   try {
     const payload = {
       user,
       idToken,
+      adminJwt: null,
       expiresAt: Date.now() + SESSION_TTL_MS,
     };
     localStorage.setItem(LS_SESSION_KEY, JSON.stringify(payload));
@@ -52,14 +55,18 @@ export function saveSession(user, idToken) {
 }
 
 /**
- * Retorna { user, idToken } se a sessão está válida (não-expirada),
- * caso contrário null. Limpa automaticamente sessões expiradas.
+ * Retorna { user, idToken, adminJwt } se a sessão está válida
+ * (não-expirada), caso contrário null. Limpa automaticamente sessões
+ * expiradas.
  *
- * Valida duas expirações:
- *  1) Janela própria de 8h (`expiresAt`) — UX da app.
- *  2) `exp` do próprio id_token do Google (~1h) — sem isso o backend
- *     rejeita ações admin (incluindo listar campanhas), gerando UI
- *     fantasma de "0 campanhas". Se expirou, força relogin.
+ * Mudança vs versão anterior: NÃO derruba mais a sessão quando o
+ * id_token do Google expira (1h). O admin JWT persistido (8h, mintado
+ * pelo backend) é independente do id_token depois do login — então o
+ * usuário continua trabalhando mesmo se o silent refresh do Google
+ * tiver falhado. O id_token só importa pra (a) login inicial, (b)
+ * re-mintar admin JWT se o persistido expirou. Se o admin JWT também
+ * expirou e id_token também, o auto-retry em api.js dispara o modal
+ * de "sessão expirada".
  */
 export function loadSession() {
   try {
@@ -70,14 +77,11 @@ export function loadSession() {
       localStorage.removeItem(LS_SESSION_KEY);
       return null;
     }
-    if (parsed.idToken && isJwtExpired(parsed.idToken)) {
-      // id_token do Google venceu (TTL ~1h). Sem ele o backend não
-      // emite JWT admin e qualquer ação retorna 401. Limpa pra
-      // mandar o usuário pra tela de login.
-      localStorage.removeItem(LS_SESSION_KEY);
-      return null;
-    }
-    return { user: parsed.user || null, idToken: parsed.idToken || null };
+    return {
+      user: parsed.user || null,
+      idToken: parsed.idToken || null,
+      adminJwt: parsed.adminJwt || null,
+    };
   } catch {
     return null;
   }
@@ -109,6 +113,30 @@ export function updateSessionIdToken(idToken) {
       return;
     }
     parsed.idToken = idToken;
+    localStorage.setItem(LS_SESSION_KEY, JSON.stringify(parsed));
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Persiste o admin JWT mintado pelo backend dentro da sessão. Chamado
+ * por `getOrIssueAdminJwt()` depois de mintar com sucesso, pra que
+ * refresh da aba não perca o JWT (e não force re-mint via id_token,
+ * que pode ter expirado).
+ *
+ * No-op se não há sessão ou se a janela de 8h já expirou.
+ */
+export function updateSessionAdminJwt(adminJwt) {
+  try {
+    const raw = localStorage.getItem(LS_SESSION_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.expiresAt || Date.now() > parsed.expiresAt) {
+      localStorage.removeItem(LS_SESSION_KEY);
+      return;
+    }
+    parsed.adminJwt = adminJwt;
     localStorage.setItem(LS_SESSION_KEY, JSON.stringify(parsed));
   } catch {
     /* ignore */
@@ -213,30 +241,54 @@ export async function issueAdminJwt(googleIdToken) {
 }
 
 // ─── Cached JWT for the menu tab ─────────────────────────────────────────────
-// In-memory cache so a sequence of admin actions (save_logo, save_loom, etc)
-// in the same menu tab doesn't trigger a tokeninfo round-trip every time.
-// The cache is intentionally per-tab (lives in module scope, not storage)
-// to keep the JWT off disk.
+// Cache em memória pra que uma sequência de ações admin (save_logo,
+// save_loom, etc) na mesma aba não fique relendo localStorage. Backed por
+// localStorage (`hypr.session.adminJwt`) pra sobreviver a refresh da aba.
 let _cachedAdminJwt = null;
 let _cachedExpiryMs = 0;
-const _RENEW_BUFFER_MS = 30 * 1000; // renew 30s before actual expiry
+const _RENEW_BUFFER_MS = 60 * 1000; // re-minta 1min antes da expiração
+
+function _hydrateFromSession() {
+  // Lê o JWT persistido. Só hidrata cache se ainda válido (com buffer).
+  const session = loadSession();
+  if (!session?.adminJwt) return;
+  const payload = decodeJwtPayload(session.adminJwt);
+  const expMs = Number(payload?.exp || 0) * 1000;
+  if (expMs && Date.now() < expMs - _RENEW_BUFFER_MS) {
+    _cachedAdminJwt = session.adminJwt;
+    _cachedExpiryMs = expMs;
+  }
+}
 
 /**
  * Returns a valid admin JWT, minting a fresh one if needed.
- * Returns null if no Google id_token is in session or if the backend
- * doesn't support the endpoint yet.
+ *
+ * Ordem de busca:
+ *   1. Cache em memória (rápido, mesma aba)
+ *   2. localStorage via loadSession() (sobrevive refresh)
+ *   3. Mint via id_token + backend (último recurso, exige id_token válido)
+ *
+ * Returns null se nenhum dos caminhos resultar em JWT válido — o caller
+ * (tipicamente o wrapper apiFetch em api.js) trata como sessão expirada.
  */
 export async function getOrIssueAdminJwt() {
   if (_cachedAdminJwt && Date.now() < _cachedExpiryMs - _RENEW_BUFFER_MS) {
     return _cachedAdminJwt;
   }
+  // Cache em memória vazio ou expirado — tenta hidratar do localStorage.
+  _hydrateFromSession();
+  if (_cachedAdminJwt && Date.now() < _cachedExpiryMs - _RENEW_BUFFER_MS) {
+    return _cachedAdminJwt;
+  }
+  // localStorage vazio ou expirado — tenta mintar via id_token.
   const idToken = getGoogleIdToken();
   if (!idToken) return null;
   const issued = await issueAdminJwt(idToken);
   if (issued?.token) {
     _cachedAdminJwt = issued.token;
-    const ttlSec = Number(issued.ttl) || 300;
+    const ttlSec = Number(issued.ttl) || 8 * 60 * 60;
     _cachedExpiryMs = Date.now() + ttlSec * 1000;
+    updateSessionAdminJwt(issued.token);
     return _cachedAdminJwt;
   }
   return null;
@@ -245,6 +297,17 @@ export async function getOrIssueAdminJwt() {
 export function clearCachedAdminJwt() {
   _cachedAdminJwt = null;
   _cachedExpiryMs = 0;
+  // Também invalida o JWT persistido — chamado em logout e em 401 pra
+  // forçar re-mint na próxima call (não em cada 401, ver api.js).
+  try {
+    const raw = localStorage.getItem(LS_SESSION_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    parsed.adminJwt = null;
+    localStorage.setItem(LS_SESSION_KEY, JSON.stringify(parsed));
+  } catch {
+    /* ignore */
+  }
 }
 
 // ─── Read ?adm=<jwt> from current URL ────────────────────────────────────────
