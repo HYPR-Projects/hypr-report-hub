@@ -345,7 +345,6 @@ export function PerformerDrawer({ performer, displayName, onOpenReport, onClose 
 
 function PerformerDrawerInner({ performer, displayName, onOpenReport }) {
   const name = displayName || localPartFromEmail(performer.email);
-  const tone = scoreTone(performer.score);
   const bd = performer.breakdown;
   const teamAvg = performer.team_avg;
   const campaigns = performer.campaigns || [];
@@ -353,11 +352,15 @@ function PerformerDrawerInner({ performer, displayName, onOpenReport }) {
   // Top 5 campanhas por potencial (já vem ordenado de aggregation.js).
   const topGain = campaigns.filter((cd) => cd.potential > 0.5).slice(0, 5);
 
-  // "Perdendo X pts" = soma do max de cada categoria menos o score atual.
-  // Reflete quanto está deixando de ganhar no total.
-  const totalLost = bd
-    ? Math.max(0, (bd.max_pacing + bd.max_ecpm + bd.max_ctr + bd.max_vtr) - performer.score)
-    : 0;
+  // max_total dinâmico — campanhas só-video têm max ~45, só-display ~90.
+  // Usado pra normalizar a barra/pílula de score (scoreTone consome %) e
+  // pra exibir "X / max" em vez de "X / 100" hardcoded.
+  const maxTotal = bd ? (bd.max_pacing + bd.max_ecpm + bd.max_ctr + bd.max_vtr) : 100;
+  const scorePct = maxTotal > 0 ? (performer.score / maxTotal) * 100 : 0;
+  const tone = scoreTone(scorePct);
+
+  // "Perdendo X pts" = max realista menos score atual.
+  const totalLost = bd ? Math.max(0, maxTotal - performer.score) : 0;
 
   return (
     <>
@@ -375,7 +378,7 @@ function PerformerDrawerInner({ performer, displayName, onOpenReport }) {
               </div>
               <div className={cn("text-4xl font-bold tabular-nums leading-none mt-1", TEXT_TONE[tone])}>
                 {Math.round(performer.score)}
-                <span className="text-fg-subtle text-lg font-normal"> / 100</span>
+                <span className="text-fg-subtle text-lg font-normal"> / {Math.round(maxTotal)}</span>
               </div>
             </div>
             {totalLost > 0.5 && (
@@ -392,7 +395,7 @@ function PerformerDrawerInner({ performer, displayName, onOpenReport }) {
           <div className="h-2 rounded-full bg-surface-strong overflow-hidden">
             <div
               className={cn("h-full rounded-full transition-all duration-500", BAR_BG[tone])}
-              style={{ width: `${Math.max(2, performer.score)}%` }}
+              style={{ width: `${Math.max(2, scorePct)}%` }}
             />
           </div>
         </section>

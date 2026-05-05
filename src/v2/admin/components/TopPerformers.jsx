@@ -4,17 +4,15 @@
 // `layout === "performers"`. Mostra ranking de CS ou CP (toggle interno)
 // com métricas agregadas completas em cada linha.
 //
-// Score (0–100) vem de aggregation.js#computeTopPerformers e pondera por
-// formato (Display vs Video) com thresholds próprios. Quando a campanha
-// tem brand safety pre-bid (ABS) ativo numa mídia — DoubleVerify no DV360
-// ou DV/IAS no Xandr — os thresholds dessa mídia são mais permissivos
-// (inventário com pre-bid é estruturalmente mais caro):
-//   eCPM    Display < R$ 0,70 / R$ 1,50 ABS | Video < R$ 2,00 / R$ 4,00 ABS  (30 pts)
-//   CTR     Display > 0,6% / 0,5% ABS       | Video > 0,3% / 0,2% ABS       (25 pts)
-//   VTR     Video > 80%                                                     (10 pts)
-//   Pacing  100–125% gradiente                                              (35 pts)
-// Pontos por métrica = soma ponderada pelo share de impressões da campanha
-// em cada mídia (campanha 80% Display + 20% Video → DSP pesa 80% no score).
+// Score vem de aggregation.js#computeTopPerformers. Só Display contribui
+// pra eCPM/CTR; Video é avaliado apenas via Pacing + VTR. ABS torna os
+// thresholds Display mais permissivos (inventário com pre-bid é mais caro):
+//   eCPM    Display < R$ 0,70 / R$ 1,50 ABS  (30 pts × peso Display)
+//   CTR     Display > 0,7% / 0,5% ABS        (25 pts × peso Display)
+//   VTR     Video   > 80%                    (10 pts × peso Video)
+//   Pacing  100–125% gradiente               (35 pts, ponderado entre mídias)
+// Max teórico: 100% Display = 90 pts | 100% Video = 45 pts | 50/50 = 67.5.
+// Score normalizado pelo max_total da composição, frame "X / max" justo.
 //
 // Cada linha exibe:
 //   - rank · avatar (iniciais) · nome
@@ -144,11 +142,16 @@ function ScoreDelta({ current, previous }) {
 
 function PerformerRow({ rank, performer, displayName, scorePrev, onClick }) {
   const {
-    email, score, campaign_count, ideal_pacing_count,
+    email, score, breakdown: bd, campaign_count, ideal_pacing_count,
     dsp_pacing, vid_pacing, ctr, vtr, ecpm_avg,
   } = performer;
   const name = displayName || localPartFromEmail(email);
-  const tone = scoreTone(score);
+  // max_total dinâmico: campanhas só-video têm max ~45, só-display ~90.
+  // Score do CS é a média ponderada — então o max também é ponderado.
+  // scoreTone consome % (0-100) pra manter thresholds absolutos.
+  const maxTotal = bd ? (bd.max_pacing + bd.max_ecpm + bd.max_ctr + bd.max_vtr) : 100;
+  const scorePct = maxTotal > 0 ? (score / maxTotal) * 100 : 0;
+  const tone = scoreTone(scorePct);
   const initials = initialsFor(name);
 
   return (
@@ -195,7 +198,7 @@ function PerformerRow({ rank, performer, displayName, scorePrev, onClick }) {
         <div className="flex-1 h-1.5 rounded-full bg-surface-strong overflow-hidden">
           <div
             className={cn("h-full rounded-full transition-all duration-300", BAR_BG[tone])}
-            style={{ width: `${Math.max(2, score)}%` }}
+            style={{ width: `${Math.max(2, scorePct)}%` }}
           />
         </div>
         <div className="flex flex-col items-end gap-0.5 w-14">
@@ -204,6 +207,7 @@ function PerformerRow({ rank, performer, displayName, scorePrev, onClick }) {
             TEXT_TONE[tone]
           )}>
             {Math.round(score)}
+            <span className="text-fg-subtle text-[10px] font-normal">/{Math.round(maxTotal)}</span>
           </span>
           <ScoreDelta current={score} previous={scorePrev} />
         </div>
@@ -292,18 +296,20 @@ export function PerformersLayout({ campaigns, teamMap = {}, onOpenReport }) {
 
       {/* Legenda */}
       <p className="text-[11px] text-fg-subtle px-1 leading-relaxed">
-        Score (0–100) · Pacing 100–125% (35 pts) · eCPM Display &lt; R$ 0,70
-        (ABS R$ 1,50) / Video &lt; R$ 2,00 (ABS R$ 4,00) (30 pts) · CTR
-        Display &gt; 0,6% (ABS 0,5%) / Video &gt; 0,3% (ABS 0,2%) (25 pts) ·
-        VTR Video &gt; 80% (10 pts). Quando a campanha tem brand safety
-        pre-bid (ABS) ativo numa mídia — DoubleVerify no DV360 ou DV/IAS
-        no Xandr — os thresholds eCPM/CTR daquela mídia são mais permissivos. Pontos de cada métrica são ponderados pelo share de
-        impressões da campanha em cada mídia. Score do CS é a média
-        ponderada por impressões regredida à média do time via Empirical
-        Bayes — CSs com poucas campanhas convergem pra média do time pra
-        evitar viés de amostra pequena. Métricas exibidas
-        (Pacing/CTR/VTR/eCPM) são agregadas via Σnumerador / Σdenominador
-        sobre as campanhas ativas do owner.
+        Pacing 100–125% (35 pts, ponderado entre mídias) · eCPM Display
+        &lt; R$ 0,70 (ABS R$ 1,50) (30 pts × peso Display) · CTR Display
+        &gt; 0,7% (ABS 0,5%) (25 pts × peso Display) · VTR Video &gt; 80%
+        (10 pts × peso Video). Quando a campanha tem brand safety pre-bid
+        (ABS) ativo — DoubleVerify no DV360, DV/IAS no Xandr ou marcado
+        manualmente — os thresholds eCPM/CTR de Display ficam mais
+        permissivos. Video só contribui via Pacing e VTR — eCPM/CTR de
+        Video não pontuam. Max teórico varia por composição (100% Display
+        = 90 · 100% Video = 45 · 50/50 = 67.5); score é normalizado pelo
+        max da campanha. Score do CS é a média ponderada por impressões
+        regredida à média do time via Empirical Bayes — CSs com poucas
+        campanhas convergem pra média do time pra evitar viés de amostra
+        pequena. Métricas exibidas (Pacing/CTR/VTR/eCPM) são agregadas via
+        Σnumerador / Σdenominador sobre as campanhas ativas do owner.
       </p>
     </div>
   );
