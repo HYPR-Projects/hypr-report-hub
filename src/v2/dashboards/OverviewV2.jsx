@@ -88,6 +88,24 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt,
   const pacingDisplay = computeMediaPacing(display, camp, "DISPLAY", coreFilter);
   const pacingVideo   = computeMediaPacing(video,   camp, "VIDEO",   coreFilter);
 
+  // Breakdown por tactic (O2O/OOH) sob cada barra principal. Só faz
+  // sentido quando o filtro Core Product é "ALL" — caso contrário a barra
+  // principal já é da tactic única e o breakdown seria redundante. Por
+  // mídia, só renderiza quando ambas as tactics têm row (caso O2O-only
+  // ou OOH-only mantém visual atual, sem ruído).
+  const buildTacticSubBars = (rows, mediaType) => {
+    if (coreFilter !== "ALL") return null;
+    const o2oRows = rows.filter((r) => r.tactic_type === "O2O");
+    const oohRows = rows.filter((r) => r.tactic_type === "OOH");
+    if (o2oRows.length === 0 || oohRows.length === 0) return null;
+    return [
+      { label: "O2O", pacing: computeMediaPacing(o2oRows, camp, mediaType, "O2O") },
+      { label: "OOH", pacing: computeMediaPacing(oohRows, camp, mediaType, "OOH") },
+    ];
+  };
+  const displaySubBars = buildTacticSubBars(display, "DISPLAY");
+  const videoSubBars   = buildTacticSubBars(video,   "VIDEO");
+
   // Pacing Geral % — média ponderada por budget de Display + Video,
   // usando a mesma fórmula calendar-camp acima.
   const pacingGeral = computePacingGeral(display, video, camp, coreFilter);
@@ -219,6 +237,7 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt,
               pacing={pacingDisplay}
               budget={pickBudget(display[0], "display", coreFilter)}
               cost={display.reduce((s, r) => s + (r.effective_total_cost || 0), 0)}
+              subBars={displaySubBars}
             />
           )}
           {hasVideo && (
@@ -227,6 +246,7 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt,
               pacing={pacingVideo}
               budget={pickBudget(video[0], "video", coreFilter)}
               cost={video.reduce((s, r) => s + (r.effective_total_cost || 0), 0)}
+              subBars={videoSubBars}
             />
           )}
         </div>

@@ -49,9 +49,14 @@ export function PacingBarV2({
   budget,
   cost,
   label = "Pacing",
-  variant = "default", // "default" (card completo) | "compact" (sem card, só barra+label)
+  variant = "default", // "default" (card completo) | "compact" (sem card, só barra+label) | "sub" (linha minimal pra breakdown por tactic)
+  subBars = null, // [{label, pacing}, ...] opcional — renderiza breakdown indented abaixo do bar principal
 }) {
   if (pacing == null) return null;
+
+  if (variant === "sub") {
+    return <PacingSubBarRow label={label} pacing={pacing} />;
+  }
 
   const realPct = Number(pacing) || 0;
   const visiblePct = Math.min(realPct, 150);
@@ -115,6 +120,66 @@ export function PacingBarV2({
           Budget: <span className="text-fg font-semibold">{fmtR(budget)}</span>
         </span>
       </div>
+
+      {/* Breakdown por tactic (O2O/OOH) — só renderiza quando há mais de
+          uma frente. Cada sub-row é um PacingSubBarRow inline: label
+          curto + barra fina + %. Mantém o card único como container,
+          comunicando "esta é a quebra do pacing acima". */}
+      {subBars && subBars.length > 0 && (
+        <div className="mt-4 pt-3 border-t border-border/60 space-y-2">
+          {subBars.map((sub) => (
+            <PacingSubBarRow
+              key={sub.label}
+              label={sub.label}
+              pacing={sub.pacing}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Sub-row pro breakdown por tactic. Layout horizontal:
+// [LABEL ~36px] [bar flex-1 h-1.5] [% + over pill ~110px right-aligned]
+// Reusa pickColor pra cor da bar; over-segment seguindo a mesma lógica
+// da bar principal.
+function PacingSubBarRow({ label, pacing }) {
+  const realPct = Number(pacing) || 0;
+  const visiblePct = Math.min(realPct, 150);
+  const overPct = visiblePct > 100 ? visiblePct - 100 : 0;
+  const baseWidth = Math.min(visiblePct, 100);
+  const barColor = pickColor(visiblePct);
+  const labelColor = realPct > 100 ? palette.signature : barColor;
+
+  return (
+    <div className="flex items-center gap-3">
+      <span className="text-[10px] font-bold uppercase tracking-wider text-fg-subtle w-9 shrink-0">
+        {label}
+      </span>
+      <div className="relative h-1.5 rounded-full bg-track flex-1 overflow-hidden">
+        <div
+          className="absolute inset-y-0 left-0 rounded-full transition-[width] duration-500 ease-out"
+          style={{ width: `${baseWidth}%`, background: barColor }}
+        />
+        {overPct > 0 && (
+          <div
+            className="absolute inset-y-0 rounded-r-full transition-[width] duration-500 ease-out"
+            style={{
+              left: `${baseWidth}%`,
+              width: `${Math.min(overPct, 50)}%`,
+              background: palette.signature,
+            }}
+          />
+        )}
+      </div>
+      <span
+        className="text-[11px] font-bold tabular-nums whitespace-nowrap inline-flex items-center gap-1.5 justify-end"
+        style={{ color: labelColor }}
+      >
+        {fmt(realPct, 1)}%
+        <PacingOverPillV2 pacing={realPct} size="sm" />
+      </span>
     </div>
   );
 }
