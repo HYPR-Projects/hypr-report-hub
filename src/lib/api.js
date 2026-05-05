@@ -29,6 +29,7 @@ import {
   adminAuthHeaders,
   getOrIssueAdminJwt,
   clearCachedAdminJwt,
+  touchSession,
 } from "../shared/auth";
 import { emitSessionExpired } from "./sessionEvents";
 import { isDemoToken, buildDemoPayload, DEMO_TOKEN } from "../shared/demoData";
@@ -59,12 +60,18 @@ async function postJson(url, body, extraHeaders = {}) {
     headers: { ...jsonHeaders, ...extraHeaders },
     body: JSON.stringify(body),
   };
+  const wasAdminCall = !!(extraHeaders && extraHeaders.Authorization);
   const res = await fetch(url, init);
 
-  if (res.status !== 401 && res.status !== 403) return res;
+  if (res.status !== 401 && res.status !== 403) {
+    // Sliding window: cada call admin bem-sucedida estende a janela de
+    // 8h em hypr.session. Throttle interno em touchSession() evita
+    // escritas redundantes no localStorage.
+    if (wasAdminCall && res.ok) touchSession();
+    return res;
+  }
 
   // Não-admin (sem Authorization) → não tem o que retry, devolve como tá.
-  const wasAdminCall = !!(extraHeaders && extraHeaders.Authorization);
   if (!wasAdminCall) return res;
 
   // Tenta uma vez: invalida cache, re-minta, retry.
@@ -78,6 +85,7 @@ async function postJson(url, body, extraHeaders = {}) {
     };
     const retryRes = await fetch(url, { ...init, headers: retryHeaders });
     if (retryRes.status !== 401 && retryRes.status !== 403) {
+      if (retryRes.ok) touchSession();
       return retryRes;
     }
     // Retry também 401 — sessão genuinamente expirou (8h estourados ou

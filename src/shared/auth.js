@@ -96,6 +96,41 @@ export function clearSession() {
 }
 
 /**
+ * Sliding-window: estende `expiresAt` pra now + 8h. Chamado a cada call
+ * admin bem-sucedida (em api.js), com throttle interno pra não martelar
+ * o localStorage. Resultado: enquanto o user tiver atividade, a sessão
+ * nunca expira; quando largar a aba, a 8h conta normalmente.
+ *
+ * Throttle de 60s (em memória) — escritas no localStorage são baratas
+ * mas não-grátis, e ficar reescrevendo o mesmo blob a cada click é
+ * desnecessário. 1x por minuto é suficiente pra manter a janela viva.
+ *
+ * No-op se não há sessão (não cria sessão "do nada" — só estende uma
+ * existente).
+ */
+let _lastTouchMs = 0;
+const _TOUCH_THROTTLE_MS = 60 * 1000;
+export function touchSession() {
+  const now = Date.now();
+  if (now - _lastTouchMs < _TOUCH_THROTTLE_MS) return;
+  try {
+    const raw = localStorage.getItem(LS_SESSION_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.expiresAt) return;
+    if (now > parsed.expiresAt) {
+      // Já expirou — não estende, deixa loadSession() limpar na próxima leitura.
+      return;
+    }
+    parsed.expiresAt = now + SESSION_TTL_MS;
+    localStorage.setItem(LS_SESSION_KEY, JSON.stringify(parsed));
+    _lastTouchMs = now;
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
  * Atualiza apenas o `idToken` da sessão existente, preservando o
  * `expiresAt` original. Usado pelo refresh silencioso do Google: o
  * id_token novo (~1h de TTL) substitui o antigo, mas a janela de 8h
@@ -273,11 +308,13 @@ function _hydrateFromSession() {
  */
 export async function getOrIssueAdminJwt() {
   if (_cachedAdminJwt && Date.now() < _cachedExpiryMs - _RENEW_BUFFER_MS) {
+    touchSession();
     return _cachedAdminJwt;
   }
   // Cache em memória vazio ou expirado — tenta hidratar do localStorage.
   _hydrateFromSession();
   if (_cachedAdminJwt && Date.now() < _cachedExpiryMs - _RENEW_BUFFER_MS) {
+    touchSession();
     return _cachedAdminJwt;
   }
   // localStorage vazio ou expirado — tenta mintar via id_token.
@@ -289,6 +326,7 @@ export async function getOrIssueAdminJwt() {
     const ttlSec = Number(issued.ttl) || 8 * 60 * 60;
     _cachedExpiryMs = Date.now() + ttlSec * 1000;
     updateSessionAdminJwt(issued.token);
+    touchSession();
     return _cachedAdminJwt;
   }
   return null;
