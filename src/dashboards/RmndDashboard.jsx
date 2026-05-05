@@ -12,18 +12,23 @@
 // Layout (vertical, top → bottom):
 //   1. Header com range filter
 //   2. Hero KPI Vendas + 3 KPIs (Compras, Unidades, ATC) com sparklines
-//   3. Funil ATC → Compras
-//   4. 2 cards: Mix por canal (donut SP vs DSP) | CT vs VT split
-//   5. Tendência diária (stacked bar CT + VT + linha Compras)
-//   6. Top Produtos (tabela com ASIN + nome truncado)
-//   7. Tabela agregada por dia
+//   3. Funil ATC → Compras  (escondido quando ATC === 0 — sem
+//      adições não dá pra falar em conversão de carrinho)
+//   4. Tendência diária (Vendas/dia + linha de Compras)
+//   5. Top Produtos (tabela com ASIN + nome truncado)
+//   6. Tabela agregada por dia
+//
+// Splits que existiram em iteração anterior e foram removidos a pedido
+// do PO: "Mix por canal" (SP vs DSP) e "Vendas por origem" (CT × VT).
+// O dashboard NÃO expõe esses recortes — se voltar a fazer sentido,
+// reintroduzir em bloco próprio.
 //
 // Bases salvas no formato antigo (sem `format`) caem num banner pedindo
 // pra fazer upload do novo formato.
 
 import { useMemo, useState } from "react";
 import {
-  PieChart, Pie, Cell, ResponsiveContainer, Tooltip,
+  ResponsiveContainer, Tooltip,
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Legend,
 } from "recharts";
 import { fmt, fmtR, fmtCompact, fmtP2 } from "../shared/format";
@@ -134,18 +139,12 @@ function RmndV2Dashboard({ data, onClear, onEdit }) {
   const totals = useMemo(() => {
     const acc = {
       sales: 0, purchases: 0, units: 0, atc: 0,
-      ctSales: 0, vtSales: 0,
-      spSales: 0, dspSales: 0,
     };
     for (const r of rows) {
       acc.sales     += r.sales;
       acc.purchases += r.purchases;
       acc.units     += r.units;
       acc.atc       += r.atc;
-      acc.ctSales   += r.ctSales;
-      acc.vtSales   += r.vtSales;
-      if (r.adProduct === "Amazon DSP") acc.dspSales += r.sales;
-      else                               acc.spSales  += r.sales;
     }
     return acc;
   }, [rows]);
@@ -159,28 +158,19 @@ function RmndV2Dashboard({ data, onClear, onEdit }) {
     for (const r of rows) {
       let d = byDate.get(r.date);
       if (!d) {
-        d = { date: r.date, sales: 0, purchases: 0, units: 0, atc: 0, ctSales: 0, vtSales: 0 };
+        d = { date: r.date, sales: 0, purchases: 0, units: 0, atc: 0 };
         byDate.set(r.date, d);
       }
       d.sales     += r.sales;
       d.purchases += r.purchases;
       d.units     += r.units;
       d.atc       += r.atc;
-      d.ctSales   += r.ctSales;
-      d.vtSales   += r.vtSales;
     }
     return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
   }, [rows]);
 
   // Sparklines (últimos 14 pontos)
   const sparkLast = (key) => daily.slice(-14).map((d) => d[key] || 0);
-
-  // Mix por canal
-  const channelMix = useMemo(() => [
-    { name: "Sponsored Products", value: totals.spSales,  color: CH_COLORS.signature },
-    { name: "Amazon DSP",         value: totals.dspSales, color: CH_COLORS.signatureLight },
-  ], [totals]);
-  const totalChannel = channelMix.reduce((s, c) => s + c.value, 0);
 
   // Top produtos
   const topProducts = useMemo(() => {
@@ -204,9 +194,9 @@ function RmndV2Dashboard({ data, onClear, onEdit }) {
   const [showAllProducts, setShowAllProducts] = useState(false);
   const visibleProducts = showAllProducts ? topProducts : topProducts.slice(0, 10);
 
-  const ctVtTotal = totals.ctSales + totals.vtSales;
-  const ctPct = ctVtTotal > 0 ? (totals.ctSales / ctVtTotal) * 100 : 0;
-  const vtPct = ctVtTotal > 0 ? (totals.vtSales / ctVtTotal) * 100 : 0;
+  // Funil só faz sentido quando há ATC. Sem isso, "Compras/ATC" vira
+  // 0% mesmo com vendas — informação ruidosa.
+  const showFunnel = totals.atc > 0;
 
   return (
     <div className="space-y-6">
@@ -313,31 +303,25 @@ function RmndV2Dashboard({ data, onClear, onEdit }) {
             />
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <SoftStat label="Ticket Médio"      value={fmtR(avgTicket)} />
-            <SoftStat label="ATC → Compra"      value={fmtP2(atcToPurchaseRate)} />
-            <SoftStat label="Vendas via Clique" value={fmtR(totals.ctSales)} />
-            <SoftStat label="Vendas via Display" value={fmtR(totals.vtSales)} />
+          <div className="grid grid-cols-2 gap-3">
+            <SoftStat label="Ticket Médio" value={fmtR(avgTicket)} />
+            <SoftStat label="ATC → Compra" value={totals.atc > 0 ? fmtP2(atcToPurchaseRate) : "—"} />
           </div>
 
-          {/* ─── 2. Funil ───────────────────────────────────────────── */}
-          <FunnelCard atc={totals.atc} purchases={totals.purchases} units={totals.units} avgTicket={avgTicket} />
-
-          {/* ─── 3. Mix por canal + CT vs VT ────────────────────────── */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <ChannelMixCard data={channelMix} total={totalChannel} />
-            <CtVtSplitCard
-              ctSales={totals.ctSales}
-              vtSales={totals.vtSales}
-              ctPct={ctPct}
-              vtPct={vtPct}
+          {/* ─── 2. Funil (só com ATC > 0) ──────────────────────────── */}
+          {showFunnel && (
+            <FunnelCard
+              atc={totals.atc}
+              purchases={totals.purchases}
+              units={totals.units}
+              avgTicket={avgTicket}
             />
-          </div>
+          )}
 
-          {/* ─── 4. Tendência diária ────────────────────────────────── */}
+          {/* ─── 3. Tendência diária ────────────────────────────────── */}
           <DailyTrendCard daily={daily} />
 
-          {/* ─── 5. Top Produtos ────────────────────────────────────── */}
+          {/* ─── 4. Top Produtos ────────────────────────────────────── */}
           <TopProductsTable
             products={visibleProducts}
             totalCount={topProducts.length}
@@ -345,7 +329,7 @@ function RmndV2Dashboard({ data, onClear, onEdit }) {
             onToggle={() => setShowAllProducts((s) => !s)}
           />
 
-          {/* ─── 6. Tabela agregada por dia ─────────────────────────── */}
+          {/* ─── 5. Tabela agregada por dia ─────────────────────────── */}
           <DailyAggregateTable daily={daily} />
         </>
       )}
@@ -438,144 +422,18 @@ function FunnelArrow({ rate }) {
   );
 }
 
-// ─── Mix por canal (donut) ──────────────────────────────────────────────────
-function ChannelMixCard({ data, total }) {
-  const hasData = total > 0;
-  return (
-    <Card className="h-full">
-      <CardHeader title="Mix por canal" subtitle="Vendas R$ por tipo de mídia Amazon" />
-      <CardBody>
-        {!hasData ? (
-          <div className="text-sm text-fg-muted py-6 text-center">Sem vendas no período.</div>
-        ) : (
-          <div className="flex items-center gap-4">
-            <div className="w-36 h-36 shrink-0">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={data}
-                    dataKey="value"
-                    nameKey="name"
-                    innerRadius={42}
-                    outerRadius={64}
-                    paddingAngle={2}
-                    stroke="none"
-                  >
-                    {data.map((entry, i) => (
-                      <Cell key={i} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    contentStyle={{
-                      background: "var(--color-surface-2)",
-                      border: "1px solid var(--color-border-strong)",
-                      borderRadius: 8,
-                      fontSize: 12,
-                      color: CH_COLORS.fg,
-                    }}
-                    formatter={(value, name) => [fmtR(value), name]}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="flex-1 min-w-0 space-y-3">
-              {data.map((d) => {
-                const pct = total > 0 ? (d.value / total) * 100 : 0;
-                return (
-                  <div key={d.name}>
-                    <div className="flex items-center gap-2 text-xs text-fg mb-1">
-                      <span className="w-3 h-3 rounded-sm shrink-0" style={{ background: d.color }} />
-                      <span className="font-semibold truncate" title={d.name}>{d.name}</span>
-                      <span className="ml-auto tabular-nums font-bold text-fg-muted">{fmtP2(pct)}</span>
-                    </div>
-                    <div className="text-sm font-bold tabular-nums text-fg">{fmtR(d.value)}</div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-      </CardBody>
-    </Card>
-  );
-}
-
-// ─── CT vs VT ───────────────────────────────────────────────────────────────
-function CtVtSplitCard({ ctSales, vtSales, ctPct, vtPct }) {
-  const total = ctSales + vtSales;
-  return (
-    <Card className="h-full">
-      <CardHeader
-        title="Vendas por origem"
-        subtitle="Clique × visualização (halo do display)"
-      />
-      <CardBody>
-        {total === 0 ? (
-          <div className="text-sm text-fg-muted py-6 text-center">Sem vendas no período.</div>
-        ) : (
-          <>
-            <div className="flex h-10 rounded-lg overflow-hidden border border-border bg-surface">
-              <div
-                className="bg-signature flex items-center justify-end pr-3 text-xs font-bold text-on-signature transition-all"
-                style={{ width: `${Math.max(ctPct, 4)}%` }}
-                title={`Clique: ${fmtR(ctSales)}`}
-              >
-                {ctPct >= 8 ? `${fmtP2(ctPct)}` : ""}
-              </div>
-              <div
-                className="flex items-center justify-start pl-3 text-xs font-bold transition-all"
-                style={{
-                  width: `${Math.max(vtPct, 4)}%`,
-                  background: "var(--color-signature-light)",
-                  color: "var(--color-canvas)",
-                }}
-                title={`Visualização: ${fmtR(vtSales)}`}
-              >
-                {vtPct >= 8 ? `${fmtP2(vtPct)}` : ""}
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4 mt-4">
-              <div>
-                <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest font-bold text-fg-subtle mb-1">
-                  <span className="w-2 h-2 rounded-sm bg-signature" />
-                  Clique (CT)
-                </div>
-                <div className="text-lg font-bold tabular-nums text-fg">{fmtR(ctSales)}</div>
-                <div className="text-[11px] text-fg-muted mt-0.5">
-                  Quem clicou no anúncio e comprou.
-                </div>
-              </div>
-              <div>
-                <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest font-bold text-fg-subtle mb-1">
-                  <span className="w-2 h-2 rounded-sm" style={{ background: "var(--color-signature-light)" }} />
-                  Visualização (VT)
-                </div>
-                <div className="text-lg font-bold tabular-nums text-fg">{fmtR(vtSales)}</div>
-                <div className="text-[11px] text-fg-muted mt-0.5">
-                  Comprou após ver o anúncio sem clicar (efeito halo).
-                </div>
-              </div>
-            </div>
-          </>
-        )}
-      </CardBody>
-    </Card>
-  );
-}
-
 // ─── Tendência diária ───────────────────────────────────────────────────────
 function DailyTrendCard({ daily }) {
   const pretty = (d) => d.slice(5).split("-").reverse().join("/");
   const chartData = daily.map((d) => ({
     date: pretty(d.date),
     rawDate: d.date,
-    "Vendas via Clique": d.ctSales,
-    "Vendas via Display": d.vtSales,
+    Vendas: d.sales,
     Compras: d.purchases,
   }));
   return (
     <Card>
-      <CardHeader title="Tendência diária" subtitle="Vendas por origem (R$) e compras" />
+      <CardHeader title="Tendência diária" subtitle="Vendas (R$) e compras por dia" />
       <CardBody className="pl-2">
         <div className="w-full" style={{ height: 280 }}>
           <ResponsiveContainer width="100%" height="100%">
@@ -618,8 +476,7 @@ function DailyTrendCard({ daily }) {
                 wrapperStyle={{ fontSize: 11, paddingTop: 8 }}
                 iconType="square"
               />
-              <Bar yAxisId="left" dataKey="Vendas via Clique"   stackId="sales" fill={CH_COLORS.signature}      radius={[0, 0, 0, 0]} />
-              <Bar yAxisId="left" dataKey="Vendas via Display"  stackId="sales" fill={CH_COLORS.signatureLight} radius={[3, 3, 0, 0]} />
+              <Bar yAxisId="left" dataKey="Vendas" fill={CH_COLORS.signature} radius={[3, 3, 0, 0]} />
               <Line yAxisId="right" dataKey="Compras" type="monotone" stroke={CH_COLORS.warning} strokeWidth={2} dot={false} />
             </ComposedChart>
           </ResponsiveContainer>
@@ -708,8 +565,6 @@ function DailyAggregateTable({ daily }) {
                 <th className="px-4 py-3 text-right">Compras</th>
                 <th className="px-4 py-3 text-right">Unidades</th>
                 <th className="px-4 py-3 text-right">ATC</th>
-                <th className="px-4 py-3 text-right">Vendas Clique</th>
-                <th className="px-4 py-3 text-right">Vendas Display</th>
               </tr>
             </thead>
             <tbody>
@@ -720,8 +575,6 @@ function DailyAggregateTable({ daily }) {
                   <td className="px-4 py-3 text-right tabular-nums text-fg-muted">{fmt(d.purchases)}</td>
                   <td className="px-4 py-3 text-right tabular-nums text-fg-muted">{fmt(d.units)}</td>
                   <td className="px-4 py-3 text-right tabular-nums text-fg-muted">{fmt(d.atc)}</td>
-                  <td className="px-4 py-3 text-right tabular-nums text-fg-muted">{fmtR(d.ctSales)}</td>
-                  <td className="px-4 py-3 text-right tabular-nums text-fg-muted">{fmtR(d.vtSales)}</td>
                 </tr>
               ))}
             </tbody>
