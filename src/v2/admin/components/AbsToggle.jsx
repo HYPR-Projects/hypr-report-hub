@@ -19,7 +19,7 @@
 // Auto-save optimistic: o toggle muda visualmente na hora; save assíncrono
 // dispara em paralelo. Se falha, reverte e mostra erro inline.
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { cn } from "../../../ui/cn";
 import { getAbsOverride, saveAbsOverride } from "../../../lib/api";
 
@@ -36,12 +36,28 @@ const INFO_ICON = (
   </svg>
 );
 
+const CHECK_ICON = (
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M20 6 9 17l-5-5" />
+  </svg>
+);
+
+const SAVED_FLASH_MS = 2000;
+
 export function AbsToggle({ shortToken, autoDetected, onChange }) {
   const [loading, setLoading] = useState(true);
   const [overrideExists, setOverrideExists] = useState(false);
   const [overrideOn, setOverrideOn] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [justSaved, setJustSaved] = useState(false);
   const [error, setError] = useState(null);
+  const savedTimerRef = useRef(null);
+
+  useEffect(() => () => {
+    // Limpa timer pendente no unmount pra não setar state em componente
+    // já desmontado.
+    if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+  }, []);
 
   // Fetch inicial sempre — `autoDetected` da prop é OR, então só o GET diz
   // se o ON vem de sinal automático ou de override manual.
@@ -79,6 +95,12 @@ export function AbsToggle({ shortToken, autoDetected, onChange }) {
     setError(null);
     try {
       await saveAbsOverride({ short_token: shortToken, has_abs: next });
+      // Flash "Salvo ✓" inline por 2s — feedback claro sem toast/snackbar.
+      // Re-trigger limpa o timer anterior pra cliques rápidos não cortarem
+      // o flash do último save.
+      if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+      setJustSaved(true);
+      savedTimerRef.current = setTimeout(() => setJustSaved(false), SAVED_FLASH_MS);
       onChange?.(next);
     } catch (e) {
       // Reverte e expõe erro inline. Não usa toast pra não poluir — o erro
@@ -110,15 +132,21 @@ export function AbsToggle({ shortToken, autoDetected, onChange }) {
               {INFO_ICON}
             </span>
           </div>
-          {trulyAuto && (
-            <p className="text-[10.5px] text-fg-subtle mt-0.5">Detectado automaticamente</p>
-          )}
-          {!trulyAuto && overrideOn && (
-            <p className="text-[10.5px] text-fg-subtle mt-0.5">Marcado manualmente</p>
-          )}
-          {error && (
+          {/* Prioridade de label: erro > flash de salvo > origem do estado.
+              "Salvo" some sozinho após SAVED_FLASH_MS, retornando à label
+              de origem. */}
+          {error ? (
             <p className="text-[10.5px] text-danger mt-0.5">{error}</p>
-          )}
+          ) : justSaved ? (
+            <p className="text-[10.5px] text-success mt-0.5 flex items-center gap-1">
+              <span>{CHECK_ICON}</span>
+              <span>Salvo</span>
+            </p>
+          ) : trulyAuto ? (
+            <p className="text-[10.5px] text-fg-subtle mt-0.5">Detectado automaticamente</p>
+          ) : overrideOn ? (
+            <p className="text-[10.5px] text-fg-subtle mt-0.5">Marcado manualmente</p>
+          ) : null}
         </div>
         <Switch
           checked={isOn}
