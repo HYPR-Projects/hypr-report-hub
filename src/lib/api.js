@@ -29,6 +29,7 @@ import {
   adminAuthHeaders,
   getOrIssueAdminJwt,
   clearCachedAdminJwt,
+  loadSession,
   touchSession,
 } from "../shared/auth";
 import { emitSessionExpired } from "./sessionEvents";
@@ -60,19 +61,25 @@ async function postJson(url, body, extraHeaders = {}) {
     headers: { ...jsonHeaders, ...extraHeaders },
     body: JSON.stringify(body),
   };
-  const wasAdminCall = !!(extraHeaders && extraHeaders.Authorization);
+  const hasAuthHeader = !!(extraHeaders && extraHeaders.Authorization);
   const res = await fetch(url, init);
 
   if (res.status !== 401 && res.status !== 403) {
     // Sliding window: cada call admin bem-sucedida estende a janela de
     // 8h em hypr.session. Throttle interno em touchSession() evita
     // escritas redundantes no localStorage.
-    if (wasAdminCall && res.ok) touchSession();
+    if (hasAuthHeader && res.ok) touchSession();
     return res;
   }
 
-  // Não-admin (sem Authorization) → não tem o que retry, devolve como tá.
-  if (!wasAdminCall) return res;
+  // É call admin se o caller anexou Authorization OU se há sessão admin
+  // ativa (caso onde getOrIssueAdminJwt devolveu null em silêncio porque
+  // id_token expirou e mint falhou — adminAuthHeaders(null) então virou
+  // {} e o request foi sem header. Sem essa segunda checagem o 401 caía
+  // num caminho silencioso e a UX quebrava exatamente como o user
+  // reclamou).
+  const wasAdminAttempt = hasAuthHeader || !!loadSession();
+  if (!wasAdminAttempt) return res;
 
   // Tenta uma vez: invalida cache, re-minta, retry.
   clearCachedAdminJwt();
@@ -93,7 +100,7 @@ async function postJson(url, body, extraHeaders = {}) {
   }
 
   // Mint falhou ou retry 401 — emite evento pro modal global. Retorna a
-  // response original (caller decide o que fazer).
+  // response original (caller decide se trata).
   emitSessionExpired();
   return res;
 }

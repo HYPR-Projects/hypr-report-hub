@@ -283,6 +283,13 @@ let _cachedAdminJwt = null;
 let _cachedExpiryMs = 0;
 const _RENEW_BUFFER_MS = 60 * 1000; // re-minta 1min antes da expiração
 
+// Promise in-flight pra dedupe de mint concorrente. Sem isso, N calls
+// admin que 401am em paralelo (ex: 5 calls de uma listagem ao abrir a
+// página) cada uma chama issue_admin_token simultaneamente, e cada
+// chamada do backend faz round-trip pro tokeninfo do Google (50-150ms).
+// Resultado: 5 tokeninfo paralelos + 5 escritas race no localStorage.
+let _mintInFlight = null;
+
 function _hydrateFromSession() {
   // Lê o JWT persistido. Só hidrata cache se ainda válido (com buffer).
   const session = loadSession();
@@ -320,7 +327,15 @@ export async function getOrIssueAdminJwt() {
   // localStorage vazio ou expirado — tenta mintar via id_token.
   const idToken = getGoogleIdToken();
   if (!idToken) return null;
-  const issued = await issueAdminJwt(idToken);
+  // Dedup de mint concorrente: se já há um mint em voo, retorna o mesmo
+  // promise pra todos os callers em paralelo. Sem isso, N calls admin que
+  // 401am juntas geram N tokeninfo round-trips no backend.
+  if (!_mintInFlight) {
+    _mintInFlight = issueAdminJwt(idToken).finally(() => {
+      _mintInFlight = null;
+    });
+  }
+  const issued = await _mintInFlight;
   if (issued?.token) {
     _cachedAdminJwt = issued.token;
     const ttlSec = Number(issued.ttl) || 8 * 60 * 60;

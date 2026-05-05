@@ -134,8 +134,13 @@ function AppRoutes() {
       const p = decodeJwtPayload(res.credential);
       if (!p?.email?.endsWith("@hypr.mobi")) return;
       updateSessionIdToken(res.credential);
-      // Invalida o JWT admin em cache pra que a próxima ação use o id_token novo.
-      clearCachedAdminJwt();
+      // NÃO invalida o admin JWT em cache aqui. O admin JWT do backend
+      // (8h, HS256, ver backend/auth.py) é independente do id_token Google
+      // depois do mint inicial — o backend só revalida assinatura+exp do
+      // próprio JWT, não o id_token. Antes da TTL de 8h e da persistência
+      // em localStorage, o admin JWT vivia 30min e era invalidado aqui pra
+      // forçar re-mint com o id_token novo. Hoje isso só causa re-mint
+      // desnecessário a cada ~55min (jogando fora 7h+ de validade).
     }).then(scheduleNext).catch(() => {});
 
     return () => {
@@ -171,15 +176,15 @@ function AppRoutes() {
 
   // Bootstrap do adminJwt vindo da URL (`?adm=`). É o "primeiro JWT" da aba
   // de report — mintado pelo menu admin no momento de abrir o link. Tem TTL
-  // de 30min (ver backend/auth.py:JWT_TTL_SECONDS).
+  // de 8h (ver backend/auth.py:JWT_TTL_SECONDS).
   const adminJwtFromUrl = isClient ? getAdminJwtFromUrl() : null;
   const initialUrlJwtValid = !!adminJwtFromUrl && !isJwtExpired(adminJwtFromUrl);
 
   // `adminJwt` é state — começa com o JWT da URL (se válido) e é renovado em
-  // background via `getOrIssueAdminJwt()` enquanto o Google id_token (TTL 1h,
-  // refrescado pelo effect mais acima quando há `user`) estiver disponível no
-  // localStorage. Sem isso, deixar a aba de report aberta por mais de 30min
-  // gerava 401 silencioso na próxima ação admin (ex: "Conectar Google Sheets").
+  // background via `getOrIssueAdminJwt()` (que agora persiste em
+  // hypr.session.adminJwt e é independente do id_token Google após mint
+  // inicial). Cobre o caso de aba aberta por > 8h (TTL do JWT) sem cache em
+  // memória — antes, o user via "Não autorizado" no card de Google Sheets.
   const [adminJwt, setAdminJwt] = useState(() =>
     initialUrlJwtValid ? adminJwtFromUrl : null
   );
@@ -195,8 +200,10 @@ function AppRoutes() {
   //
   // Cobre o cenário: aba `/report/<token>?adm=<jwt>` aberta sem sessão admin
   // local (ex: link colado direto, ou aba que ficou aberta após o menu fechar).
-  // O JWT da URL expira em 30min; sem isso, o user vê "Não autorizado" no card
-  // de Google Sheets e em qualquer outra ação admin.
+  // O JWT da URL expira em 8h; sem isso, o user vê "Não autorizado" no card
+  // de Google Sheets e em qualquer outra ação admin. Em background tabs o
+  // setTimeout de horas é throttled pelo browser e pode não disparar — o
+  // auto-retry em api.js cobre na próxima ação do user.
   //
   // Estratégia: agendar refresh ~1min antes do `exp`. A renovação usa o Google
   // id_token do localStorage (cross-tab, TTL 8h da sessão; o id_token em si é
