@@ -252,6 +252,11 @@ PROJECT_ID      = os.environ.get("GCP_PROJECT",        "site-hypr")
 DATASET_HUB     = os.environ.get("BQ_DATASET_HUB",     "prod_prod_hypr_reporthub")
 TABLE           = os.environ.get("BQ_TABLE",            "campaign_results")
 DATASET_ASSETS  = "prod_assets"
+# Dataset do Sales Center — checklist rico (PI, peças, proposta, features,
+# volumes por feature, audiências, praças, etc). Adoção em curso: campanhas
+# antigas não estão lá. query_negotiation() devolve None nesse caso e o
+# front esconde o botão "Negociado".
+DATASET_SALES_CENTER = "hypr_sales_center"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Expressão SQL que deriva a tática pelo line_name, ignorando tactic_type da
@@ -1200,6 +1205,23 @@ def report_data(request):
         except Exception as e:
             logger.error(f"[ERROR get_comments] {e}")
             return (jsonify({"error": "Erro ao buscar comentários"}), 500, headers)
+
+    # ── Endpoint: buscar negociação (Sales Center) ───────────────────────────
+    # GET público — mesmo nível de acesso do report (quem tem o short_token,
+    # vê). Devolve o checklist comercial cadastrado no Sales Center, com PI,
+    # peças, proposta, features e volumes negociados. Devolve {"negotiation":
+    # null} quando a campanha não está cadastrada (legacy pre-Sales Center) —
+    # 200 OK pra o front esconder o botão sem precisar tratar erro.
+    if request.method == "GET" and request.args.get("action") == "get_negotiation":
+        short_token = (request.args.get("short_token") or request.args.get("token") or "").strip()
+        if not short_token:
+            return (jsonify({"error": "short_token é obrigatório"}), 400, headers)
+        try:
+            nego = query_negotiation(short_token)
+            return (jsonify({"negotiation": nego}), 200, headers)
+        except Exception as e:
+            logger.error(f"[ERROR get_negotiation] {e}")
+            return (jsonify({"error": "Erro ao buscar negociação"}), 500, headers)
 
     # ── Endpoint: salvar upload RMND/PDOOH ───────────────────────────────────
     if request.method == "POST" and request.args.get("action") == "save_upload":
@@ -2639,6 +2661,111 @@ def query_comments(short_token: str):
     except Exception as e:
         logger.warning(f"[WARN query_comments] {e}")
     return []
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Negotiation (Sales Center) — checklist comercial rico, fonte de verdade
+# do que foi vendido. Tabela `hypr_sales_center.checklists` traz:
+#   - Plano: investment, cpm, cpcv, formats[], products[], deal_dv360
+#   - Volumes: o2o_impressoes/views (+ bonus_*), feature_volumes (JSON)
+#   - Features ativadas: extras.cl_features (JSON), com fv_<f>_<m> volumes
+#   - Documentos: pi_link, pecas_link, proposta_link, ooh_link
+#   - Geo OOH: pracas_type/detail
+#   - Times: cp_name/email, cs_name/email, submitted_by(_email)
+#   - Audiências: campo livre `audiences`
+#   - Estudos usados: studies_used + extras.selected_studies
+#
+# Cobertura: campanhas pré-Sales Center não têm registro — devolvemos None
+# e o front esconde o botão. O `extras` JSON é desempacotado no front pra
+# extrair cl_features e parametrizar o card de features.
+# ─────────────────────────────────────────────────────────────────────────────
+def query_negotiation(short_token: str):
+    sql = f"""
+        SELECT
+            id,
+            cp_name, cp_email,
+            cs_name, cs_email,
+            agency, industry, campaign_type,
+            client, campaign_name,
+            start_date, end_date,
+            investment, cpm, cpcv,
+            deal_dv360, has_bonus, had_cs_meeting,
+            formats, products, marketplaces, features, studies_used,
+            o2o_impressoes, o2o_views,
+            bonus_o2o_impressoes, bonus_o2o_views,
+            ooh_link, audiences,
+            pracas_type, pracas_detail,
+            pi_link, pecas_link, proposta_link,
+            redirect_urls,
+            submitted_by, submitted_by_email,
+            TO_JSON_STRING(feature_volumes) AS feature_volumes_json,
+            TO_JSON_STRING(extras)          AS extras_json,
+            created_at,
+            short_token
+        FROM `{PROJECT_ID}.{DATASET_SALES_CENTER}.checklists`
+        WHERE short_token = @token
+        ORDER BY created_at DESC
+        LIMIT 1
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[bigquery.ScalarQueryParameter("token", "STRING", short_token)]
+    )
+    try:
+        rows = list(bq.query(sql, job_config=job_config).result())
+        if not rows:
+            return None
+        r = rows[0]
+        def _f(v):
+            return float(v) if v is not None else None
+        def _i(v):
+            return int(v) if v is not None else None
+        def _b(v):
+            return bool(v) if v is not None else None
+        return {
+            "id":                 r["id"],
+            "cp_name":            r["cp_name"],
+            "cp_email":           r["cp_email"],
+            "cs_name":            r["cs_name"],
+            "cs_email":           r["cs_email"],
+            "agency":             r["agency"],
+            "industry":           r["industry"],
+            "campaign_type":      r["campaign_type"],
+            "client":             r["client"],
+            "campaign_name":      r["campaign_name"],
+            "start_date":         str(r["start_date"]) if r["start_date"] else None,
+            "end_date":           str(r["end_date"])   if r["end_date"]   else None,
+            "investment":         _f(r["investment"]),
+            "cpm":                _f(r["cpm"]),
+            "cpcv":               _f(r["cpcv"]),
+            "deal_dv360":         _b(r["deal_dv360"]),
+            "has_bonus":          _b(r["has_bonus"]),
+            "had_cs_meeting":     _b(r["had_cs_meeting"]),
+            "formats":            list(r["formats"]      or []),
+            "products":           list(r["products"]     or []),
+            "marketplaces":       list(r["marketplaces"] or []),
+            "features":           list(r["features"]     or []),
+            "studies_used":       list(r["studies_used"] or []),
+            "o2o_impressoes":         _i(r["o2o_impressoes"]),
+            "o2o_views":              _i(r["o2o_views"]),
+            "bonus_o2o_impressoes":   _i(r["bonus_o2o_impressoes"]),
+            "bonus_o2o_views":        _i(r["bonus_o2o_views"]),
+            "ooh_link":           r["ooh_link"],
+            "audiences":          r["audiences"],
+            "pracas_type":        r["pracas_type"],
+            "pracas_detail":      r["pracas_detail"],
+            "pi_link":            r["pi_link"],
+            "pecas_link":         r["pecas_link"],
+            "proposta_link":      r["proposta_link"],
+            "redirect_urls":      list(r["redirect_urls"] or []),
+            "submitted_by":       r["submitted_by"],
+            "submitted_by_email": r["submitted_by_email"],
+            "feature_volumes":    r["feature_volumes_json"],
+            "extras":             r["extras_json"],
+            "created_at":         str(r["created_at"]) if r["created_at"] else None,
+            "short_token":        r["short_token"],
+        }
+    except Exception as e:
+        logger.warning(f"[WARN query_negotiation] {e}")
+    return None
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pacing — mesma fórmula da planilha:
