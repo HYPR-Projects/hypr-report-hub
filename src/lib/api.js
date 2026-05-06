@@ -623,6 +623,33 @@ export async function fetchTypeformViaProxy(formUrl, range = null) {
   return data;
 }
 
+// ── Negotiation (Sales Center) ───────────────────────────────────────────────
+
+/**
+ * Busca o checklist comercial cadastrado no Sales Center
+ * (`hypr_sales_center.checklists`). Mesmo nível de acesso do report —
+ * quem tem o short_token, vê. Retorna o objeto com PI, peças, proposta,
+ * features, volumes negociados e times responsáveis. Devolve null
+ * quando a campanha não está cadastrada (legacy pre-Sales Center) —
+ * caller deve esconder o botão "Negociado" nesse caso.
+ *
+ * Falha de rede também retorna null (silenciosa) — o botão só some,
+ * não polui UX com erro.
+ */
+export async function getNegotiation(short_token) {
+  if (!short_token || isDemoToken(short_token)) return null;
+  try {
+    const r = await fetch(
+      `${API_URL}?action=get_negotiation&short_token=${encodeURIComponent(short_token)}`,
+    );
+    if (!r.ok) return null;
+    const d = await r.json();
+    return d?.negotiation ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // ── Comments / chat ──────────────────────────────────────────────────────────
 
 /**

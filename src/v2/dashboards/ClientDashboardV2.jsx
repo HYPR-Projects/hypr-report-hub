@@ -499,6 +499,7 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
             currentView={view}
             onViewChange={setView}
             isBonusOnly={isBonusOnly}
+            legacyTotals={(data.totals || [])[0]}
           />
 
           {/* Tabs com filtro de período alinhado à direita.

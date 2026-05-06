@@ -13,9 +13,13 @@
 // claro contra canvas. O glow radial vem por inline style (gradient
 // arbitrário, não tem utility direta).
 
+import { useEffect, useState } from "react";
+
 import { useLogoAnalysis } from "../hooks/useLogoAnalysis";
 import { useTheme } from "../hooks/useTheme";
 import { TokenChip } from "../admin/components/TokenChip";
+import { NegotiationModal } from "./NegotiationModal";
+import { getNegotiation } from "../../lib/api";
 
 const fmtDateShort = (ymd) => {
   if (!ymd) return null;
@@ -65,12 +69,32 @@ export function CampaignHeaderV2({
   currentView = null,
   onViewChange,
   isBonusOnly = false,
+  // Totals legacy do checklist_info (data.totals[0]) — usado pelo
+  // NegotiationModal pra preencher OOH/Display/Video que o Sales Center
+  // não armazena em colunas próprias.
+  legacyTotals = null,
 }) {
   const status = deriveStatus(startDate, endDate);
   const start = fmtDateShort(startDate);
   const end = fmtDateShort(endDate);
   const days = daysBetween(startDate, endDate);
   const isMerged = !!mergeMeta;
+
+  // Negociação (Sales Center) — fetch lazy; o botão "Negociado" só aparece
+  // quando a campanha tem registro. `null` = ainda carregando ou ausente,
+  // sem distinção (botão escondido em ambos os casos).
+  const [negotiation, setNegotiation] = useState(null);
+  const [negoOpen, setNegoOpen] = useState(false);
+  useEffect(() => {
+    if (!shortToken) return;
+    let cancelled = false;
+    getNegotiation(shortToken).then((n) => {
+      if (!cancelled) setNegotiation(n);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [shortToken]);
 
   // Logo dinâmica entre temas com UMA única imagem
   // ──────────────────────────────────────────────
@@ -173,6 +197,12 @@ export function CampaignHeaderV2({
                 </span>
               </>
             )}
+            {negotiation && (
+              <>
+                <span className="text-fg-subtle">·</span>
+                <NegotiationButton onClick={() => setNegoOpen(true)} />
+              </>
+            )}
           </div>
 
           {/* Filtro de visão (Merge Reports) — pills com "Visão agregada"
@@ -229,7 +259,55 @@ export function CampaignHeaderV2({
           </div>
         )}
       </div>
+
+      <NegotiationModal
+        open={negoOpen}
+        onOpenChange={setNegoOpen}
+        negotiation={negotiation}
+        legacyTotals={legacyTotals}
+      />
     </section>
+  );
+}
+
+// Botão "Negociado" — chip signature com ícone de documento. Mesmo
+// padding/altura do token chip e da pílula de merge pra alinhar visualmente
+// na meta line. Aparece só quando a campanha tem registro no Sales Center.
+function NegotiationButton({ onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md cursor-pointer",
+        "bg-signature-soft border border-signature/40 text-signature",
+        "text-[11px] font-bold uppercase tracking-wider",
+        "hover:bg-signature/15 hover:border-signature/60 transition-colors",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signature focus-visible:ring-offset-2 focus-visible:ring-offset-surface-2",
+      ].join(" ")}
+      aria-label="Ver resumo da negociação"
+    >
+      <DocChipIcon className="size-3" />
+      Negociado
+    </button>
+  );
+}
+
+function DocChipIcon({ className }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 2 14 8 20 8" />
+    </svg>
   );
 }
 
