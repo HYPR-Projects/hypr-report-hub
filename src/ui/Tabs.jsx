@@ -41,11 +41,21 @@ export const TabsList = forwardRef(function TabsList(
     else if (ref) ref.current = el;
   };
 
+  // Scroll horizontal nativo quando os triggers estouram a largura
+  // disponível (caso típico em mobile com 6+ tabs). `inline-flex` mantém
+  // o tamanho intrínseco dos triggers (sem squeeze), `overflow-x-auto`
+  // libera o swipe horizontal, e `min-w-0` no parent permite shrink
+  // até a largura real disponível em vez de empurrar layout pra fora.
+  // O thumb absolute continua medindo o trigger ativo via MutationObserver
+  // — funciona dentro do scroll container sem ajustes.
+  //
+  // `scrollbar-thin-hidden` esconde a barra de scroll visível mas mantém
+  // o gesto disponível (UX padrão de tab bars mobile estilo iOS/Android).
   return (
     <RadixTabs.List
       ref={setRef}
       className={cn(
-        "relative inline-flex items-center",
+        "relative inline-flex items-center max-w-full overflow-x-auto scrollbar-hidden",
         variant === "underline"
           ? "gap-1 border-b border-border w-full md:w-auto"
           : "gap-1 p-1 rounded-lg bg-canvas-deeper border border-border",

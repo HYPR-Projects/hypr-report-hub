@@ -501,10 +501,14 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
             isBonusOnly={isBonusOnly}
           />
 
-          {/* Tabs com filtro de período alinhado à direita */}
+          {/* Tabs com filtro de período alinhado à direita.
+              Mobile: stack vertical — tabs em scroll horizontal full-width na 1ª
+              linha, filtros embaixo. Desktop: row única com filtros à direita.
+              border-b vai no container externo pra ficar contínuo entre tabs
+              e o espaço dos filtros (visual de tab bar única). */}
           <Tabs value={effectiveTab} onValueChange={setTab}>
-            <div className="flex items-end justify-between gap-4 flex-wrap border-b border-border">
-              <TabsList variant="underline" className="border-b-0">
+            <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3 md:gap-4 border-b border-border">
+              <TabsList variant="underline" className="border-b-0 -mx-4 md:mx-0 px-4 md:px-0">
                 <TabsTrigger value="overview" iconLeft={<GridIcon />}>
                   Visão Geral
                 </TabsTrigger>
@@ -573,8 +577,11 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
                   seus próprios toggles internos). E só renderiza quando a
                   campanha tem AS DUAS frentes (O2O + OOH); campanhas
                   mono-frente não precisam do filtro (1 opção é UI ruim e
-                  os dados já refletem a frente única). */}
-              <div className="pb-2 flex items-center gap-2">
+                  os dados já refletem a frente única).
+                  Mobile: filtros descem abaixo das tabs (flex-col no parent),
+                  flex-wrap permite que CoreProduct + DateRange quebrem em
+                  duas linhas se viewport for muito apertada. */}
+              <div className="pb-3 md:pb-2 flex items-center gap-2 flex-wrap">
                 {effectiveTab === "overview" && showCoreFilter && (
                   <CoreProductFilterV2
                     value={effectiveMainCore}

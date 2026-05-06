@@ -101,6 +101,9 @@ function formatPctTwo(value) {
 }
 
 function MicroMetric({ label, value, tone = "fg" }) {
+  // Divisor vertical só aparece quando a row vira layout horizontal (lg+),
+  // onde as 6 micro-métricas ficam lado-a-lado entre identidade e score.
+  // Em telas menores, a row quebra em stack e o divisor seria ruído.
   return (
     <div className="flex flex-col gap-1 min-w-0 lg:pl-3 lg:border-l lg:border-border/40 lg:first:border-l-0 lg:first:pl-0">
       <span className="text-[9px] uppercase tracking-widest font-bold text-fg-subtle whitespace-nowrap leading-none">
@@ -158,41 +161,75 @@ function PerformerRow({ rank, performer, displayName, scorePrev, onClick }) {
   const tone = scoreTone(scorePct);
   const initials = initialsFor(name);
 
+  // Layout responsivo:
+  //   • Mobile (<lg): empilha em duas linhas — identidade+score na 1ª, grid
+  //     de micro-métricas (3 colunas) na 2ª. Larguras fixas das colunas
+  //     desktop (w-[220px]/w-[200px]) eram a causa do overlap no mobile;
+  //     em flex-row sem gap suficiente, os 3 blocos brigavam pelo mesmo
+  //     espaço e o do meio era esmagado.
+  //   • Desktop (lg+): row única horizontal com identidade · 6 métricas · score.
   return (
     <div
       role="button"
       tabIndex={0}
       onClick={onClick}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick?.(); } }}
-      className="flex items-center gap-4 px-4 py-4 rounded-lg hover:bg-canvas-deeper transition-colors border-t border-border/40 first:border-t-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signature focus-visible:ring-offset-1"
+      className="flex flex-col lg:flex-row lg:items-center gap-3 lg:gap-4 px-3 lg:px-4 py-3 lg:py-4 rounded-lg hover:bg-canvas-deeper transition-colors border-t border-border/40 first:border-t-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signature focus-visible:ring-offset-1"
     >
-      <span className="text-[11px] font-bold text-fg-subtle tabular-nums w-5 text-center flex-shrink-0">
-        {rank}
-      </span>
-
-      {/* Identidade (col 1) */}
-      <div className="flex items-center gap-3 min-w-0 w-[220px] flex-shrink-0">
-        <span className="w-9 h-9 rounded-full bg-signature-soft text-signature font-bold text-xs flex items-center justify-center flex-shrink-0">
-          {initials}
+      {/* Linha 1 mobile (rank + identidade + score). Em desktop tudo
+          continua inline — o flex container pai vira lg:flex-row. */}
+      <div className="flex items-center gap-3 lg:contents">
+        <span className="text-[11px] font-bold text-fg-subtle tabular-nums w-5 text-center flex-shrink-0">
+          {rank}
         </span>
-        <div className="min-w-0 flex flex-col">
-          <span className="text-sm font-semibold text-fg truncate capitalize">
-            {name}
+
+        {/* Identidade — mobile flex-1 (ocupa o espaço entre rank e score),
+            desktop largura fixa pra alinhar colunas entre rows. */}
+        <div className="flex items-center gap-3 min-w-0 flex-1 lg:flex-none lg:w-[220px] lg:flex-shrink-0">
+          <span className="w-9 h-9 rounded-full bg-signature-soft text-signature font-bold text-xs flex items-center justify-center flex-shrink-0">
+            {initials}
           </span>
-          <span className="text-[11px] text-fg-subtle tabular-nums">
-            {campaign_count} ativa{campaign_count === 1 ? "" : "s"}
-            {ideal_pacing_count > 0 && (
-              <> · {ideal_pacing_count}/{campaign_count} ideal</>
-            )}
+          <div className="min-w-0 flex flex-col">
+            <span className="text-sm font-semibold text-fg truncate capitalize">
+              {name}
+            </span>
+            <span className="text-[11px] text-fg-subtle tabular-nums">
+              {campaign_count} ativa{campaign_count === 1 ? "" : "s"}
+              {ideal_pacing_count > 0 && (
+                <> · {ideal_pacing_count}/{campaign_count} ideal</>
+              )}
+            </span>
+          </div>
+        </div>
+
+        {/* Score mobile-compact (só número + delta, sem barra) à direita.
+            Em desktop, este bloco fica escondido — a versão completa com
+            barra renderiza depois das métricas (ver abaixo). */}
+        <div className="flex flex-col items-end gap-0.5 flex-shrink-0 lg:hidden">
+          <span className={cn(
+            "text-lg font-bold tabular-nums leading-none",
+            TEXT_TONE[tone]
+          )}>
+            {Math.round(score)}
+            <span className="text-fg-subtle text-[10px] font-normal">/{Math.round(maxTotal)}</span>
           </span>
+          <ScoreDelta current={score} previous={scorePrev} />
         </div>
       </div>
 
-      {/* Métricas agregadas (col 2 — flex grow). 6 colunas em desktop com
-          divisor vertical entre cada via border-l no MicroMetric. eCPM
-          Video sem cor condicional — não pontua mais no score, então
-          colorir confundiria. */}
-      <div className="flex-1 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-x-3 gap-y-2 min-w-0">
+      {/* Barra de score full-width no mobile (entre identidade e métricas).
+          Some no desktop — lá a barra fica junto do número (col score). */}
+      <div className="lg:hidden h-1.5 rounded-full bg-surface-strong overflow-hidden">
+        <div
+          className={cn("h-full rounded-full transition-all duration-300", BAR_BG[tone])}
+          style={{ width: `${Math.max(2, scorePct)}%` }}
+        />
+      </div>
+
+      {/* Métricas agregadas. Mobile: grid 3 cols (cabe Pacing DSP/VID/CTR
+          em uma linha, VTR/eCPM Disp/Vid na outra). Desktop: 6 cols
+          inline com divisor vertical (border-l no MicroMetric). */}
+      <div className="grid grid-cols-3 lg:flex-1 lg:grid-cols-6 gap-x-3 gap-y-2 min-w-0 pl-8 lg:pl-0">
         <MicroMetric label="Pacing DSP" value={formatPctInt(dsp_pacing)} tone={tonePacing(dsp_pacing)} />
         <MicroMetric label="Pacing VID" value={formatPctInt(vid_pacing)} tone={tonePacing(vid_pacing)} />
         <MicroMetric label="CTR"        value={formatPctTwo(ctr)}        tone={toneCtr(ctr)} />
@@ -201,8 +238,9 @@ function PerformerRow({ rank, performer, displayName, scorePrev, onClick }) {
         <MicroMetric label="eCPM Vid"   value={formatBRL(ecpmVideo)}     tone="fg" />
       </div>
 
-      {/* Score (col 3) */}
-      <div className="flex items-center gap-3 w-[200px] flex-shrink-0">
+      {/* Score desktop (barra + número juntos, à direita). Some no mobile
+          — versão compacta renderiza no header da row (ver acima). */}
+      <div className="hidden lg:flex items-center gap-3 w-[200px] flex-shrink-0">
         <div className="flex-1 h-1.5 rounded-full bg-surface-strong overflow-hidden">
           <div
             className={cn("h-full rounded-full transition-all duration-300", BAR_BG[tone])}
