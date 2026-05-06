@@ -49,7 +49,7 @@ export const TabsList = forwardRef(function TabsList(
   // O thumb absolute continua medindo o trigger ativo via MutationObserver
   // — funciona dentro do scroll container sem ajustes.
   //
-  // `scrollbar-thin-hidden` esconde a barra de scroll visível mas mantém
+  // `scrollbar-hidden` esconde a barra de scroll visível mas mantém
   // o gesto disponível (UX padrão de tab bars mobile estilo iOS/Android).
   return (
     <RadixTabs.List

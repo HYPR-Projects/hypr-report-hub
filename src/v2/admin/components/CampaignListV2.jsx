@@ -82,37 +82,37 @@ export function CampaignListV2({ campaigns, onOpen, onOpenReport, teamMap = {} }
   return (
     <div className="rounded-xl border border-border bg-surface overflow-hidden">
       <div className="overflow-x-auto scrollbar-hidden">
-      <div className="min-w-[720px]">
-      {/* Header */}
-      <div
-        className={cn(
-          "grid gap-2 px-4 py-2.5 bg-surface-strong border-b border-border",
-          "text-[10px] uppercase tracking-widest font-bold text-fg-subtle",
-          GRID
-        )}
-      >
-        <span></span>
-        <span>Cliente · Campanha</span>
-        <span>Período</span>
-        <span className="text-right">DSP Pac</span>
-        <span className="text-right">Vid Pac</span>
-        <span className="text-right">CTR</span>
-        <span className="text-right">VTR</span>
-        <span className="text-center">Owners</span>
-        <span></span>
-      </div>
+        <div className="min-w-[720px]">
+          {/* Header */}
+          <div
+            className={cn(
+              "grid gap-2 px-4 py-2.5 bg-surface-strong border-b border-border",
+              "text-[10px] uppercase tracking-widest font-bold text-fg-subtle",
+              GRID
+            )}
+          >
+            <span></span>
+            <span>Cliente · Campanha</span>
+            <span>Período</span>
+            <span className="text-right">DSP Pac</span>
+            <span className="text-right">Vid Pac</span>
+            <span className="text-right">CTR</span>
+            <span className="text-right">VTR</span>
+            <span className="text-center">Owners</span>
+            <span></span>
+          </div>
 
-      {/* Rows */}
-      {campaigns.map((c) => (
-        <Row
-          key={c.short_token}
-          campaign={c}
-          onOpen={onOpen}
-          onOpenReport={onOpenReport}
-          teamMap={teamMap}
-        />
-      ))}
-      </div>
+          {/* Rows */}
+          {campaigns.map((c) => (
+            <Row
+              key={c.short_token}
+              campaign={c}
+              onOpen={onOpen}
+              onOpenReport={onOpenReport}
+              teamMap={teamMap}
+            />
+          ))}
+        </div>
       </div>
     </div>
   );
