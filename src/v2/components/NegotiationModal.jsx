@@ -137,27 +137,70 @@ function buildLineHaystack(reportData) {
     .toLowerCase();
 }
 
+// Constrói lista de variantes pra grep flexível no line_name/creative_name.
+// Lida com:
+//   - separadores: "Tap to Go" → "tap_to_go", "taptogo", "tap-to-go"
+//   - prefixo família: "Tap to Scratch" → também "scratch" (sufixo isolado)
+//   - palavras significativas (≥4 chars): "Downloaded Apps" → "downloaded", "apps"
+//   - plurais: "Topics" → "topic", "Apps" → "app"
+//   - grafias alternativas: "Carrossel"/"Carroussel"/"Carousel" são equivalentes;
+//     "Downloaded"/"Download" idem
+//
+// Mín. 4 chars no sufixo isolado e palavras avulsas pra evitar falso positivo
+// com pedaços comuns ("go", "to", "of") que aparecem em naming não relacionado.
+function buildSearchVariants(featureName) {
+  const lower = featureName.toLowerCase().trim();
+  const out = new Set();
+  if (!lower) return [];
+
+  out.add(lower);
+  out.add(lower.replace(/\s+/g, "_"));
+  out.add(lower.replace(/\s+/g, ""));
+  out.add(lower.replace(/\s+/g, "-"));
+
+  // "Tap to X" → também "X" sozinho (com várias separações)
+  const stripTapTo = lower.replace(/^tap\s+to\s+/, "").trim();
+  if (stripTapTo !== lower && stripTapTo.length >= 4) {
+    out.add(stripTapTo);
+    out.add(stripTapTo.replace(/\s+/g, "_"));
+    out.add(stripTapTo.replace(/\s+/g, ""));
+    out.add(stripTapTo.replace(/\s+/g, "-"));
+  }
+
+  // Palavras avulsas significativas (≥4 chars)
+  for (const w of lower.split(/\s+/)) {
+    if (w.length >= 4) {
+      out.add(w);
+      if (w.endsWith("s")) out.add(w.slice(0, -1)); // plural simples
+    }
+  }
+
+  // Equivalências de grafia
+  if (/carro+u?ssel|carousel/.test(lower)) {
+    out.add("carrossel");
+    out.add("carroussel");
+    out.add("carousel");
+  }
+  if (lower.includes("download")) {
+    out.add("download");
+    out.add("downloaded");
+  }
+
+  return [...out];
+}
+
 function detectFeatureActive(featureName, reportData, haystack) {
   if (!reportData || !featureName) return false;
-  const lower = featureName.toLowerCase().trim();
 
   // Tier 1: feature tem slot dedicado no payload?
   for (const { match, key } of FEATURE_PAYLOAD_KEY) {
     if (match.test(featureName)) return !!reportData[key];
   }
 
-  // Tier 2: grep no haystack (line_name + creative_name).
+  // Tier 2: grep flexível no haystack (line_name + creative_name).
   if (!haystack) return false;
-  // Variantes pra cobrir convenções de naming:
-  //   "Tap to Go" → também "tap_to_go", "taptogo", "tapto_go"
-  const variants = new Set([
-    lower,
-    lower.replace(/\s+/g, "_"),
-    lower.replace(/\s+/g, ""),
-    lower.replace(/\s+/g, "-"),
-  ]);
-  for (const v of variants) {
-    if (v && haystack.includes(v)) return true;
+  for (const v of buildSearchVariants(featureName)) {
+    if (haystack.includes(v)) return true;
   }
   return false;
 }
