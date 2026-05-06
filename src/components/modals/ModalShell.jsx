@@ -32,14 +32,20 @@ const ModalShell = ({
   const bg  = theme?.modalBg  || C.dark2;
   const bdr = theme?.modalBdr || C.dark3;
 
+  // Padding responsivo: em mobile (<640px), reduz pra 24px (de 40 padrão)
+  // pra ganhar largura útil em viewport apertado. CSS clamp permite a
+  // transição suave sem media query inline. maxHeight cai pra 92vh em
+  // mobile (vs 100% raw) — deixa folga pra status bar/notch.
   const innerStyle = {
     background: bg,
     border: `1px solid ${bdr}`,
     borderRadius: 16,
-    padding,
+    padding: `clamp(20px, 5vw, ${padding}px)`,
     width: "100%",
     maxWidth,
-    ...(maxHeight ? { maxHeight, overflowY: "auto" } : null),
+    ...(maxHeight
+      ? { maxHeight: `min(${typeof maxHeight === "number" ? `${maxHeight}px` : maxHeight}, 92vh)`, overflowY: "auto" }
+      : null),
   };
 
   return (
@@ -49,10 +55,12 @@ const ModalShell = ({
         inset: 0,
         background: "#00000080",
         display: "flex",
+        // Mobile: alinha ao centro mas com `safe-area-inset` no padding
+        // pra não cobrir notch nem home indicator no iOS.
         alignItems: "center",
         justifyContent: "center",
         zIndex: 1000,
-        padding: 24,
+        padding: "max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left))",
       }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >

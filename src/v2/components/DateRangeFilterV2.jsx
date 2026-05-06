@@ -174,18 +174,37 @@ export function DateRangeFilterV2({
         <Popover.Content
           align="end"
           sideOffset={8}
+          // collisionPadding garante que o popover não cole nas bordas da
+          // viewport — Radix calcula reposicionamento automático em mobile.
+          collisionPadding={8}
           className={cn(
             "z-50 rounded-xl overflow-hidden border border-border bg-surface-2 shadow-2xl",
+            // Mobile: limita ao max possível dentro da viewport (com folga
+            // do collisionPadding). Desktop: tamanho natural do conteúdo.
+            "max-w-[calc(100vw-1rem)] sm:max-w-none",
             "animate-in fade-in-0 zoom-in-95",
             "data-[side=bottom]:slide-in-from-top-2",
           )}
         >
-          <div className="flex">
-            {/* ─── Coluna esquerda: presets verticais ─────────────── */}
+          {/* Mobile: stack vertical (presets em cima, calendar embaixo).
+              Desktop: row horizontal (presets ao lado do calendar). Os
+              presets ficam em row scrollable horizontal em mobile pra não
+              consumir altura demais (lista vertical com 7 itens × 36px =
+              252px só de presets, mais o calendar = popover com 600px+ de
+              altura). Em desktop mantém o layout vertical original. */}
+          <div className="flex flex-col md:flex-row">
+            {/* ─── Presets ───────────────────────────────────────── */}
             <div
               role="radiogroup"
               aria-label="Presets de período"
-              className="flex flex-col p-2 border-r border-border min-w-[180px]"
+              className={cn(
+                "p-2 border-b md:border-b-0 md:border-r border-border",
+                // Mobile: row horizontal scrollable (chips estilo iOS).
+                // Desktop: column vertical com largura fixa.
+                "flex md:flex-col gap-1 md:gap-0",
+                "overflow-x-auto md:overflow-x-visible scrollbar-hidden",
+                "md:min-w-[180px]",
+              )}
             >
               {presets.map((p) => {
                 const active = activePreset?.id === p.id;
@@ -197,8 +216,11 @@ export function DateRangeFilterV2({
                     aria-checked={active}
                     onClick={() => applyPreset(p)}
                     className={cn(
-                      "flex items-center justify-between text-left text-xs font-medium",
-                      "px-3 py-2 rounded-md",
+                      "flex items-center justify-between text-xs font-medium",
+                      // Mobile: pill compacto (whitespace-nowrap pra não
+                      // quebrar). Desktop: linha full-width.
+                      "whitespace-nowrap shrink-0 md:shrink",
+                      "px-3 py-2 rounded-md text-left",
                       "transition-colors duration-150 cursor-pointer",
                       "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signature",
                       active
@@ -207,14 +229,14 @@ export function DateRangeFilterV2({
                     )}
                   >
                     <span>{p.label}</span>
-                    {active && <CheckIcon className="size-3.5" />}
+                    {active && <CheckIcon className="size-3.5 hidden md:inline" />}
                   </button>
                 );
               })}
             </div>
 
-            {/* ─── Coluna direita: calendar ───────────────────────── */}
-            <div className="p-3">
+            {/* ─── Calendar ─────────────────────────────────────── */}
+            <div className="p-3 flex justify-center md:block">
               <div className="rdp-hypr">
                 <DayPicker
                   mode="range"
@@ -232,8 +254,8 @@ export function DateRangeFilterV2({
           </div>
 
           {/* ─── Footer: range atual + ações ──────────────────────── */}
-          <div className="flex items-center justify-between gap-3 px-4 py-3 border-t border-border bg-surface-2">
-            <div className="text-xs tabular-nums">
+          <div className="flex items-center justify-between gap-3 px-4 py-3 border-t border-border bg-surface-2 flex-wrap">
+            <div className="text-xs tabular-nums min-w-0">
               {draft?.from && draft?.to ? (
                 <span className="text-fg-muted">
                   <span className="text-fg font-semibold">{draftRangeLabel}</span>
@@ -245,7 +267,7 @@ export function DateRangeFilterV2({
                 </span>
               )}
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 ml-auto">
               <Button variant="ghost" size="sm" onClick={cancel}>
                 Cancelar
               </Button>
