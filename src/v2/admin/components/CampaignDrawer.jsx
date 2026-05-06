@@ -19,6 +19,7 @@ import { Button } from "../../../ui/Button";
 import { cn } from "../../../ui/cn";
 import { Avatar } from "../../../ui/Avatar";
 import { AbsToggle } from "./AbsToggle";
+import { TokenChip } from "./TokenChip";
 import {
   formatDateRange,
   formatPacingValue,
@@ -157,7 +158,19 @@ export function CampaignDrawer({
   return (
     <Drawer open={open} onOpenChange={onOpenChange}>
       <DrawerContent>
-        <DrawerHeader title={client_name} subtitle={`${campaign_name}  ·  ${short_token}`} />
+        <DrawerHeader
+          title={client_name}
+          subtitle={
+            <span className="inline-flex items-center gap-2 flex-wrap font-sans tracking-normal">
+              <span>{campaign_name}</span>
+              <TokenChip
+                token={short_token}
+                variant="report"
+                icon={<CircleIcon className="size-3" />}
+              />
+            </span>
+          }
+        />
         <DrawerBody>
           {/* Badge "agrupado" — sinaliza que ações como Loom/Logo/Survey
               continuam afetando ESTE token, mas o report público mostra
@@ -343,6 +356,25 @@ function Spinner() {
     <svg className="animate-spin" width="14" height="14" viewBox="0 0 24 24" fill="none">
       <circle cx="12" cy="12" r="10" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2.5" />
       <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+// Mesmo ícone de leading do TokenChip no header do report — círculo com
+// linha vertical dentro. Usado quando o chip aparece em headers (drawer
+// admin, report público) pra reforçar a leitura "info da campanha".
+function CircleIcon({ className }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 8v4M12 16h.01" />
     </svg>
   );
 }
