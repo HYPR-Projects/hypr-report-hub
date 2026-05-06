@@ -338,7 +338,7 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt,
           </h2>
           <div className={`grid grid-cols-1 gap-3 ${chartDisplay.length > 0 && chartVideo.length > 0 ? "lg:grid-cols-2" : ""}`}>
             {chartDisplay.length > 0 && (
-              <div className="rounded-xl border border-border bg-surface p-5">
+              <div className="rounded-xl border border-border bg-surface p-4 md:p-5">
                 <div className="text-[11px] font-bold uppercase tracking-widest text-signature mb-3">
                   Display — Imp. Visíveis × CTR
                 </div>
@@ -353,7 +353,7 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt,
               </div>
             )}
             {chartVideo.length > 0 && (
-              <div className="rounded-xl border border-border bg-surface p-5">
+              <div className="rounded-xl border border-border bg-surface p-4 md:p-5">
                 <div className="text-[11px] font-bold uppercase tracking-widest text-signature mb-3">
                   Video — Views 100% × VTR
                 </div>

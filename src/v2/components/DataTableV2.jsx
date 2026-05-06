@@ -111,7 +111,11 @@ export function DataTableV2({ detail, campaignName }) {
         </Button>
       </div>
 
-      <div className="overflow-auto max-h-[640px] rounded-lg border border-border bg-surface-2">
+      {/* Mobile: max-h 480px (~60% viewport iPhone padrão) — evita que a
+          tabela ocupe a tela inteira e prenda o scroll. Desktop mantém
+          640px (mockup original). overflow-auto cobre x (16 colunas
+          estouram) e y (até ROW_LIMIT linhas). */}
+      <div className="overflow-auto max-h-[480px] sm:max-h-[640px] rounded-lg border border-border bg-surface-2">
         <table className="w-full text-sm border-collapse">
           <thead className="sticky top-0 z-10">
             <tr>

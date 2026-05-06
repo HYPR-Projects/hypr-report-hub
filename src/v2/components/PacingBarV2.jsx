@@ -69,10 +69,12 @@ export function PacingBarV2({
   const barColor = pickColor(visiblePct);
   const labelColor = realPct > 100 ? palette.signature : barColor;
 
+  // Padding mobile-first: px-4/py-4 em mobile (ganha ~8px de chart útil),
+  // px-5/py-5 em sm+ (mockup desktop).
   const wrapperClass =
     variant === "compact"
       ? "flex flex-col gap-2"
-      : "rounded-xl border border-border bg-surface px-5 py-5";
+      : "rounded-xl border border-border bg-surface px-4 py-4 sm:px-5 sm:py-5";
 
   return (
     <div className={wrapperClass}>
