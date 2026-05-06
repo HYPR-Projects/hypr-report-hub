@@ -174,8 +174,12 @@ export function CampaignCardV2({
           • Desktop (md+): row horizontal com colunas dedicadas e dividers
             verticais (UX original — operação faz scan vertical). */}
       <div className="flex flex-col md:flex-row md:items-stretch gap-3 md:gap-4 px-4 md:px-5 py-3.5">
-        {/* ── Marca + campanha + datas ─────────────────────────────── */}
-        <div className="min-w-0 flex-1 self-center">
+        {/* ── Marca + campanha + datas ───────────────────────────────
+            self-center vale só pra desktop (flex-row, eixo cruzado é vertical).
+            No mobile (flex-col), self-center colapsava a largura horizontal e
+            jogava o texto pro centro do card — texto fica esquerda alinhado
+            via stretch default. */}
+        <div className="min-w-0 flex-1 md:self-center">
           <div className="flex items-center gap-2 flex-wrap">
             <h3 className="text-[15px] font-bold text-fg tracking-tight truncate leading-none">
               {client_name}
@@ -282,9 +286,10 @@ export function CampaignCardV2({
         <Divider />
 
         {/* ── Owners (slot fixo) + CTA (min-w fixo) ──────────────────
-            Mobile: occupy full row (justify-between) abaixo dos KPIs.
+            Mobile: ocupa a row toda (justify-between distribui avatares
+            à esquerda e CTA à direita) abaixo dos KPIs.
             Desktop: shrink-fit ao final da row horizontal. */}
-        <div className="flex items-center gap-3 shrink-0 self-center justify-between md:justify-start">
+        <div className="flex items-center gap-3 md:shrink-0 md:self-center justify-between md:justify-start">
           {/* Slot fixo 44px com justify-end: vazio, 1 ou 2 avatares,
            *  o botão fica sempre no mesmo X. Mobile sempre mostra (UX
            *  consistente com desktop). */}
