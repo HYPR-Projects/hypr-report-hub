@@ -54,19 +54,25 @@ const TONE_CLASS = {
 };
 
 function MetricCard({ label, value, tone = "fg", footer }) {
+  // Padding e tipografia mobile-first: cards em 2 colunas a 375px ficam
+  // ~165px de largura — `text-2xl` (24px) ainda cabe pra valores curtos
+  // ("165,1k", "R$ 14,40"), mas `whitespace-nowrap` no footer estoura
+  // quando MetricDelta carrega "▼ 12.4% vs últimas 30d" (~150px).
+  // Solução: footer permite quebrar linha em mobile (default), nowrap
+  // só em md+ onde temos largura sobrando.
   return (
-    <div className="rounded-xl border border-border bg-surface px-4 py-5 flex flex-col gap-2 min-w-0">
+    <div className="rounded-xl border border-border bg-surface px-3.5 py-4 sm:px-4 sm:py-5 flex flex-col gap-2 min-w-0">
       <span className="text-[10px] uppercase tracking-widest font-bold text-fg-subtle whitespace-nowrap">
         {label}
       </span>
       <span className={cn(
-        "text-2xl font-bold tracking-tight tabular-nums leading-none whitespace-nowrap",
+        "text-xl sm:text-2xl font-bold tracking-tight tabular-nums leading-none whitespace-nowrap",
         TONE_CLASS[tone] || TONE_CLASS.fg
       )}>
         {value}
       </span>
       {footer && (
-        <div className="text-[11px] text-fg-subtle whitespace-nowrap leading-none">
+        <div className="text-[11px] text-fg-subtle leading-snug md:leading-none md:whitespace-nowrap">
           {footer}
         </div>
       )}

@@ -67,7 +67,9 @@ export function HeroKpiCardV2({
         className="pointer-events-none absolute -top-1/2 -right-[10%] w-[60%] h-[200%]"
         style={{ background: glowGradient }}
       />
-      <CardBody className="relative p-6 flex flex-col gap-3">
+      {/* Padding mobile menor (p-5) pra ganhar espaço pro número grande,
+          mantendo p-6 em sm+ pra preservar peso visual de hero. */}
+      <CardBody className="relative p-5 sm:p-6 flex flex-col gap-3">
         <div
           className={cn(
             "flex items-center gap-2 text-[11px] font-bold uppercase tracking-widest",
@@ -78,10 +80,16 @@ export function HeroKpiCardV2({
           {label}
         </div>
 
-        <div className="font-bold text-fg leading-none tabular-nums text-4xl md:text-5xl">
+        {/* Tipografia escalada por breakpoint:
+              mobile (375px) — text-3xl (30px): "R$ 184.220" cabe em ~250px
+              sm    (640px+)  — text-4xl (36px)
+              md    (768px+)  — text-5xl (48px) — mockup desktop
+            break-words evita overflow horizontal quando o número é maior
+            que o card (ex: "R$ 1.184.220" em mobile estreito). */}
+        <div className="font-bold text-fg leading-none tabular-nums text-3xl sm:text-4xl md:text-5xl break-words">
           {value}
           {cents && (
-            <span className="text-2xl md:text-3xl font-bold opacity-70">{cents}</span>
+            <span className="text-xl sm:text-2xl md:text-3xl font-bold opacity-70">{cents}</span>
           )}
         </div>
 
@@ -89,7 +97,10 @@ export function HeroKpiCardV2({
           <div className="text-xs text-fg-muted -mt-1">{caption}</div>
         )}
 
-        <div className="flex items-center gap-3 mt-1">
+        {/* Delta + sparkline. Em mobile estreito o sparkline pode ficar
+            apertado entre delta e borda — flex-wrap deixa quebrar pra
+            linha de baixo se necessário, sem cortar nenhum dos dois. */}
+        <div className="flex items-center gap-3 mt-1 flex-wrap">
           {hasDelta && (
             <span
               className={cn(
@@ -114,7 +125,7 @@ export function HeroKpiCardV2({
               stroke={sparklineColor}
               width={200}
               height={28}
-              className="flex-1 max-w-[260px] opacity-80"
+              className="flex-1 min-w-[120px] max-w-[260px] opacity-80"
               ariaLabel={`Tendência ${label}`}
             />
           )}

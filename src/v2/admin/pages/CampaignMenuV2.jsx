@@ -568,7 +568,7 @@ export default function CampaignMenuV2({ user, onLogout, onOpenReport, onOpenCli
     <div className="min-h-screen w-full bg-canvas text-fg transition-colors">
       {/* ── Topbar ──────────────────────────────────────────────────────── */}
       <header className="sticky top-0 z-30 bg-canvas-elevated border-b border-border">
-        <div className="max-w-[1400px] mx-auto px-6 h-16 flex items-center justify-between">
+        <div className="max-w-[1400px] mx-auto px-4 md:px-6 h-16 flex items-center justify-between gap-3">
           <button
             type="button"
             onClick={() => {
@@ -576,26 +576,26 @@ export default function CampaignMenuV2({ user, onLogout, onOpenReport, onOpenCli
               setActiveWorklist(null);
               if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
             }}
-            className="flex items-center text-fg cursor-pointer rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signature focus-visible:ring-offset-2 focus-visible:ring-offset-canvas-elevated"
+            className="flex items-center text-fg cursor-pointer rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signature focus-visible:ring-offset-2 focus-visible:ring-offset-canvas-elevated min-w-0"
             aria-label="Voltar para visão por mês"
             title="Voltar para visão por mês"
           >
             <HyprReportCenterLogo height={32} />
           </button>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 md:gap-3">
             <ThemeToggleV2 />
             {user?.picture && (
               <img
                 src={user.picture}
                 alt=""
                 referrerPolicy="no-referrer"
-                className="w-7 h-7 rounded-full ring-2 ring-signature"
+                className="w-7 h-7 rounded-full ring-2 ring-signature shrink-0"
               />
             )}
-            <span className="text-xs text-fg-muted hidden sm:inline">{user?.name}</span>
+            <span className="text-xs text-fg-muted hidden md:inline truncate max-w-[180px]">{user?.name}</span>
             <button
               onClick={onLogout}
-              className="text-xs text-fg-muted hover:text-fg px-3 h-8 rounded-md border border-border hover:bg-surface transition-colors"
+              className="text-xs text-fg-muted hover:text-fg px-3 h-9 md:h-8 rounded-md border border-border hover:bg-surface transition-colors shrink-0"
             >
               Sair
             </button>
@@ -604,7 +604,7 @@ export default function CampaignMenuV2({ user, onLogout, onOpenReport, onOpenCli
       </header>
 
       {/* ── Conteúdo ─────────────────────────────────────────────────────── */}
-      <main className="max-w-[1400px] mx-auto px-6 py-8">
+      <main className="max-w-[1400px] mx-auto px-4 md:px-6 py-6 md:py-8">
         {/* Hero: título + Novo Report */}
         <div className="flex items-end justify-between gap-4 flex-wrap mb-6">
           <div>

@@ -72,8 +72,17 @@ export function CampaignListV2({ campaigns, onOpen, onOpenReport, teamMap = {} }
     );
   }
 
+  // Mobile: a lista densa tem 388px de larguras fixas + 2 colunas fr,
+  // estourando viewport <430px. Em vez de redesenhar a lista pra mobile
+  // (perderia a UX de scan rápido), envolvemos o grid num scroll horizontal.
+  // O caller fica do lado de fora (border-radius preservado), e dentro do
+  // wrapper o min-w-[720px] força o grid a ficar legível independente do
+  // viewport — touch swipe horizontal é UX padrão pra tabelas densas em
+  // mobile (Linear, Notion, Stripe Dashboard fazem assim).
   return (
     <div className="rounded-xl border border-border bg-surface overflow-hidden">
+      <div className="overflow-x-auto scrollbar-hidden">
+      <div className="min-w-[720px]">
       {/* Header */}
       <div
         className={cn(
@@ -103,6 +112,8 @@ export function CampaignListV2({ campaigns, onOpen, onOpenReport, teamMap = {} }
           teamMap={teamMap}
         />
       ))}
+      </div>
+      </div>
     </div>
   );
 }

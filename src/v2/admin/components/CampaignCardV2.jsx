@@ -165,7 +165,15 @@ export function CampaignCardV2({
         />
       )}
 
-      <div className="flex items-stretch gap-4 px-5 py-3.5">
+      {/* Layout responsivo:
+          • Mobile (<md): coluna única — header (marca/campanha/datas) +
+            mini-grid de KPIs em 2 cols (DSP/VID/CTR/VTR) + footer (avatares
+            + CTA). Sem dividers verticais (eles seriam horizontais e
+            poluiriam). Pacing/CTR/VTR ficam visíveis pro user identificar
+            saúde da campanha sem precisar abrir drawer.
+          • Desktop (md+): row horizontal com colunas dedicadas e dividers
+            verticais (UX original — operação faz scan vertical). */}
+      <div className="flex flex-col md:flex-row md:items-stretch gap-3 md:gap-4 px-4 md:px-5 py-3.5">
         {/* ── Marca + campanha + datas ─────────────────────────────── */}
         <div className="min-w-0 flex-1 self-center">
           <div className="flex items-center gap-2 flex-wrap">
@@ -189,6 +197,28 @@ export function CampaignCardV2({
             {formatDateRange(start_date, end_date)}
           </p>
         </div>
+
+        {/* ── KPIs mobile (visível só <md) ──────────────────────────────
+            Mini-grid 2 cols com DSP/VID em coluna esquerda e CTR/VTR em
+            coluna direita. Em campanha encerrada, mostra cinza pra não
+            chamar atenção. Quando todos os pacings são null, esconde
+            o bloco inteiro (campanha brand-new sem dados ainda). */}
+        {!ended && (display_pacing != null || video_pacing != null || display_ctr != null || video_vtr != null) && (
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 md:hidden border-t border-border/60 pt-3">
+            <PacingRow label="DSP" pacing={display_pacing} ended={ended} />
+            <ResultRow
+              label="CTR"
+              value={display_ctr != null ? formatPct(display_ctr, 2) : null}
+              colorClass={display_ctr != null ? ctrColorClass(display_ctr) : "text-fg-subtle"}
+            />
+            <PacingRow label="VID" pacing={video_pacing} ended={ended} />
+            <ResultRow
+              label="VTR"
+              value={video_vtr != null ? formatPct(video_vtr, 1) : null}
+              colorClass={video_vtr != null ? vtrColorClass(video_vtr) : "text-fg-subtle"}
+            />
+          </div>
+        )}
 
         <Divider />
 
@@ -251,11 +281,14 @@ export function CampaignCardV2({
 
         <Divider />
 
-        {/* ── Owners (slot fixo) + CTA (min-w fixo) ────────────────── */}
-        <div className="flex items-center gap-3 shrink-0 self-center">
+        {/* ── Owners (slot fixo) + CTA (min-w fixo) ──────────────────
+            Mobile: occupy full row (justify-between) abaixo dos KPIs.
+            Desktop: shrink-fit ao final da row horizontal. */}
+        <div className="flex items-center gap-3 shrink-0 self-center justify-between md:justify-start">
           {/* Slot fixo 44px com justify-end: vazio, 1 ou 2 avatares,
-           *  o botão fica sempre no mesmo X. */}
-          <div className="hidden sm:flex w-11 justify-end items-center">
+           *  o botão fica sempre no mesmo X. Mobile sempre mostra (UX
+           *  consistente com desktop). */}
+          <div className="flex w-11 justify-start md:justify-end items-center">
             {cpName && <Avatar name={cpName} role="cp" size="sm" title={`CP: ${cpName}`} />}
             {csName && <Avatar name={csName} role="cs" size="sm" className={cpName ? "-ml-1.5" : ""} title={`CS: ${csName}`} />}
           </div>
@@ -266,7 +299,7 @@ export function CampaignCardV2({
               onOpenReport?.(short_token);
             }}
             className={cn(
-              "inline-flex items-center justify-center gap-1 h-8 px-3 rounded-md text-xs font-semibold cursor-pointer",
+              "inline-flex items-center justify-center gap-1 h-9 md:h-8 px-3 rounded-md text-xs font-semibold cursor-pointer",
               "min-w-[108px] transition-colors",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signature focus-visible:ring-offset-2 focus-visible:ring-offset-canvas",
               ended

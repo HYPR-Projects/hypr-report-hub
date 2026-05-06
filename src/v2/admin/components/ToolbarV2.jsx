@@ -69,10 +69,12 @@ export function ToolbarV2({
         />
       )}
 
-      {/* Sort dropdown — escondido se sortOptions não vier (ex: layout=performers) */}
+      {/* Sort dropdown — escondido se sortOptions não vier (ex: layout=performers).
+          Em mobile o label "Ordenar" some pra preservar espaço — o ícone
+          de ordenação dentro do select já comunica a função. */}
       {sortGroups && (
         <div className="flex items-center gap-2">
-          <span className="text-[10px] uppercase tracking-widest font-bold text-fg-subtle">
+          <span className="hidden sm:inline text-[10px] uppercase tracking-widest font-bold text-fg-subtle">
             Ordenar
           </span>
           <div className="relative">
