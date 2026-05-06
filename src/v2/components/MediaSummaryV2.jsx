@@ -157,10 +157,17 @@ export function MediaSummaryV2({ type, rows, compact = false }) {
     <Card>
       <CardBody className="p-0">
         {/* Header com border-bottom ancorando o card */}
-        <div className="px-5 py-3 border-b border-border">
+        <div className="px-5 py-3 border-b border-border flex items-center justify-between gap-3">
           <div className="text-[12px] font-medium text-fg-muted">
             {isDisplay ? "Display" : "Video"}
           </div>
+          <span
+            className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-surface-strong text-[11px] tabular-nums text-fg-muted whitespace-nowrap"
+            title="Custo efetivo total entregue até o momento nesta mídia (O2O + OOH)."
+          >
+            <span className="text-[10px] uppercase tracking-wider">Investido</span>
+            <span className="font-semibold text-fg">{fmtR(totals.cost)}</span>
+          </span>
         </div>
 
         {/* Strip: N colunas iguais com dividers verticais em desktop;
