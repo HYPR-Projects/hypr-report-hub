@@ -766,8 +766,8 @@ export default function CampaignMenuV2({ user, onLogout, onOpenReport, onOpenCli
           setMergeModal(c);
           handleCloseDrawer();
         }}
-        onNegotiation={(c, n) => {
-          setNegotiationModal({ short_token: c.short_token, negotiation: n });
+        onNegotiation={(c, n, rd) => {
+          setNegotiationModal({ short_token: c.short_token, negotiation: n, reportData: rd });
           handleCloseDrawer();
         }}
         onAbsChange={handleAbsSaved}
@@ -849,6 +849,7 @@ export default function CampaignMenuV2({ user, onLogout, onOpenReport, onOpenCli
         negotiationsByToken={negotiationModal ? { [negotiationModal.short_token]: negotiationModal.negotiation } : {}}
         members={negotiationModal ? [{ short_token: negotiationModal.short_token }] : []}
         defaultActiveToken={negotiationModal?.short_token}
+        reportData={negotiationModal?.reportData}
       />
     </div>
   );

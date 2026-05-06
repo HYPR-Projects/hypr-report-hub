@@ -538,8 +538,8 @@ export default function ClientDetailPage({ slug, user, onLogout, onBack, onOpenR
           setMergeModal(c);
           setDrawerCampaign(null);
         }}
-        onNegotiation={(c, n) => {
-          setNegotiationModal({ short_token: c.short_token, negotiation: n });
+        onNegotiation={(c, n, rd) => {
+          setNegotiationModal({ short_token: c.short_token, negotiation: n, reportData: rd });
           setDrawerCampaign(null);
         }}
         onAbsChange={handleAbsSaved}
@@ -594,6 +594,7 @@ export default function ClientDetailPage({ slug, user, onLogout, onBack, onOpenR
         negotiationsByToken={negotiationModal ? { [negotiationModal.short_token]: negotiationModal.negotiation } : {}}
         members={negotiationModal ? [{ short_token: negotiationModal.short_token }] : []}
         defaultActiveToken={negotiationModal?.short_token}
+        reportData={negotiationModal?.reportData}
       />
     </div>
   );

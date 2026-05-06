@@ -21,7 +21,7 @@ import { cn } from "../../../ui/cn";
 import { Avatar } from "../../../ui/Avatar";
 import { AbsToggle } from "./AbsToggle";
 import { TokenChip } from "./TokenChip";
-import { getNegotiation } from "../../../lib/api";
+import { getNegotiation, getCampaign } from "../../../lib/api";
 import {
   formatDateRange,
   formatPacingValue,
@@ -129,17 +129,51 @@ export function CampaignDrawer({
   // Mesmo padrão do CampaignHeaderV2 do report.
   const drawerToken = campaign?.short_token;
   const [negotiation, setNegotiation] = useState(null);
+  // reportData é necessário pro modal detectar features/táticas como
+  // "Ativado" vs "Pendente". Sem ele, badges sempre caem em pendente
+  // (mesma checagem usa totals/detail por tactic_type). Fetch só dispara
+  // depois que confirmamos que há negociação — não paga BigQuery à toa.
+  const [reportData, setReportData] = useState(null);
+  const [negoBusy, setNegoBusy] = useState(false);
   useEffect(() => {
     if (!open || !drawerToken) {
       setNegotiation(null);
+      setReportData(null);
       return;
     }
     let cancelled = false;
     getNegotiation(drawerToken).then((n) => {
-      if (!cancelled) setNegotiation(n);
+      if (cancelled) return;
+      setNegotiation(n);
+      if (!n) return;
+      // pré-carrega reportData em background pra que o click em
+      // "Ver Negociado" abra o modal já com badges Ativado/Pendente
+      // corretas. Falha silenciosa cai em null e modal abre mesmo assim.
+      getCampaign(drawerToken)
+        .then((d) => { if (!cancelled) setReportData(d); })
+        .catch(() => { if (!cancelled) setReportData(null); });
     });
     return () => { cancelled = true; };
   }, [open, drawerToken]);
+
+  const handleNegoClick = async () => {
+    if (!negotiation) return;
+    if (reportData) {
+      onNegotiation?.(campaign, negotiation, reportData);
+      return;
+    }
+    // Fallback: pré-fetch ainda em andamento — espera resolver pra abrir
+    // modal com dados completos.
+    setNegoBusy(true);
+    try {
+      const d = await getCampaign(drawerToken);
+      onNegotiation?.(campaign, negotiation, d);
+    } catch {
+      onNegotiation?.(campaign, negotiation, null);
+    } finally {
+      setNegoBusy(false);
+    }
+  };
   if (!campaign) {
     return (
       <Drawer open={open} onOpenChange={onOpenChange}>
@@ -281,10 +315,11 @@ export function CampaignDrawer({
             <ActionButton icon={ICON.owner}  label="Gerenciar owner (CP/CS)" onClick={() => onOwner?.(campaign)} />
             {negotiation && (
               <ActionButton
-                icon={ICON.nego}
-                label="Ver Negociado"
+                icon={negoBusy ? <Spinner /> : ICON.nego}
+                label={negoBusy ? "Carregando dados..." : "Ver Negociado"}
                 variant="highlight"
-                onClick={() => onNegotiation?.(campaign, negotiation)}
+                disabled={negoBusy}
+                onClick={handleNegoClick}
               />
             )}
             <ActionButton
