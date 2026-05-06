@@ -141,7 +141,7 @@ export function NegotiationModal({ open, onOpenChange, negotiation, legacyTotals
           )}
         >
           <NegotiationHeader negotiation={negotiation} />
-          <div className="flex-1 overflow-y-auto px-6 md:px-8 pb-8 pt-2 space-y-7">
+          <div className="flex-1 overflow-y-auto px-6 md:px-8 pb-8 pt-6 space-y-6">
             <CommercialPlan negotiation={negotiation} />
             <FormatsAndProducts negotiation={negotiation} />
             <Volumes negotiation={negotiation} legacyTotals={legacyTotals} extras={extras} />
@@ -396,44 +396,67 @@ function FeaturesGrid({ features }) {
   if (!features.length) return null;
   return (
     <Section title="Features ativadas">
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 items-stretch">
         {features.map((f) => (
-          <div
-            key={f.name}
-            className="rounded-lg border border-border bg-surface-2 px-3.5 py-3 flex flex-col gap-1.5"
-          >
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm font-semibold text-fg truncate">{f.name}</span>
-              {f.type && (
-                <span
-                  className={cn(
-                    "text-[9.5px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded",
-                    f.type === "bonificada"
-                      ? "bg-warning-soft text-warning border border-warning/30"
-                      : "bg-signature-soft text-signature border border-signature/30",
-                  )}
-                >
-                  {f.type}
-                </span>
-              )}
-            </div>
-            {f.volumes.length > 0 && (
-              <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11.5px] text-fg-muted">
-                {f.volumes.map((v) => (
-                  <span key={v.metric} className="tabular-nums">
-                    <span className="text-fg-subtle">{v.metric}:</span>{" "}
-                    <span className="font-medium text-fg">{fmtNum(Number(v.value)) || v.value}</span>
-                  </span>
-                ))}
-              </div>
-            )}
-            {f.text && (
-              <p className="text-[11.5px] text-fg-subtle leading-relaxed">{f.text}</p>
-            )}
-          </div>
+          <FeatureCard key={f.name} feature={f} />
         ))}
       </div>
     </Section>
+  );
+}
+
+function FeatureCard({ feature: f }) {
+  // `ftext_<feature>` ocasionalmente carrega URL (ex: link da Survey).
+  // Detectamos e renderizamos como link clicável com `break-all` pra
+  // não estourar a largura do card. Texto comum vai num <p> normal.
+  const textIsLink = f.text && /^https?:\/\//i.test(f.text.trim());
+  return (
+    <div className="h-full rounded-xl border border-border bg-surface-2 px-4 py-3.5 flex flex-col gap-2">
+      <div className="flex items-start justify-between gap-2">
+        <span className="text-sm font-semibold text-fg leading-tight">{f.name}</span>
+        {f.type && (
+          <span
+            className={cn(
+              "shrink-0 text-[9.5px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded",
+              f.type === "bonificada"
+                ? "bg-warning-soft text-warning border border-warning/30"
+                : "bg-signature-soft text-signature border border-signature/30",
+            )}
+          >
+            {f.type}
+          </span>
+        )}
+      </div>
+      {f.volumes.length > 0 && (
+        <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11.5px] text-fg-muted">
+          {f.volumes.map((v) => (
+            <span key={v.metric} className="tabular-nums">
+              <span className="text-fg-subtle">{v.metric}:</span>{" "}
+              <span className="font-medium text-fg">{fmtNum(Number(v.value)) || v.value}</span>
+            </span>
+          ))}
+        </div>
+      )}
+      {f.text && textIsLink && (
+        <a
+          href={f.text.trim()}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={cn(
+            "inline-flex items-center gap-1.5 self-start mt-auto",
+            "text-[11px] font-semibold text-signature hover:text-signature-hover",
+            "underline decoration-signature/40 hover:decoration-signature underline-offset-2",
+            "transition-colors max-w-full break-all",
+          )}
+        >
+          <ExternalLinkIcon className="size-3 shrink-0" />
+          <span className="truncate">Abrir link</span>
+        </a>
+      )}
+      {f.text && !textIsLink && (
+        <p className="text-[11.5px] text-fg-subtle leading-relaxed break-words">{f.text}</p>
+      )}
+    </div>
   );
 }
 
@@ -475,7 +498,7 @@ function Pracas({ negotiation, extras }) {
 
   return (
     <Section title="Praças">
-      <div className="rounded-lg border border-border bg-surface-2 px-4 py-3 space-y-2 text-[13px]">
+      <div className="rounded-xl border border-border bg-surface-2 px-4 py-3.5 space-y-2 text-[13px]">
         {type && (
           <Row label="Cobertura" value={type} />
         )}
@@ -524,7 +547,7 @@ function Studies({ studies }) {
             target="_blank"
             rel="noopener noreferrer"
             className={cn(
-              "block rounded-lg border border-border bg-surface-2 px-4 py-3",
+              "block rounded-xl border border-border bg-surface-2 px-4 py-3.5",
               "hover:border-signature/50 hover:bg-surface-3 transition-colors group",
             )}
           >
@@ -598,7 +621,7 @@ function Documents({ negotiation }) {
     if (negotiation.pi_link && !isLink(negotiation.pi_link)) {
       return (
         <Section title="Documentos">
-          <div className="rounded-lg border border-border bg-surface-2 px-4 py-3 text-[13px] text-fg-muted">
+          <div className="rounded-xl border border-border bg-surface-2 px-4 py-3.5 text-[13px] text-fg-muted">
             <span className="text-fg-subtle mr-2">PI:</span>
             <span className="font-semibold text-fg uppercase tracking-wide text-xs">
               {negotiation.pi_link}
@@ -612,7 +635,7 @@ function Documents({ negotiation }) {
 
   return (
     <Section title="Documentos">
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
         {docs.map((d) => (
           <a
             key={d.label}
@@ -620,7 +643,7 @@ function Documents({ negotiation }) {
             target="_blank"
             rel="noopener noreferrer"
             className={cn(
-              "flex items-center gap-3 rounded-lg border border-border bg-surface-2 px-4 py-3",
+              "flex items-center gap-3 rounded-xl border border-border bg-surface-2 px-4 py-3.5",
               "hover:border-signature/50 hover:bg-surface-3 transition-colors group",
             )}
           >
@@ -664,7 +687,7 @@ function People({ negotiation }) {
 
   return (
     <Section title="Time">
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
         {cp && <Person role="CP / Vendedor" name={negotiation.cp_name} email={negotiation.cp_email} />}
         {cs && <Person role="CS" name={negotiation.cs_name} email={negotiation.cs_email} />}
         {submitter && submitter !== cp && submitter !== cs && (
@@ -679,7 +702,7 @@ function Person({ role, name, email }) {
   const display = name || email || "—";
   const initial = (display.match(/\S/) || ["?"])[0].toUpperCase();
   return (
-    <div className="rounded-lg border border-border bg-surface-2 px-3.5 py-3 flex items-center gap-3">
+    <div className="rounded-xl border border-border bg-surface-2 px-4 py-3.5 flex items-center gap-3">
       <span
         className={cn(
           "shrink-0 inline-flex items-center justify-center size-9 rounded-full",
