@@ -51,6 +51,10 @@ export function PacingBarV2({
   label = "Pacing",
   variant = "default", // "default" (card completo) | "compact" (sem card, só barra+label) | "sub" (linha minimal pra breakdown por tactic)
   subBars = null, // [{label, pacing}, ...] opcional — renderiza breakdown indented abaixo do bar principal
+  // Em campanhas bonificadas, "Investido R$ 0,00 / Budget R$ 0,00" não diz
+  // nada. Quando este prop está setado, o footer troca pra "Entregue / Meta"
+  // em volume (impressões ou views), que é o que importa numa cortesia.
+  bonusFooter = null, // { delivered, target, unit: "imp" | "views" } | null
 }) {
   if (pacing == null) return null;
 
@@ -111,14 +115,33 @@ export function PacingBarV2({
         </div>
       </div>
 
-      {/* Footer: investido / budget */}
+      {/* Footer: investido / budget — ou volume entregue/meta em bonificada */}
       <div className="flex justify-between mt-3 text-[11px] text-fg-muted tabular-nums">
-        <span>
-          Investido: <span className="text-fg font-semibold">{fmtR(cost)}</span>
-        </span>
-        <span>
-          Budget: <span className="text-fg font-semibold">{fmtR(budget)}</span>
-        </span>
+        {bonusFooter ? (
+          <>
+            <span>
+              Entregue:{" "}
+              <span className="text-fg font-semibold">
+                {fmt(bonusFooter.delivered)} {bonusFooter.unit}
+              </span>
+            </span>
+            <span>
+              Meta bonificada:{" "}
+              <span className="text-fg font-semibold">
+                {fmt(bonusFooter.target)} {bonusFooter.unit}
+              </span>
+            </span>
+          </>
+        ) : (
+          <>
+            <span>
+              Investido: <span className="text-fg font-semibold">{fmtR(cost)}</span>
+            </span>
+            <span>
+              Budget: <span className="text-fg font-semibold">{fmtR(budget)}</span>
+            </span>
+          </>
+        )}
       </div>
 
       {/* Breakdown por tactic (O2O/OOH) — só renderiza quando há mais de
