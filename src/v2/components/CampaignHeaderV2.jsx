@@ -63,6 +63,7 @@ export function CampaignHeaderV2({
   mergeMeta = null,
   currentView = null,
   onViewChange,
+  isBonusOnly = false,
 }) {
   const status = deriveStatus(startDate, endDate);
   const start = fmtDateShort(startDate);
@@ -122,6 +123,12 @@ export function CampaignHeaderV2({
               <>
                 <span className="text-fg-subtle text-xs" aria-hidden>·</span>
                 <StatusPill status={status} />
+              </>
+            )}
+            {isBonusOnly && (
+              <>
+                <span className="text-fg-subtle text-xs" aria-hidden>·</span>
+                <BonusPill />
               </>
             )}
           </div>
@@ -236,6 +243,44 @@ function StatusPill({ status }) {
       <span className={`size-1.5 rounded-full ${dotClass}`} aria-hidden />
       {status.label}
     </span>
+  );
+}
+
+// Selo pra campanhas 100% bonificadas (cortesia HYPR). Usa o token
+// warning (#EDD900 dourado) pra carregar a conotação de "presente" sem
+// puxar uma cor nova. Pílula sólida pra contrastar com a StatusPill
+// (que é discreta com dot+texto) — bonificada é uma característica que
+// merece destaque, não uma nuance.
+function BonusPill() {
+  return (
+    <span
+      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-warning-soft border border-warning/40 text-warning text-[10px] font-bold uppercase tracking-wider"
+      title="Campanha 100% bonificada — todo o volume entregue é cortesia HYPR"
+    >
+      <GiftIcon className="size-2.5" />
+      Bonificada
+    </span>
+  );
+}
+
+function GiftIcon({ className }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <polyline points="20 12 20 22 4 22 4 12" />
+      <rect x="2" y="7" width="20" height="5" />
+      <line x1="12" y1="22" x2="12" y2="7" />
+      <path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z" />
+      <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z" />
+    </svg>
   );
 }
 

@@ -43,7 +43,7 @@ import { CollapsibleSectionV2 } from "../components/CollapsibleSectionV2";
 import { DailyAggregateTableV2 } from "../components/DailyAggregateTableV2";
 import { AlcanceFrequenciaV2 } from "../components/AlcanceFrequenciaV2";
 
-export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt, mergeMeta = null, coreFilter = "ALL" }) {
+export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt, mergeMeta = null, coreFilter = "ALL", isBonusOnly = false }) {
   const camp = data.campaign;
   const {
     totalImpressions, totalCusto, totalCustoOver,
@@ -124,33 +124,54 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt,
 
   // Custo formatado pra hero (separa centavos pra estilo do mockup).
   const { main: custoMain, cents: custoCents } = splitCents(totalCusto);
+  // Em campanha bonificada, hero mostra o valor da cortesia (=`budgetTotal`,
+  // que pelo contrato representa "quanto vale o que estamos bonificando").
+  const { main: bonusMain, cents: bonusCents } = splitCents(budgetTotal);
 
   return (
     <div className="space-y-6">
       {/* ─── 1. Hero KPI + auxiliares ────────────────────────────────── */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
-        {/* Hero ocupa 2 colunas em xl (resto fica 4 cards de 1 col cada) */}
-        <div className="md:col-span-2 xl:col-span-2">
-          <HeroKpiCardV2
-            icon={<DollarIcon />}
-            label="Custo Efetivo · Total"
-            value={custoMain}
-            cents={custoCents}
-            sparklineValues={costSparklineValues}
-            // deltaPercent é null por enquanto — backend ainda não expõe
-            // "vs período anterior". TODO Fase 4: query comparativa.
-          />
+      {/* Em bonificada, Hero ocupa 3 cols (em vez de 2) e o grid total
+          encurta pra 5 cols — Budget, Custo+Over e Pacing Geral somem
+          (este último porque o cálculo usa budget contratado, que é 0 em
+          campanha 100% bônus). Layout fica: Hero(3)+Imp(1)+Views(1)=5. */}
+      <div className={`grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 ${isBonusOnly ? "xl:grid-cols-5" : "xl:grid-cols-6"}`}>
+        <div className={isBonusOnly ? "md:col-span-2 xl:col-span-3" : "md:col-span-2 xl:col-span-2"}>
+          {isBonusOnly ? (
+            <HeroKpiCardV2
+              icon={<GiftIcon />}
+              label="Valor Bonificado · Total"
+              value={bonusMain}
+              cents={bonusCents}
+              caption="Volume entregue como cortesia HYPR — sem custo pro cliente."
+              variant="bonus"
+            />
+          ) : (
+            <HeroKpiCardV2
+              icon={<DollarIcon />}
+              label="Custo Efetivo · Total"
+              value={custoMain}
+              cents={custoCents}
+              sparklineValues={costSparklineValues}
+              // deltaPercent é null por enquanto — backend ainda não expõe
+              // "vs período anterior". TODO Fase 4: query comparativa.
+            />
+          )}
         </div>
 
-        <KpiCardV2
-          label="Budget"
-          value={fmtR(isFiltered ? filteredBudgetProRata : filteredBudgetTotal)}
-          hint={
-            isFiltered
-              ? "Budget contratado proporcionalizado pelo período do filtro."
-              : "Budget contratado total da campanha."
-          }
-        />
+        {/* Card "Budget" some em bonificada — mesmo valor que o Hero,
+            seria redundância visual. */}
+        {!isBonusOnly && (
+          <KpiCardV2
+            label="Budget"
+            value={fmtR(isFiltered ? filteredBudgetProRata : filteredBudgetTotal)}
+            hint={
+              isFiltered
+                ? "Budget contratado proporcionalizado pelo período do filtro."
+                : "Budget contratado total da campanha."
+            }
+          />
+        )}
 
         <KpiCardV2
           label="Imp. Visíveis"
@@ -189,17 +210,23 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt,
             }
           />
         ) : (
-          <KpiCardV2
-            label="Custo + Over"
-            value={fmtR(totalCustoOver)}
-            accent
-            hint="Inclui valor da over-delivery."
-          />
+          /* Fallback "Custo + Over" não faz sentido em bonificada
+             (custo é sempre 0). Quando bonificada e sem video, slot
+             fica vazio — o grid `xl:grid-cols-6` reflowa naturalmente. */
+          !isBonusOnly && (
+            <KpiCardV2
+              label="Custo + Over"
+              value={fmtR(totalCustoOver)}
+              accent
+              hint="Inclui valor da over-delivery."
+            />
+          )
         )}
 
         {/* 5º card: Pacing Geral (só faz sentido quando sem filtro de
             período, porque pacing é cálculo do todo da campanha. Quando
-            há filtro, ocupa esse slot com Custo+Over como fallback). */}
+            há filtro, ocupa esse slot com Custo+Over como fallback —
+            exceto em bonificada, onde Custo+Over não faz sentido). */}
         {!isFiltered && pacingGeral > 0 ? (
           <KpiCardV2
             label={`Pacing Geral${pacingSuffix}`}
@@ -217,11 +244,13 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt,
             }
           />
         ) : (
-          <KpiCardV2
-            label="Custo + Over"
-            value={fmtR(totalCustoOver)}
-            hint="Inclui valor da over-delivery."
-          />
+          !isBonusOnly && (
+            <KpiCardV2
+              label="Custo + Over"
+              value={fmtR(totalCustoOver)}
+              hint="Inclui valor da over-delivery."
+            />
+          )
         )}
       </div>
 
@@ -238,6 +267,15 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt,
               budget={pickBudget(display[0], "display", coreFilter)}
               cost={display.reduce((s, r) => s + (r.effective_total_cost || 0), 0)}
               subBars={displaySubBars}
+              bonusFooter={
+                isBonusOnly
+                  ? {
+                      delivered: display.reduce((s, r) => s + (r.viewable_impressions || 0), 0),
+                      target: pickContracted(display[0], "display", coreFilter),
+                      unit: "imp.",
+                    }
+                  : null
+              }
             />
           )}
           {hasVideo && (
@@ -247,6 +285,15 @@ export default function OverviewV2({ data, aggregates, token, isAdmin, adminJwt,
               budget={pickBudget(video[0], "video", coreFilter)}
               cost={video.reduce((s, r) => s + (r.effective_total_cost || 0), 0)}
               subBars={videoSubBars}
+              bonusFooter={
+                isBonusOnly
+                  ? {
+                      delivered: video.reduce((s, r) => s + (r.completions || 0), 0),
+                      target: pickContracted(video[0], "video", coreFilter),
+                      unit: "views",
+                    }
+                  : null
+              }
             />
           )}
         </div>
@@ -472,6 +519,26 @@ function DollarIcon() {
     >
       <line x1="12" y1="1" x2="12" y2="23" />
       <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+    </svg>
+  );
+}
+
+function GiftIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <polyline points="20 12 20 22 4 22 4 12" />
+      <rect x="2" y="7" width="20" height="5" />
+      <line x1="12" y1="22" x2="12" y2="7" />
+      <path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z" />
+      <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z" />
     </svg>
   );
 }

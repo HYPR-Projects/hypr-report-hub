@@ -172,6 +172,26 @@ function writeViewToUrl(view) {
 const SECONDARY_TAB_CLASS =
   "text-xs font-medium text-fg-subtle hover:text-fg-muted";
 
+// Detecta campanha 100% bonificada — todo o volume contratado é bônus
+// (cortesia HYPR), sem `contracted_*` faturado. Quando true, a Visão
+// Geral troca o hero "Custo Efetivo · Total" (que sempre mostraria
+// R$ 0,00 e parece bug) por "Valor Bonificado", e o header ganha um
+// selo "BONIFICADA".
+function computeIsBonusOnly(data) {
+  const t0 = (data?.totals || [])[0] || {};
+  const contractedSum =
+    (t0.contracted_o2o_display_impressions || 0) +
+    (t0.contracted_ooh_display_impressions || 0) +
+    (t0.contracted_o2o_video_completions || 0) +
+    (t0.contracted_ooh_video_completions || 0);
+  const bonusSum =
+    (t0.bonus_o2o_display_impressions || 0) +
+    (t0.bonus_ooh_display_impressions || 0) +
+    (t0.bonus_o2o_video_completions || 0) +
+    (t0.bonus_ooh_video_completions || 0);
+  return contractedSum === 0 && bonusSum > 0;
+}
+
 // Detecta presença de O2O/OOH na campanha. Critério "tem frente": contrato
 // (incl. bonus, em qualquer mídia) OU entrega real em data.totals. Aceita
 // `data` null/undefined (cenário pré-carga) e devolve ambos false.
@@ -347,6 +367,7 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
   // dentro do useMemo logo abaixo.
   const tacticAvail = computeTacticAvailability(data);
   const showCoreFilter = tacticAvail.hasO2O && tacticAvail.hasOOH;
+  const isBonusOnly = computeIsBonusOnly(data);
   const effectiveMainCore = showCoreFilter && (mainCore === "O2O" || mainCore === "OOH")
     ? mainCore
     : "ALL";
@@ -477,6 +498,7 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
             mergeMeta={data.merge_meta}
             currentView={view}
             onViewChange={setView}
+            isBonusOnly={isBonusOnly}
           />
 
           {/* Tabs com filtro de período alinhado à direita */}
@@ -579,6 +601,7 @@ export default function ClientDashboardV2({ token, isAdmin, adminJwt }) {
                 adminJwt={adminJwt}
                 mergeMeta={data.merge_meta}
                 coreFilter={effectiveMainCore}
+                isBonusOnly={isBonusOnly}
               />
             </TabsContent>
 

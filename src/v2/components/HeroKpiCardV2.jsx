@@ -36,11 +36,22 @@ export function HeroKpiCardV2({
   deltaLabel = "vs período ant.",
   sparklineValues,
   sparklineColor = "var(--color-signature)",
+  caption, // texto pequeno opcional sob o valor (ex: "Volume entregue como cortesia")
+  variant = "default", // "default" | "bonus" — bonus troca glow/label pra dourado
   className,
 }) {
   const hasDelta = typeof deltaPercent === "number" && !Number.isNaN(deltaPercent);
   const isPositiveDelta = hasDelta && deltaPercent > 0;
   const isNegativeDelta = hasDelta && deltaPercent < 0;
+  const isBonus = variant === "bonus";
+
+  // Glow dourado em vez do azul signature pra carregar a conotação de
+  // "presente"/cortesia. Token --color-warning é #EDD900 (light) /
+  // #B8A500 (dark); usamos rgba inline porque não há `--color-warning-glow`
+  // no theme.css (não vale criar token novo só pra este caso).
+  const glowGradient = isBonus
+    ? "radial-gradient(ellipse, rgba(237, 217, 0, 0.18) 0%, transparent 70%)"
+    : "radial-gradient(ellipse, var(--color-signature-glow) 0%, transparent 70%)";
 
   return (
     <Card
@@ -54,13 +65,15 @@ export function HeroKpiCardV2({
       <div
         aria-hidden="true"
         className="pointer-events-none absolute -top-1/2 -right-[10%] w-[60%] h-[200%]"
-        style={{
-          background:
-            "radial-gradient(ellipse, var(--color-signature-glow) 0%, transparent 70%)",
-        }}
+        style={{ background: glowGradient }}
       />
       <CardBody className="relative p-6 flex flex-col gap-3">
-        <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-widest text-signature">
+        <div
+          className={cn(
+            "flex items-center gap-2 text-[11px] font-bold uppercase tracking-widest",
+            isBonus ? "text-warning" : "text-signature",
+          )}
+        >
           {icon && <span className="size-3.5 shrink-0">{icon}</span>}
           {label}
         </div>
@@ -71,6 +84,10 @@ export function HeroKpiCardV2({
             <span className="text-2xl md:text-3xl font-bold opacity-70">{cents}</span>
           )}
         </div>
+
+        {caption && (
+          <div className="text-xs text-fg-muted -mt-1">{caption}</div>
+        )}
 
         <div className="flex items-center gap-3 mt-1">
           {hasDelta && (
